@@ -23,6 +23,38 @@ page.
 > supported by Proton AG. "ProtonVPN" is a trademark of its respective owner.
 > Use your own ProtonVPN account.
 
+## Screenshots
+
+The account card and the status band: session horizon, the connected server
+with its country and handshake age, and the plan's WireGuard configurations.
+
+![Account card and connection status](docs/screenshots/overview.png)
+
+Several tunnels side by side — each with its own key, certificate, interface
+and schedule. Clicking a row switches the form to that instance; `main` is
+reset rather than removed.
+
+![The VPN instances table](docs/screenshots/instances.png)
+
+Locations are a *set* to connect and rotate within, not a single country.
+Picking a country takes it whole; opening its chip narrows it to cities.
+
+![Choosing locations](docs/screenshots/location-picker.png)
+
+Servers are listed with their load, cheapest first, with Quick Connect on top.
+Pinning one disables rotation for that instance.
+
+![Choosing a server](docs/screenshots/server-picker.png)
+
+Per-network steering with a kill switch and IPv6 leak protection, so only the
+networks you name leave through the tunnel.
+
+![Traffic routing](docs/screenshots/routing.png)
+
+![Automatic rotation](docs/screenshots/rotation.png)
+
+![Advanced settings](docs/screenshots/advanced.png)
+
 ## Architecture
 
 The project is the third member of a family (after
