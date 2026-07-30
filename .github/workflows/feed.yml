@@ -4,13 +4,14 @@ name: Package feed
 # publishes them to GitHub Pages. Private keys live in repository secrets;
 # the matching public keys are committed under keys/.
 #
-# TODO before the first tag build:
-#   - generate the signing keypair for this repo (usign for opkg, PEM for
-#     apk) and commit the PUBLIC parts as keys/<usign-fingerprint> and
-#     keys/protonvpn-luci-apk.pem (nordvpn-luci keeps its own pair under its
-#     keys/; do not reuse it),
-#   - create the repository secrets OPKG_USIGN_SEC and APK_SEC_PEM,
-#   - update the two `cp keys/...` lines in "Install the signing keys" below.
+# This feed has its own keypair, generated for this repository and not shared
+# with nordvpn-luci: usign for opkg (keys/4fcb996825e11695) and Ed25519 PEM for
+# apk (keys/protonvpn-wg-luci-apk.pem). The private halves are the repository
+# secrets OPKG_USIGN_SEC and APK_SEC_PEM.
+#
+# Note: publishing to GitHub Pages from a PRIVATE repository needs a paid plan.
+# On the free plan the build and signing steps still run; only the final
+# gh-pages push fails until the repository is public.
 
 on:
   push:
@@ -20,11 +21,13 @@ on:
 jobs:
   build:
     name: Build ${{ matrix.flavor }} feed
-    # Tag/dispatch only (no untrusted PRs) — build on the self-hosted NAS runner
-    # to skip the GitHub queue. The SDK stays in the (clean-checked-out)
-    # workspace, not the persistent cache, so the signing keys never linger.
-    # TODO: register a self-hosted runner with this label.
-    runs-on: [self-hosted, protonvpn-build]
+    # Tag/dispatch only (no untrusted PRs). The SDK stays in the
+    # (clean-checked-out) workspace, not a persistent cache, so the signing
+    # keys never linger. GitHub-hosted for now. Switching back to the NAS is a one-line change
+    # once a runner labelled protonvpn-build is registered on this repository
+    # (runners are per-repo on a personal account, so nordvpn-luci's cannot be
+    # shared): runs-on: [self-hosted, protonvpn-build]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
@@ -67,13 +70,10 @@ jobs:
           cd "$SDKDIR"
           if [ "${{ matrix.flavor }}" = "opkg" ]; then
             printf '%s\n' "$OPKG_USIGN_SEC" > key-build
-            # TODO: commit the public usign key under keys/ and reference it
-            # here (nordvpn-luci uses keys/<usign-fingerprint>).
-            cp "$GITHUB_WORKSPACE/keys/USIGN_PUBKEY_TODO" key-build.pub
+            cp "$GITHUB_WORKSPACE/keys/4fcb996825e11695" key-build.pub
           else
             printf '%s\n' "$APK_SEC_PEM" > private-key.pem
-            # TODO: commit keys/protonvpn-luci-apk.pem (public part).
-            cp "$GITHUB_WORKSPACE/keys/protonvpn-luci-apk.pem" public-key.pem
+            cp "$GITHUB_WORKSPACE/keys/protonvpn-wg-luci-apk.pem" public-key.pem
           fi
 
       - name: Build the packages

@@ -86,11 +86,11 @@ jobs:
 
   build-backend:
     name: Build packages (snapshot SDK, apk)
-    # Owner pushes/tags build on the self-hosted NAS runner (warm on-disk SDK,
-    # no queue); untrusted fork PRs stay on GitHub-hosted runners.
-    # TODO: register a self-hosted runner with the label below (nordvpn-luci
-    # uses the "nordvpn-build" label on the same NAS).
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","protonvpn-build"]') }}
+    # GitHub-hosted, with the Actions cache standing in for the warm on-disk
+    # SDK a self-hosted runner would have. To move owner pushes back to the NAS,
+    # register a runner labelled protonvpn-build on this repository and restore:
+    #   runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","protonvpn-build"]') }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -118,12 +118,10 @@ jobs:
             rm -f "$ROOT/sdk.tar.zst"
           fi
 
-      # GitHub-hosted (fork PRs) has no warm disk — fall back to the Actions
-      # cache. Skipped on the self-hosted runner, whose /sdkcache persists.
+      # No warm disk on a GitHub-hosted runner — the Actions cache stands in.
       # dl/ is content-addressed (prefix restore-key survives snapshot bumps);
       # toolchain state is exact-key only so a bump never mixes toolchains.
       - name: Cache downloaded sources (dl)
-        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/cache@v4
         with:
           path: ${{ env.SDKDIR }}/dl
@@ -131,7 +129,6 @@ jobs:
           restore-keys: |
             openwrt-dl-
       - name: Cache build state (feeds, staging_dir, build_dir)
-        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/cache@v4
         with:
           path: |
