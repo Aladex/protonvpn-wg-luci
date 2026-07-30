@@ -1,10 +1,15 @@
 # ProtonVPN WireGuard for OpenWrt
 
-> **Status: pre-alpha scaffold.** This repository currently contains only the
-> project skeleton: package metadata, config/init scaffolding, ucode module
-> stubs with TODO bodies, the rpcd/ubus method table, a LuCI view skeleton and
-> CI workflows. Nothing connects to ProtonVPN yet. The reconnaissance notes
-> that drive the design live in `RECON.md`.
+> **Status: working, not yet packaged.** Login, tunnel, routing, rotation and
+> multiple instances all run and have been verified end to end against a live
+> Proton account on an ImmortalWrt 24.10 router. What is *not* done: the
+> packages have never been built and installed as real `.ipk`/`.apk` artifacts
+> — everything so far was validated by copying files onto a router — and the
+> package feed still needs its signing keys and a build runner. Treat this as
+> a release of the software, not of an installable package.
+>
+> The reconnaissance notes that drive the design live in `RECON.md`; the
+> implementation plan and its per-phase reports in `PLAN_PROTONVPN_LUCI.md`.
 
 Configure ProtonVPN's WireGuard service on OpenWrt: browser-side SRP-6a login
 (TOTP 2FA supported), locally generated WireGuard keypairs registered as
@@ -74,7 +79,7 @@ luci-app-protonvpn/                          # LuCI frontend (luci feed)
 .github/workflows/                           # CI + signed package feed
 ```
 
-## ubus API (planned)
+## ubus API
 
 All methods are on the `protonvpn` object. Read methods never mutate; secrets
 are never returned.
@@ -82,6 +87,8 @@ are never returned.
 ```bash
 ubus call protonvpn status              # runtime state, session/cert expiry
 ubus call protonvpn instances           # status of every configured instance
+ubus call protonvpn session_state       # session horizon and required action
+ubus call protonvpn account             # plan, tier, registered configurations
 ubus call protonvpn auth_info '{"username":"..."}'   # SRP step 1 relay
 ubus call protonvpn auth_finish '{...}'              # SRP step 3 relay
 ubus call protonvpn set_totp '{"code":"123456"}'     # 2FA upgrade
@@ -94,8 +101,26 @@ ubus call protonvpn apply               # rebuild the peer, bring the tunnel up
 ubus call protonvpn rotate_now          # one-shot rotation
 ubus call protonvpn disconnect          # tunnel down, rotation paused
 ubus call protonvpn refresh_locations   # async server-list refresh
+ubus call protonvpn refresh_status      # progress of that refresh
 ubus call protonvpn external_ip         # public IP through the tunnel
+ubus call protonvpn create_instance '{"instance":"media"}'   # a second tunnel
+ubus call protonvpn delete_instance '{"instance":"media"}'   # remove it again
 ```
+
+## Multiple tunnels
+
+Every instance runs its own WireGuard interface (`pv_<name>`), its own keypair
+and certificate, its own location set and schedule, and — when it steers
+traffic — its own routing table and firewall zone. They share one Proton
+account and one server-list cache, which `main` owns. Deleting `main` resets it
+to defaults instead of removing it, because it anchors both.
+
+Proton cannot revoke a WireGuard certificate for the token a VPN client holds
+(the dashboard gets there by asking for the password again). So when an
+instance is deleted its certificate is instead *renewed down to ten minutes* —
+a renewal supersedes the previous registration for that key, and what is left
+expires on its own. Without that, every deleted instance would sit in the
+account's saved configurations for a year.
 
 ## Development
 
@@ -106,11 +131,19 @@ Offline ucode tests (no account or network needed):
 sh protonvpn-wireguard/tests/run.sh
 ```
 
-CI runs shell/JSON static checks, LuCI ESLint on the JS view, the ucode
-tests, and a snapshot-SDK build of both packages. See
-`.github/workflows/build.yml`. The signed package feed
-(`.github/workflows/feed.yml`) needs its own signing keypair and repository
-secrets before the first tag build — see the TODO comments there.
+There are also JS tests for the browser-side SRP implementation, including
+cross-implementation vectors:
+
+```bash
+node --test luci-app-protonvpn/tests/*.test.mjs
+```
+
+CI runs shell/JSON static checks, LuCI ESLint on the JS view, the ucode tests,
+and a snapshot-SDK build of both packages. See `.github/workflows/build.yml`.
+Two things are still missing before a tag can produce installable packages:
+the build job wants a self-hosted runner labelled `protonvpn-build`, and the
+signed feed (`.github/workflows/feed.yml`) needs its own signing keypair in
+repository secrets — see the TODO comments there.
 
 ## License
 

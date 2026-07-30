@@ -23,18 +23,5 @@
 				"luci-app-protonvpn"
 			]
 		}
-	},
-	"admin/vpn/protonvpn-login": {
-		"title": "ProtonVPN Login (spike)",
-		"order": 31,
-		"action": {
-			"type": "view",
-			"path": "protonvpn/login-spike"
-		},
-		"depends": {
-			"acl": [
-				"luci-app-protonvpn"
-			]
-		}
 	}
 }
