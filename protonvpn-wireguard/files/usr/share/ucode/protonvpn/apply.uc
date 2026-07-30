@@ -703,12 +703,32 @@ function delete_instance(uci, name) {
 				}
 			}
 		}
+		// No seed (an instance from before the seed was kept): the listing
+		// hands back the public key of every certificate, which is all a
+		// tombstone needs, so look ours up by serial.
 		if (!done) {
-			let rev = _api.certificate_delete(cs.serial);
-			if (rev.skipped)
-				log('certificate ' + cs.serial + ' for ' + name +
-					' stays on the account until it expires; remove it under ' +
-					'Downloads -> WireGuard configuration at account.protonvpn.com');
+			let listed = _api.certificate_list('persistent');
+			if (listed.ok) {
+				for (let c in listed.certificates) {
+					if (c.serial != cs.serial || !length(c.client_key || ''))
+						continue;
+					let t = _api.certificate_tombstone(c.client_key);
+					if (t.ok) {
+						done = true;
+						log('certificate for ' + name + ' set to expire within minutes');
+					}
+					break;
+				}
+			}
+		}
+		if (!done) {
+			// Everything above failed: our token cannot revoke (403/9100 — the
+			// dashboard gets there by re-authenticating with the password to
+			// obtain the 'locked' scope, which a VPN session does not reach).
+			_api.certificate_delete(cs.serial);
+			log('certificate ' + cs.serial + ' for ' + name +
+				' stays on the account until it expires; remove it under ' +
+				'Downloads -> WireGuard configuration at account.protonvpn.com');
 		}
 	}
 	forget_cert_state(name);

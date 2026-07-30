@@ -229,14 +229,34 @@ function reset_uci() {
 	check('and does not bother with the DELETE that always fails', deleted == null);
 	check('and forgets the instance either way', _apply.read_cert_state('media') == null);
 
-	// Without a seed the key cannot be rebuilt, so fall back to trying DELETE
-	// — it will fail, but the log line tells the user where to clean up.
+	// Without a seed the key cannot be rebuilt locally — but the listing
+	// carries the public key of every certificate, which is all a tombstone
+	// needs, so an instance from before seeds were kept is still cleaned up.
 	tombstoned = null;
+	let real_list = _api.certificate_list;
+	_api.certificate_list = function(mode) {
+		return { ok: true, certificates: [
+			{ serial: '11', client_key: 'PEM-OTHER-KEY', expires_at: time() + 99 },
+			{ serial: '88', client_key: 'PEM-EIGHTY-EIGHT', expires_at: time() + 99 }
+		] };
+	};
 	_apply.create_instance(uci, 'other');
 	_apply.record_cert_state('other', { serial: '88' });
 	_apply.delete_instance(uci, 'other');
-	check('with no seed it falls back to the revoke attempt', deleted == '88');
-	check('and does not invent a tombstone', tombstoned == null);
+	check('with no seed the public key is looked up in the listing',
+		tombstoned == 'PEM-EIGHTY-EIGHT');
+	check('and the futile revoke is not attempted', deleted == null);
+
+	// Nothing to work with at all: fall back to the revoke that always fails,
+	// so at least the log tells the user where to clean up by hand.
+	tombstoned = null;
+	_api.certificate_list = function(mode) { return { error: 'offline' }; };
+	_apply.create_instance(uci, 'third');
+	_apply.record_cert_state('third', { serial: '99' });
+	_apply.delete_instance(uci, 'third');
+	check('with no listing either it still tries to revoke', deleted == '99');
+	check('and invents no tombstone', tombstoned == null);
+	_api.certificate_list = real_list;
 
 	_api.certificate_tombstone = real_tomb;
 	_api.certificate_delete = real_del;

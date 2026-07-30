@@ -648,7 +648,12 @@ function certificate_list(mode) {
 			push(out, {
 				serial: '' + (c.SerialNumber || ''),
 				device_name: c.DeviceName || '',
-				expires_at: +c.ExpirationTime || 0
+				expires_at: +c.ExpirationTime || 0,
+				// The PEM public key comes back with every entry, and a
+				// tombstone needs nothing else — so any certificate on the
+				// account can be retired, including ones this router never
+				// created and has no seed for.
+				client_key: c.ClientKey || ''
 			});
 		if (length(list) < CERT_PAGE_SIZE)
 			break;
