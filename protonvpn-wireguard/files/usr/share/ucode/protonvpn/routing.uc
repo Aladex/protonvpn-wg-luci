@@ -653,9 +653,28 @@ function enforce(uci, s) {
 
 	// 1b. Steering rules: per source network, a lookup rule into the instance
 	//     table, plus prohibit rules that act as kill switch (IPv4, only when
-	//     enabled) and IPv6 leak block (the tunnel carries no IPv6). Prohibit
-	//     sits between the lookup and the main table, so it only fires when
-	//     the tunnel's table cannot serve the traffic.
+	//     enabled) and IPv6 leak block. Prohibit sits between the lookup and
+	//     the main table, so it only fires when the tunnel's table cannot
+	//     serve the traffic.
+	//
+	//     The asymmetry below is deliberate and load-bearing: IPv4 gets a
+	//     lookup rule AND a prohibit, IPv6 gets ONLY a prohibit. Proton hands
+	//     out an IPv6 address (FIXED_ADDRESS6) and accepts ::/0 in
+	//     allowed_ips, so netifd dutifully installs a v6 default route into
+	//     the instance table — but the servers do not forward IPv6. Measured
+	//     on two servers in different countries: v6 packets raise the wg TX
+	//     counter and nothing ever comes back, while v4 on the same tunnel is
+	//     a clean 1:1; even Proton's own in-tunnel resolver 2a07:b944::2:1 is
+	//     silent. Proton's own guidance for manual WireGuard configurations is
+	//     to disable IPv6.
+	//
+	//     So adding the symmetric `rule6 ... lookup table` would not enable
+	//     IPv6 — it would black-hole it, which is worse than blocking: a v6
+	//     default route that swallows traffic makes clients wait out Happy
+	//     Eyeballs on every connection, and anything that is not a browser
+	//     simply hangs. Blocking instead leaves clients on IPv4, which works.
+	//     If Proton ever forwards IPv6, the fix is to add that lookup rule
+	//     here and flip the block_ipv6 default — not before.
 	let steer_nets = steer ? s.source_networks : [];
 	let table = s.routing_table;
 	if (steer) {

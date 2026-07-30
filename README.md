@@ -1,5 +1,7 @@
 # ProtonVPN WireGuard for OpenWrt
 
+**English** · [Русский](README.ru.md) · [Deutsch](README.de.md)
+
 Configure ProtonVPN's WireGuard service on OpenWrt: browser-side SRP-6a login
 with TOTP support, locally generated WireGuard keys registered as Proton
 certificates, an authenticated server list with load and score, a location set
@@ -137,6 +139,17 @@ Instead of routing everything, name **source networks**: only those leave
 through the tunnel, via policy rules into the instance's own routing table.
 The **kill switch** then blocks those networks from reaching the WAN while the
 tunnel is down, and **IPv6 leak protection** stops direct IPv6 bypassing it.
+
+IPv6 is blocked rather than routed, and that is deliberate. Proton assigns the
+tunnel an IPv6 address and accepts `::/0`, so the interface looks dual-stack —
+but the servers do not forward IPv6. Measured on servers in two countries: v6
+packets raise the WireGuard transmit counter and nothing ever comes back, while
+IPv4 on the same tunnel is a clean one-for-one; even Proton's own in-tunnel
+resolver stays silent. Proton's own guidance for manual WireGuard configurations
+is to disable IPv6. Routing it anyway would not enable IPv6, it would swallow
+it, and a black hole is worse than a block: clients would wait out Happy
+Eyeballs on every connection and anything that is not a browser would simply
+hang. Blocking keeps them on IPv4, which works.
 
 ![Traffic routing](docs/screenshots/routing.png)
 
