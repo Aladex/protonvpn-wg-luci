@@ -53,6 +53,12 @@ config instance 'main'
 	# traffic through the tunnel. Enabled for fresh installs; ignored (never
 	# touches anything) when a custom routing table or own routes are detected.
 	option auto_routing '1'
+	# Steered routing: instead of routing everything, send only these logical
+	# networks (UCI section names from /etc/config/network) through the tunnel
+	# via routing_table. Used only when auto_routing is 0 — auto_routing wins
+	# when both are set. Empty = no steering.
+	# list source_network 'guest'
+	# list source_network 'media'
 	# Only meaningful with auto_routing: block LAN->WAN when the VPN is down
 	# (kill switch) and block direct IPv6 so it cannot bypass the tunnel.
 	option killswitch '0'

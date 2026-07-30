@@ -46,6 +46,25 @@ define Package/protonvpn-wireguard/conffiles
 /etc/config/protonvpn
 endef
 
+# /etc/protonvpn holds runtime secrets that are not conffiles and cannot be
+# regenerated locally: session.json (Proton UID + access/refresh tokens) and
+# certificate.json (the key_seed of every instance's Ed25519 identity). Losing
+# them forces a full SRP re-login, so they must survive a firmware upgrade —
+# but they must not linger on disk once the package is gone.
+define Package/protonvpn-wireguard/postrm
+#!/bin/sh
+# Only clean the live system, never a staging root, and never on upgrade
+# (opkg passes "upgrade <ver>" as $$1; apk exports PKG_UPGRADE and runs
+# pre-/post-upgrade instead of post-deinstall).
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+[ "$${PKG_UPGRADE}" = "1" ] && exit 0
+case "$$1" in
+	upgrade) exit 0 ;;
+esac
+rm -rf /etc/protonvpn
+exit 0
+endef
+
 # Script-only package: nothing to compile.
 define Build/Configure
 endef
@@ -62,6 +81,11 @@ define Package/protonvpn-wireguard/install
 
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/etc/uci-defaults/90-protonvpn-migrate $(1)/etc/uci-defaults/90-protonvpn-migrate
+
+	# Keep the runtime secret store (session + WireGuard certificates) across
+	# sysupgrade; without this the user has to re-run the SRP login by hand.
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	echo "/etc/protonvpn/" > $(1)/lib/upgrade/keep.d/protonvpn
 
 	$(INSTALL_DIR) $(1)/usr/share/ucode/protonvpn
 	$(INSTALL_DATA) ./files/usr/share/ucode/protonvpn/*.uc $(1)/usr/share/ucode/protonvpn/

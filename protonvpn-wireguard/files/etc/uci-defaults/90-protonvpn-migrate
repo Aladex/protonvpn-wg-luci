@@ -1,15 +1,31 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # One-time, idempotent config migrations for protonvpn-wireguard, gated on the
-# `config_version` stamp in /etc/config/protonvpn. Safe to run more than once.
+# `config_version` stamp in /etc/config/protonvpn. Safe to run more than once;
+# it never touches secrets and never disconnects a working tunnel.
 
-# TODO: implement migrations when a second config schema version exists.
-# Skeleton for the first release: ensure the config file and the 'main'
-# instance section exist, stamp config_version=1, and commit.
-#
-# [ -f /etc/config/protonvpn ] || touch /etc/config/protonvpn
-# [ -n "$(uci -q get protonvpn.main)" ] || uci set protonvpn.main=instance
-# uci set protonvpn.main.config_version=1
-# uci commit protonvpn
+pkg=protonvpn
+
+# Ensure the config file and the 'main' instance section exist. A config kept
+# across a sysupgrade may be truncated or predate the section, and this script
+# runs before the service ever reads it.
+[ -f "/etc/config/$pkg" ] || touch "/etc/config/$pkg"
+[ "$(uci -q get "$pkg.main")" = 'instance' ] || uci set "$pkg.main=instance"
+
+# Current schema version; anything missing or non-numeric counts as pre-stamp.
+cv="$(uci -q get "$pkg.main.config_version")"
+case "$cv" in
+	''|*[!0-9]*) cv=0 ;;
+esac
+
+# v1 is the initial schema: there is no predecessor to convert from, so this
+# step only stamps the version. It is what lets a future v2 migration tell a
+# v1 config apart from a pre-stamp one. Later versions add their own
+# `[ "$cv" -lt N ]` block here, before bumping the stamp.
+if [ "$cv" -lt 1 ]; then
+	uci set "$pkg.main.config_version=1"
+fi
+
+[ -n "$(uci -q changes "$pkg")" ] && uci commit "$pkg"
 
 exit 0
