@@ -203,6 +203,47 @@ function reset_uci() {
 	unlink(rt);
 }
 
+// ── deleting an instance must not leave a year-long registration ─────────
+// The API refuses DELETE for our scope (403/9100), so the only way to stop a
+// dead instance's certificate from squatting a device slot is to renew it down
+// to the minimum: a renewal supersedes the previous registration for that key.
+{
+	unlink(statedir + '/certificate.json');
+	let uci = reset_uci();
+	_apply.create_instance(uci, 'media');
+
+	let tombstoned = null, deleted = null;
+	let real_tomb = _api.certificate_tombstone;
+	let real_del = _api.certificate_delete;
+	let real_pem = _api.pem_from_seed;
+	_api.certificate_tombstone = function(pem) { tombstoned = pem; return { ok: true }; };
+	_api.certificate_delete = function(serial) { deleted = serial; return { skipped: true }; };
+	_api.pem_from_seed = function(seed) {
+		return { pem_public: '-----BEGIN PUBLIC KEY-----' + seed };
+	};
+
+	_apply.record_cert_state('media', { serial: '77', key_seed: 'SEEDSEED' });
+	_apply.delete_instance(uci, 'media');
+	check('deletion shortens the certificate instead of leaking it',
+		tombstoned == '-----BEGIN PUBLIC KEY-----SEEDSEED');
+	check('and does not bother with the DELETE that always fails', deleted == null);
+	check('and forgets the instance either way', _apply.read_cert_state('media') == null);
+
+	// Without a seed the key cannot be rebuilt, so fall back to trying DELETE
+	// — it will fail, but the log line tells the user where to clean up.
+	tombstoned = null;
+	_apply.create_instance(uci, 'other');
+	_apply.record_cert_state('other', { serial: '88' });
+	_apply.delete_instance(uci, 'other');
+	check('with no seed it falls back to the revoke attempt', deleted == '88');
+	check('and does not invent a tombstone', tombstoned == null);
+
+	_api.certificate_tombstone = real_tomb;
+	_api.certificate_delete = real_del;
+	_api.pem_from_seed = real_pem;
+	unlink(statedir + '/certificate.json');
+}
+
 // ── the account card counts device slots, not live sessions ──────────────
 // /vpn/v1/sessions tracks the legacy OpenVPN/IKEv2 logins and stays empty
 // however many WireGuard tunnels are up, so a card driven by it read "0 of 11"

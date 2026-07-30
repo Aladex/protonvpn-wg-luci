@@ -550,7 +550,7 @@ function pem_from_seed(seed_b64) {
 //
 // Session certificates are capped much lower than persistent ones, and a
 // persistent one shows up in the Proton dashboard under DeviceName.
-function certificate_body(pubkey, mode, days, renew) {
+function certificate_body(pubkey, mode, days, renew, duration) {
 	let want = (mode == 'persistent') ? 'persistent' : 'session';
 	let cap = (want == 'persistent') ? CERT_MAX_DAYS : CERT_SESSION_DAYS;
 	let d = +days || cap;
@@ -562,7 +562,7 @@ function certificate_body(pubkey, mode, days, renew) {
 	let body = {
 		ClientPublicKey: pubkey,
 		ClientPublicKeyMode: 'EC',
-		Duration: '' + d + ' days',
+		Duration: duration ? duration : ('' + d + ' days'),
 		Features: { NetShieldLevel: 0, RandomNAT: true,
 			PortForwarding: false, SplitTCP: true }
 	};
@@ -575,7 +575,7 @@ function certificate_body(pubkey, mode, days, renew) {
 	return body;
 }
 
-function certificate_create(pubkey, mode, days, renew) {
+function certificate_create(pubkey, mode, days, renew, duration) {
 	let s = session_load();
 	if (!s)
 		return { error: 'not logged in' };
@@ -583,7 +583,7 @@ function certificate_create(pubkey, mode, days, renew) {
 		return { error: 'certificate needs a PEM Ed25519 public key' };
 
 	let want = (mode == 'persistent') ? 'persistent' : 'session';
-	let body = certificate_body(pubkey, mode, days, renew);
+	let body = certificate_body(pubkey, mode, days, renew, duration);
 
 	let res = api_call({ url: CERT_URL, uid: s.uid, token: s.access_token, body: body });
 	if (res.code == 401) {
@@ -657,6 +657,19 @@ function certificate_list(mode) {
 	return { ok: true, certificates: out };
 }
 
+// Shrink a registration we are done with down to the shortest life the API
+// grants, so it drops off the account on its own.
+//
+// This is the way out of the revocation dead end below: we cannot DELETE, but
+// we CAN renew, and a renewal supersedes the previous registration for the same
+// key. Renewing a doomed certificate to ten minutes turns "squats a device slot
+// for a year" into "gone before anyone notices". Verified live.
+const CERT_MIN_DURATION = '10 minutes';
+
+function certificate_tombstone(pubkey) {
+	return certificate_create(pubkey, 'persistent', 1, true, CERT_MIN_DURATION);
+}
+
 // DELETE /vpn/v1/certificate: revoke a registered certificate by serial.
 //
 // Verified live: this ALWAYS fails with 403/Code 9100 ("the access token has
@@ -694,5 +707,6 @@ return {
 	generate_keypair, pem_from_seed, wg_key_from_seed,
 	session_load, session_store,
 	auth_info, auth_finish, totp_submit, auth_refresh, logout,
-	certificate_body, certificate_create, certificate_delete, certificate_list
+	certificate_body, certificate_create, certificate_delete, certificate_list,
+	certificate_tombstone
 };

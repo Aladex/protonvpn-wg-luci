@@ -1454,15 +1454,18 @@ return view.extend({
 		if (st.certificate && st.certificate.present && st.certificate.days_left != null)
 			sub.push(_('certificate %d days left').format(st.certificate.days_left));
 
-		// The device allowance is shared with every other device on the account.
-		// The number counts REGISTERED CERTIFICATES, not live connections: a
-		// WireGuard client occupies a certificate, and Proton's session list
-		// only ever tracks the legacy OpenVPN/IKEv2 logins. Certificates also
-		// outlive the tunnel — they cannot be revoked with our token — so this
-		// reads "registered", never "in use".
+		// Two separate facts, deliberately NOT phrased as one budget: the count
+		// is the WireGuard configurations registered on the account (what the
+		// dashboard lists under Downloads), while the allowance is the plan's
+		// simultaneous-device number. Whether Proton charges the one against
+		// the other is not something we have established, and the line this
+		// replaced — "0 of 11 connections in use" — was wrong precisely because
+		// it asserted a relationship that was not there. It read from the
+		// legacy OpenVPN/IKEv2 session list, which stays empty however many
+		// WireGuard tunnels are up.
 		var quota = '';
 		if (this.account && this.account.max_connect)
-			quota = _('%s · %s of %s device slots registered').format(
+			quota = _('%s · %s WireGuard configurations · up to %s devices').format(
 				this.account.plan || '', this.account.devices_used != null
 					? this.account.devices_used : '?', this.account.max_connect);
 

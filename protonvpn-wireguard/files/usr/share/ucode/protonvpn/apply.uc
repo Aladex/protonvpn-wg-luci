@@ -684,14 +684,32 @@ function delete_instance(uci, name) {
 	// dead session must not block the deletion.
 	let cs = read_cert_state(name);
 	if (cs && cs.serial) {
-		let rev = _api.certificate_delete(cs.serial);
-		// Say it out loud: our token cannot revoke, so the certificate keeps
-		// occupying a device slot until it expires. Silently dropping this made
-		// four orphans accumulate before anyone noticed.
-		if (rev.skipped)
-			log('certificate ' + cs.serial + ' for ' + name +
-				' could not be revoked (' + (rev.reason || '') +
-				'); remove it at account.protonvpn.com if you need the slot');
+		// Our token cannot revoke (403/9100 — only a web session can), so
+		// instead of leaving a year-long registration squatting a device slot,
+		// renew it down to the shortest life the API grants: a renewal
+		// supersedes the previous registration for the same key, and what is
+		// left expires within minutes.
+		let done = false;
+		if (cs.key_seed) {
+			let pem = _api.pem_from_seed(cs.key_seed);
+			if (!pem.error) {
+				let t = _api.certificate_tombstone(pem.pem_public);
+				if (t.ok) {
+					done = true;
+					log('certificate for ' + name + ' set to expire within minutes');
+				} else {
+					log('could not shorten the certificate for ' + name + ': ' +
+						(t.error || 'unknown error'));
+				}
+			}
+		}
+		if (!done) {
+			let rev = _api.certificate_delete(cs.serial);
+			if (rev.skipped)
+				log('certificate ' + cs.serial + ' for ' + name +
+					' stays on the account until it expires; remove it under ' +
+					'Downloads -> WireGuard configuration at account.protonvpn.com');
+		}
 	}
 	forget_cert_state(name);
 
