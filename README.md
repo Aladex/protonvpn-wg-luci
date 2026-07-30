@@ -1,37 +1,49 @@
 # ProtonVPN WireGuard for OpenWrt
 
-> **Status: working, not yet packaged.** Login, tunnel, routing, rotation and
-> multiple instances all run and have been verified end to end against a live
-> Proton account on an ImmortalWrt 24.10 router. What is *not* done: the
-> packages have never been built and installed as real `.ipk`/`.apk` artifacts
-> — everything so far was validated by copying files onto a router — and the
-> package feed still needs its signing keys and a build runner. Treat this as
-> a release of the software, not of an installable package.
->
-> Every API behaviour this depends on was checked against the live Proton API
-> rather than assumed; the reasoning is recorded in the code comments next to
-> the calls that rely on it.
-
 Configure ProtonVPN's WireGuard service on OpenWrt: browser-side SRP-6a login
-(TOTP 2FA supported), locally generated WireGuard keypairs registered as
-account-wide certificates, an authenticated server-list cache with Load and
-Score, a location set to connect and rotate across (Standard / Secure Core /
-Tor), automatic rotation with handshake verification, a watchdog, per-network
-traffic steering with kill switch and IPv6 leak protection, and a native LuCI
-page.
+with TOTP support, locally generated WireGuard keys registered as Proton
+certificates, an authenticated server list with load and score, a location set
+to connect and rotate across (Standard, Secure Core, Tor), automatic rotation,
+a watchdog, multiple parallel VPN instances, per-network traffic steering with
+kill switch and IPv6 leak protection, and a native LuCI page.
 
 > **Unofficial.** This project is not affiliated with, endorsed by, or
-> supported by Proton AG. "ProtonVPN" is a trademark of its respective owner.
-> Use your own ProtonVPN account.
+> supported by Proton AG. "Proton" and "ProtonVPN" are trademarks of their
+> respective owners. Use your own ProtonVPN account.
+
+![LuCI overview page](docs/screenshots/overview.png)
+
+## Architecture
+
+The project ships as **two packages** so the VPN service is useful without a
+web interface and the LuCI app stays a thin frontend:
+
+- **`protonvpn-wireguard`** — the backend (targets `openwrt/packages`,
+  `net/protonvpn-wireguard`). ucode + procd + an rpcd/ubus object. Relays the
+  SRP login steps, keeps the session and certificates alive, caches the
+  server list, generates WireGuard interfaces and peers, verifies handshakes,
+  runs scheduled rotation and reports runtime status. Works from the CLI and
+  over ubus with no LuCI installed.
+- **`luci-app-protonvpn`** — the LuCI frontend (targets `openwrt/luci`,
+  `applications/luci-app-protonvpn`). A JavaScript view that calls the
+  backend's ubus methods, and computes the SRP-6a proof in the browser
+  (native BigInt) because the router's ucode cannot do 2048-bit modexp.
+
+Two Proton-specific facts shape the design:
+
+1. **Auth is SRP-6a**, not a token. The browser runs SRP; the router only
+   relays the HTTP steps. The Proton password never reaches the router and is
+   never stored. Afterwards the router maintains the session on its own
+   (`/auth/refresh`, 30-day horizon) and renews the WireGuard certificate,
+   both without asking again.
+2. **The server list is authenticated** — `GET /vpn/logicals` returns 401
+   without a live session, so the location picker only fills in after login.
 
 ## Installation
 
-> The feed is published from GitHub Pages, which a **private** repository
-> cannot serve on the free plan — until this repository is public the build and
-> signing steps run but the final publish does not, so the URLs below are not
-> live yet. Until then, build with the SDK (see *Development*).
+### From the signed package feed (recommended)
 
-CI builds signed, architecture-independent packages for every tag.
+CI builds signed, architecture-independent packages for every release.
 
 **OpenWrt 24.10 (opkg):**
 
@@ -55,102 +67,130 @@ apk update
 apk add luci-app-protonvpn
 ```
 
-The backend needs `openssl-util` (Ed25519 key generation) and `curl`; both are
-pulled in as dependencies. Log out of LuCI and back in after installing, then
-open **VPN → ProtonVPN** and sign in with your Proton account.
+Log out of LuCI and back in after installing, then open **VPN → ProtonVPN**.
 
-## Screenshots
+### From source
 
-The account card and the status band: session horizon, the connected server
-with its country and handshake age, and the plan's WireGuard configurations.
+Both packages are plain feed packages; build them with the OpenWrt SDK for
+your target:
 
-![Account card and connection status](docs/screenshots/overview.png)
+```sh
+# backend (packages feed style)
+cp -r protonvpn-wireguard <sdk>/package/net/protonvpn-wireguard
+# frontend (from an openwrt/luci checkout)
+cp -r luci-app-protonvpn <luci>/applications/luci-app-protonvpn
 
-Several tunnels side by side — each with its own key, certificate, interface
-and schedule. Clicking a row switches the form to that instance; `main` is
-reset rather than removed.
+make package/protonvpn-wireguard/compile V=s
+make package/luci-app-protonvpn/compile V=s
+```
 
-![The VPN instances table](docs/screenshots/instances.png)
+They are `PKGARCH:=all`, so one build serves every target.
 
-Locations are a *set* to connect and rotate within, not a single country.
-Picking a country takes it whole; opening its chip narrows it to cities.
+## Usage
+
+Open **VPN → ProtonVPN** and press **Log in**. The modal asks for your Proton
+address and password, and for a TOTP code only if the account uses one — the
+password is processed in your browser and never sent to the router. The server
+list downloads right after login; it is large (Proton publishes tens of
+thousands of servers), so the first refresh takes a few seconds.
+
+Then pick a **location set** — whole countries, or individual cities inside
+them — and press **Save and reconnect**. The initial connect and every later
+rotation pick from that set. Leave **Server** on *Automatic* to let the backend
+choose by load, or pin one; pinning disables rotation for that instance.
+
+**Hop mode** switches between Standard, Secure Core (entry through a hardened
+Proton-owned server in a privacy-friendly country) and Tor (exit through the
+Tor network). The three are different products rather than filters over one
+list, so switching mode clears the location set: pick again for the new mode.
 
 ![Choosing locations](docs/screenshots/location-picker.png)
 
-Servers are listed with their load, cheapest first, with Quick Connect on top.
-Pinning one disables rotation for that instance.
+Servers are listed cheapest-load-first, with Quick Connect on top:
 
 ![Choosing a server](docs/screenshots/server-picker.png)
 
-Per-network steering with a kill switch and IPv6 leak protection, so only the
-networks you name leave through the tunnel.
+The status band shows the connected server, the handshake age and the external
+IP as seen through the tunnel — the one check that proves traffic really
+leaves through the VPN, which a handshake alone does not.
+
+### Multiple instances
+
+Every instance runs its own WireGuard interface (`pv_<name>`), its own keypair
+and certificate, its own location set and schedule, and — when it steers
+traffic — its own routing table and firewall zone. They share one Proton
+account and one server-list cache, which `main` owns. Deleting `main` resets it
+to defaults instead of removing it, because it anchors both.
+
+![The VPN instances table](docs/screenshots/instances.png)
+
+Typical use: `main` for the LAN and a second instance for a guest network or a
+media device that should exit in another country.
+
+### Traffic routing
+
+With **automatic routing** the backend creates a firewall zone and sends all
+LAN traffic through the tunnel. It never touches anything if it detects a
+custom routing table or routes you added yourself.
+
+Instead of routing everything, name **source networks**: only those leave
+through the tunnel, via policy rules into the instance's own routing table.
+The **kill switch** then blocks those networks from reaching the WAN while the
+tunnel is down, and **IPv6 leak protection** stops direct IPv6 bypassing it.
 
 ![Traffic routing](docs/screenshots/routing.png)
 
+### Rotation and the watchdog
+
+Rotation moves to another server in the set, either every N minutes or at a
+fixed time of day. A candidate is only accepted once a real WireGuard
+handshake completes; if it does not, the next candidate is tried and the
+previous peer is restored if none work.
+
+The optional **watchdog** reconnects when the tunnel goes stale — detection is
+handshake-based, with no external probe — and stays out of the way when a
+specific server is pinned.
+
 ![Automatic rotation](docs/screenshots/rotation.png)
+
+## Configuration (`/etc/config/protonvpn`)
+
+Everything below is also reachable from the page's *Advanced settings*:
 
 ![Advanced settings](docs/screenshots/advanced.png)
 
-## Architecture
+One `config instance` section per tunnel; `main` is the default. Secrets are
+never stored here: the session lives in a root-only state file and the
+WireGuard private key on the managed network interface.
 
-The project is the second member of a family (after
-[nordvpn-luci](https://github.com/Aladex/nordvpn-luci)) and clones its
-two-package layout, so the VPN service is useful without a web interface and
-the LuCI app stays a thin frontend:
-
-- **`protonvpn-wireguard`** — the backend (targets `openwrt/packages`,
-  `net/protonvpn-wireguard`). ucode + procd + an rpcd/ubus object. Relays the
-  SRP login HTTP steps, refreshes the session/certificate, caches the
-  (authenticated) server list, generates WireGuard interfaces/peers, verifies
-  handshakes, runs scheduled rotation and reports runtime status. Works from
-  the CLI and over ubus with no LuCI installed.
-- **`luci-app-protonvpn`** — the LuCI frontend (targets `openwrt/luci`,
-  `applications/luci-app-protonvpn`). A JavaScript view that calls the
-  backend's ubus methods — and computes the SRP-6a login in the browser
-  (native BigInt), because the router's ucode cannot do 2048-bit modexp.
-
-Two Proton-specific facts shape the design:
-
-1. **Auth is SRP-6a**, not a token. The browser runs SRP; rpcd only relays
-   `POST /auth/info` and `POST /auth`. The Proton password never leaves the
-   browser and is never stored. Afterwards the router maintains the session
-   itself: `POST /auth/refresh` (30-day session, auto-refreshed by the
-   daemon) and certificate renewal (≤365 days) — both without SRP.
-2. **The server list is authenticated** — `GET /vpn/logicals` returns 401
-   without a live session, so nothing works before login. Sessions and the
-   WireGuard private key are never stored in `/etc/config/protonvpn`
-   (session: root-only state file, 0600; key: the managed network
-   interface).
-
-## Repository layout
-
-```
-protonvpn-wireguard/                         # backend package (packages feed)
-├── Makefile
-├── test.sh                                  # CI version smoke test
-├── files/etc/config/protonvpn               # non-secret settings (owns config)
-├── files/etc/init.d/protonvpn               # consolidated procd service
-├── files/etc/uci-defaults/90-protonvpn-migrate
-├── files/usr/bin/protonvpn-service          # uloop scheduler daemon
-├── files/usr/bin/protonvpn-cache-update     # one-shot cache worker
-├── files/usr/bin/protonvpn-rotate           # one-shot rotation worker
-├── files/usr/share/rpcd/ucode/protonvpn.uc  # ubus object 'protonvpn'
-├── files/usr/share/ucode/protonvpn/*.uc     # shared ucode modules
-└── tests/                                   # offline ucode fixture/unit tests
-
-luci-app-protonvpn/                          # LuCI frontend (luci feed)
-├── Makefile
-├── htdocs/luci-static/resources/view/protonvpn/overview.js
-├── po/templates/protonvpn.pot
-└── root/usr/share/{luci/menu.d,rpcd/acl.d}/luci-app-protonvpn.json
-
-.github/workflows/                           # CI + signed package feed
-```
+| Option | Default | Meaning |
+|---|---|---|
+| `enabled` | `0` | Master switch; a fresh install ships disabled |
+| `interface` | `protonvpn` | Managed WireGuard interface |
+| `locations` (list) | — | Countries (`ch`) and/or cities (`nl-amsterdam`) to connect and rotate across |
+| `hop_mode` | `standard` | `standard`, `secure_core` or `tor` |
+| `fixed_server` | — | Pin one server by name; disables rotation |
+| `rotation_enabled` | `0` | Automatic rotation |
+| `rotation_mode` | `interval` | `interval` or `time` |
+| `rotation_interval` | `360` | Minutes between rotations |
+| `rotation_time` | `04:30` | Time of day for `time` mode |
+| `watchdog` | `0` | Reconnect automatically when the tunnel goes stale |
+| `verify_timeout` | `8` | Seconds to wait for a handshake before rejecting a server |
+| `max_retries` | `10` | Candidate servers a rotation may try |
+| `auto_routing` | `1` | Create the firewall zone and route all LAN traffic |
+| `source_network` | — | Steer only these networks instead of everything |
+| `routing_table` | — | Custom routing table (empty = main) |
+| `killswitch` | `0` | Block the steered networks from the WAN while down |
+| `block_ipv6` | `1` | Block direct IPv6 so it cannot bypass the tunnel |
+| `vpn_dns` | `off` | `off` (system resolver) or `standard` (in-tunnel 10.2.0.1) |
+| `mtu` | — | Interface MTU (the UI recommends WAN MTU − 80) |
+| `cache_dir` | — | Server-list cache directory, shared by all instances |
+| `cache_refresh_interval` | `21600` | Seconds between background cache refreshes |
 
 ## ubus API
 
-All methods are on the `protonvpn` object. Read methods never mutate; secrets
-are never returned.
+All methods are on the `protonvpn` object. Read methods never mutate; no
+secret is ever returned.
 
 ```bash
 ubus call protonvpn status              # runtime state, session/cert expiry
@@ -159,59 +199,87 @@ ubus call protonvpn session_state       # session horizon and required action
 ubus call protonvpn account             # plan, tier, registered configurations
 ubus call protonvpn auth_info '{"username":"..."}'   # SRP step 1 relay
 ubus call protonvpn auth_finish '{...}'              # SRP step 3 relay
-ubus call protonvpn set_totp '{"code":"123456"}'     # 2FA upgrade
+ubus call protonvpn set_totp '{"code":"123456"}'     # 2FA step
 ubus call protonvpn refresh_session     # POST /auth/refresh (token rotation)
 ubus call protonvpn logout              # drop the session, tunnels down
 ubus call protonvpn locations           # cached country/city tree
 ubus call protonvpn servers '{"locations":["ch","nl-amsterdam"],"hop_mode":"standard"}'
-ubus call protonvpn certificate_renew   # re-register the WG certificate
+ubus call protonvpn certificate_renew   # re-register the WireGuard certificate
 ubus call protonvpn apply               # rebuild the peer, bring the tunnel up
 ubus call protonvpn rotate_now          # one-shot rotation
 ubus call protonvpn disconnect          # tunnel down, rotation paused
 ubus call protonvpn refresh_locations   # async server-list refresh
 ubus call protonvpn refresh_status      # progress of that refresh
 ubus call protonvpn external_ip         # public IP through the tunnel
-ubus call protonvpn create_instance '{"instance":"media"}'   # a second tunnel
-ubus call protonvpn delete_instance '{"instance":"media"}'   # remove it again
+ubus call protonvpn create_instance '{"instance":"media"}'
+ubus call protonvpn delete_instance '{"instance":"media"}'
 ```
 
-## Multiple tunnels
+## Certificates and the device list
 
-Every instance runs its own WireGuard interface (`pv_<name>`), its own keypair
-and certificate, its own location set and schedule, and — when it steers
-traffic — its own routing table and firewall zone. They share one Proton
-account and one server-list cache, which `main` owns. Deleting `main` resets it
-to defaults instead of removing it, because it anchors both.
+A WireGuard client on Proton is a **certificate**, not a session: the account's
+saved WireGuard configurations (dashboard → *Downloads* → *WireGuard
+configuration*) are what each instance occupies. `/vpn/v1/sessions` tracks the
+legacy OpenVPN/IKEv2 logins and stays empty however many tunnels are up, so the
+account card counts registered certificates instead.
 
-Proton cannot revoke a WireGuard certificate for the token a VPN client holds
-(the dashboard gets there by asking for the password again). So when an
-instance is deleted its certificate is instead *renewed down to ten minutes* —
-a renewal supersedes the previous registration for that key, and what is left
-expires on its own. Without that, every deleted instance would sit in the
-account's saved configurations for a year.
+A certificate cannot be revoked with the token a VPN client holds — the
+dashboard gets there by asking for the password again. So when an instance is
+deleted its certificate is renewed down to the shortest life the API grants
+(ten minutes) instead: a renewal supersedes the previous registration, and
+what is left expires on its own. Without that, every deleted instance would
+sit in the account's configurations for a year.
+
+## Security
+
+- The **Proton password never reaches the router**. SRP proves knowledge of it
+  without sending it, and the proof is computed in the browser.
+- If LuCI is served over plain HTTP, the page that computes that proof arrives
+  over an unauthenticated channel — anyone on the LAN could substitute it.
+  Serving LuCI over HTTPS (`luci-ssl`) is strongly recommended.
+- The session (UID, access and refresh tokens) lives in a root-only state file
+  under `/etc/protonvpn`, mode 0600, **not** in UCI — so it stays out of config
+  diffs and `sysupgrade` backups.
+- The token's scope covers VPN and account settings only; probes against the
+  mail and Drive endpoints return 403.
+- The WireGuard private key is stored where every other WireGuard key on
+  OpenWrt lives: the managed interface in `/etc/config/network`.
+
+## Services and logs
+
+```sh
+/etc/init.d/protonvpn status
+/etc/init.d/protonvpn version
+logread -e protonvpn
+```
+
+The daemon refreshes the session and the server cache, renews certificates
+before Proton's own `RefreshTime`, runs the rotation clock and the watchdog.
 
 ## Development
 
 Offline ucode tests (no account or network needed):
 
-```bash
+```sh
 # with ucode + ucode-mod-fs + ucode-mod-math available
 sh protonvpn-wireguard/tests/run.sh
 ```
 
-There are also JS tests for the browser-side SRP implementation, including
+JS tests for the browser-side SRP implementation, including
 cross-implementation vectors:
 
-```bash
+```sh
 node --test luci-app-protonvpn/tests/*.test.mjs
 ```
 
-CI runs shell/JSON static checks, LuCI ESLint on the JS view, the ucode tests,
-and a snapshot-SDK build of both packages. See `.github/workflows/build.yml`.
-Two things are still missing before a tag can produce installable packages:
-the build job wants a self-hosted runner labelled `protonvpn-build`, and the
-signed feed (`.github/workflows/feed.yml`) needs its own signing keypair in
-repository secrets — see the TODO comments there.
+CI runs shell/JSON static checks, LuCI ESLint on the view, the ucode tests and
+a snapshot-SDK build of both packages; tags additionally build and publish the
+signed feed.
+
+## Related projects
+
+- [nordvpn-luci](https://github.com/Aladex/nordvpn-luci) — the same design for
+  NordVPN, which this project's layout follows.
 
 ## License
 
