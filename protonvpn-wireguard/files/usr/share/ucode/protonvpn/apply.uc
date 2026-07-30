@@ -259,8 +259,14 @@ function renew_certificate(uci, instance) {
 	// Drop the superseded registration so a long-lived instance does not
 	// accumulate certificates on the account; failure here is not fatal.
 	let old = read_cert_state(s.name);
-	if (old && old.serial && old.serial != cert.serial)
-		_api.certificate_delete(old.serial);
+	if (old && old.serial && old.serial != cert.serial) {
+		// A renewal with Renew:true supersedes the old registration server-side,
+		// so this is belt and braces; it is expected to report `skipped`.
+		let rev = _api.certificate_delete(old.serial);
+		if (rev.error)
+			log('could not drop the superseded certificate ' + old.serial +
+				': ' + rev.error);
+	}
 
 	record_cert_state(s.name, {
 		serial: cert.serial || null,
@@ -677,8 +683,16 @@ function delete_instance(uci, name) {
 	// a session-mode certificate cannot be revoked with the VPN scope, and a
 	// dead session must not block the deletion.
 	let cs = read_cert_state(name);
-	if (cs && cs.serial)
-		_api.certificate_delete(cs.serial);
+	if (cs && cs.serial) {
+		let rev = _api.certificate_delete(cs.serial);
+		// Say it out loud: our token cannot revoke, so the certificate keeps
+		// occupying a device slot until it expires. Silently dropping this made
+		// four orphans accumulate before anyone noticed.
+		if (rev.skipped)
+			log('certificate ' + cs.serial + ' for ' + name +
+				' could not be revoked (' + (rev.reason || '') +
+				'); remove it at account.protonvpn.com if you need the slot');
+	}
 	forget_cert_state(name);
 
 	run([ 'ifdown', iface ]);

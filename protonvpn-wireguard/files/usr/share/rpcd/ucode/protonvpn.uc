@@ -251,13 +251,16 @@ methods.account = {
 		if (!v)
 			return { error: 'unexpected /vpn response' };
 
-		// Live sessions are a separate call; a failure there must not hide the
-		// plan limits we already have.
+		// How much of the device allowance is taken. NOT /vpn/v1/sessions: that
+		// endpoint tracks the legacy OpenVPN/IKEv2 sessions and stays empty
+		// however many WireGuard tunnels are up (verified live). What a
+		// WireGuard client actually occupies is a registered certificate, so
+		// count those. A failure here must not hide the plan limits we already
+		// have — the field simply stays null.
 		let used = null;
-		let sess = _api.api_call({ url: _common.API_BASE + '/vpn/v1/sessions',
-			uid: s.uid, token: s.access_token });
-		if (sess.code == 200 && sess.data && type(sess.data.Sessions) == 'array')
-			used = length(sess.data.Sessions);
+		let certs = _api.certificate_list('persistent');
+		if (certs.ok && type(certs.certificates) == 'array')
+			used = length(certs.certificates);
 
 		// Never echo VPN.Name / VPN.Password: those are the legacy
 		// OpenVPN/IKEv2 credentials and have no business in a status response.
@@ -265,7 +268,7 @@ methods.account = {
 			plan: v.PlanTitle || v.PlanName || '',
 			tier: v.MaxTier,
 			max_connect: v.MaxConnect,
-			sessions_used: used
+			devices_used: used
 		};
 	}
 };

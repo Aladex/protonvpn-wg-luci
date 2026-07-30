@@ -1454,13 +1454,17 @@ return view.extend({
 		if (st.certificate && st.certificate.present && st.certificate.days_left != null)
 			sub.push(_('certificate %d days left').format(st.certificate.days_left));
 
-		// The connection budget is shared with every other device on the
-		// account, so a refused tunnel is often just "all slots taken".
+		// The device allowance is shared with every other device on the account.
+		// The number counts REGISTERED CERTIFICATES, not live connections: a
+		// WireGuard client occupies a certificate, and Proton's session list
+		// only ever tracks the legacy OpenVPN/IKEv2 logins. Certificates also
+		// outlive the tunnel — they cannot be revoked with our token — so this
+		// reads "registered", never "in use".
 		var quota = '';
 		if (this.account && this.account.max_connect)
-			quota = _('%s · %s of %s connections in use').format(
-				this.account.plan || '', this.account.sessions_used != null
-					? this.account.sessions_used : '?', this.account.max_connect);
+			quota = _('%s · %s of %s device slots registered').format(
+				this.account.plan || '', this.account.devices_used != null
+					? this.account.devices_used : '?', this.account.max_connect);
 
 		var actions = [];
 		var configured = st.configured;

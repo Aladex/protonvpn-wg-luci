@@ -203,5 +203,55 @@ function reset_uci() {
 	unlink(rt);
 }
 
+// ── the account card counts device slots, not live sessions ──────────────
+// /vpn/v1/sessions tracks the legacy OpenVPN/IKEv2 logins and stays empty
+// however many WireGuard tunnels are up, so a card driven by it read "0 of 11"
+// with two tunnels running. What a WireGuard client occupies is a registered
+// certificate — count those instead.
+{
+	let mod = loadfile(RPCD)();
+	let m = (mod && mod.protonvpn) ? mod.protonvpn : {};
+	let real_call = _api.api_call;
+	let real_list = _api.certificate_list;
+	let asked = [];
+
+	_api.session_store({ uid: 'u', access_token: 'a', refresh_token: 'r',
+		access_expires_at: time() + 1800, session_expires_at: time() + 86400,
+		scope: 'vpn', twofa: false });
+	// rpcd reaches the API through the module namespace, so this is stubbable.
+	_api.api_call = function(opts) {
+		push(asked, opts.url);
+		return { code: 200, data: { VPN: { PlanTitle: 'VPN Plus', MaxTier: 2,
+			MaxConnect: 11, Name: 'leaky', Password: 'leaky' } } };
+	};
+	_api.certificate_list = function(mode) {
+		return { ok: true, certificates: [ { serial: '1' }, { serial: '2' },
+			{ serial: '3' } ] };
+	};
+
+	let acct = m.account.call({});
+	check('the card reports the plan', acct.plan == 'VPN Plus');
+	check('and the device allowance', acct.max_connect == 11);
+	check('and counts registered certificates', acct.devices_used == 3);
+	check('the old sessions field is gone', acct.sessions_used == null);
+	check('the legacy OpenVPN credentials are never echoed',
+		index(sprintf('%J', acct), 'leaky') < 0);
+	let hit_sessions = false;
+	for (let u in asked)
+		if (index(u, '/sessions') >= 0)
+			hit_sessions = true;
+	check('and /vpn/v1/sessions is not called at all', hit_sessions == false);
+
+	// A listing failure must not hide the plan limits we already have.
+	_api.certificate_list = function(mode) { return { error: 'boom' }; };
+	let degraded = m.account.call({});
+	check('a listing failure still reports the plan', degraded.plan == 'VPN Plus');
+	check('and leaves the count unknown', degraded.devices_used == null);
+
+	_api.api_call = real_call;
+	_api.certificate_list = real_list;
+	unlink(_api.SESSION_FILE);
+}
+
 unlink(statedir + '/certificate.json');
 exit(ok ? 0 : 1);

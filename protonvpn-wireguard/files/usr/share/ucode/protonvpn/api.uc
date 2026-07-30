@@ -65,6 +65,9 @@ const ACCESS_TOKEN_TTL = 1800;
 // WAN outage cannot leave us with a dead token.
 const ACCESS_REFRESH_MARGIN = 300;
 
+// Page size for the certificate listing; Proton accepts up to 50.
+const CERT_PAGE_SIZE = 50;
+
 const CONNECT_TIMEOUT = 15;
 const TOTAL_TIMEOUT = 60;
 
@@ -609,7 +612,59 @@ function certificate_create(pubkey, mode, days, renew) {
 	};
 }
 
-// DELETE /vpn/v1/certificate: revoke a registered certificate by serial/id.
+// GET /vpn/v1/certificate/all: the certificates registered on the account,
+// newest page first, walked through with BeginID. For WireGuard this is the
+// only honest measure of how much of the plan's device allowance is spoken for
+// — /vpn/v1/sessions counts the legacy OpenVPN/IKEv2 sessions and stays empty
+// no matter how many tunnels are up (verified live with 4.7 MB flowing).
+//
+// Returns { ok: true, certificates: [ { serial, device_name, expires_at } ] }.
+function certificate_list(mode) {
+	let s = session_load();
+	if (!s)
+		return { error: 'not logged in' };
+	let want = (mode == 'session') ? 'session' : 'persistent';
+	let out = [];
+	let begin = '';
+	// Bounded: an account cannot hold enough certificates to need more, and an
+	// API that never shrinks a page must not spin us forever.
+	for (let page = 0; page < 20; page++) {
+		let url = CERT_URL + '/all?Mode=' + want + '&Limit=' + CERT_PAGE_SIZE;
+		if (length(begin))
+			url += '&BeginID=' + begin;
+		let res = api_call({ url: url, uid: s.uid, token: s.access_token });
+		if (res.code == 401) {
+			let rf = auth_refresh();
+			if (!rf.ok)
+				return { error: rf.error || 'session expired' };
+			s = session_load();
+			res = api_call({ url: url, uid: s.uid, token: s.access_token });
+		}
+		if (res.code != 200)
+			return { error: api_error(res) };
+		let list = (res.data && type(res.data.Certificates) == 'array')
+			? res.data.Certificates : [];
+		for (let c in list)
+			push(out, {
+				serial: '' + (c.SerialNumber || ''),
+				device_name: c.DeviceName || '',
+				expires_at: +c.ExpirationTime || 0
+			});
+		if (length(list) < CERT_PAGE_SIZE)
+			break;
+		begin = out[length(out) - 1].serial;
+	}
+	return { ok: true, certificates: out };
+}
+
+// DELETE /vpn/v1/certificate: revoke a registered certificate by serial.
+//
+// Verified live: this ALWAYS fails with 403/Code 9100 ("the access token has
+// no access") for the VPN scope — session-mode and persistent alike, and no
+// URL shape helps (a path segment is a plain 404). Only a full web session on
+// account.protonvpn.com can revoke. The call is kept because the scope may
+// widen, but callers must treat `skipped` as "this certificate will sit on the
+// account until it expires", not as "cleaned up".
 function certificate_delete(id) {
 	let s = session_load();
 	if (!s)
@@ -618,12 +673,9 @@ function certificate_delete(id) {
 		token: s.access_token, body: { SerialNumber: '' + (id || '') } });
 	if (res.code == 200)
 		return { ok: true };
-	// Verified live: a session-mode certificate cannot be revoked with the VPN
-	// scope (403/9100). It expires on its own, so this is not an error worth
-	// bubbling up as a failure.
 	if (res.code == 403)
 		return { ok: false, skipped: true,
-			reason: 'this certificate cannot be revoked with the VPN scope; it expires on its own' };
+			reason: 'the VPN scope cannot revoke certificates; this one stays on the account until it expires' };
 	return { error: api_error(res) };
 }
 
@@ -642,5 +694,5 @@ return {
 	generate_keypair, pem_from_seed, wg_key_from_seed,
 	session_load, session_store,
 	auth_info, auth_finish, totp_submit, auth_refresh, logout,
-	certificate_body, certificate_create, certificate_delete
+	certificate_body, certificate_create, certificate_delete, certificate_list
 };
