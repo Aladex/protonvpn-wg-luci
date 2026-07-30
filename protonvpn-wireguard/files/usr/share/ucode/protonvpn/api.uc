@@ -25,6 +25,8 @@ const API_BASE = _common.API_BASE,
       open_cmd = _common.open_cmd,
       run = _common.run,
       atomic_write = _common.atomic_write,
+      acquire_lock = _common.acquire_lock,
+      release_lock = _common.release_lock,
       log = _common.log,
       sh_quote = _common.sh_quote,
       SESSION_MAX_AGE = _common.SESSION_MAX_AGE,
@@ -58,6 +60,11 @@ const CERT_URL = _common.CERT_URL;
 const SESSION_DIR = getenv('PROTONVPN_STATE_DIR') || '/etc/protonvpn';
 const SESSION_FILE = SESSION_DIR + '/session.json';
 
+// Serializes the read-modify-write of the session file in auth_refresh().
+// Kept on tmpfs rather than next to the state file: it is taken on every
+// token renewal and flash has no business wearing out for a lock.
+const SESSION_LOCK_FILE = '/tmp/protonvpn_session.lock';
+
 // Access token TTL fallback when the API omits ExpiresIn. Measured live: the
 // API returns 1800s. The session (refresh token) horizon is SESSION_MAX_AGE.
 const ACCESS_TOKEN_TTL = 1800;
@@ -70,6 +77,16 @@ const CERT_PAGE_SIZE = 50;
 
 const CONNECT_TIMEOUT = 15;
 const TOTAL_TIMEOUT = 60;
+
+// Hard caps on how much of a response we are willing to take. Everything read
+// through the pipe is a small control response (auth, /vpn, a certificate
+// page), so a megabyte is already generous; a body that keeps coming is either
+// a hijacked endpoint or a bug, and reading it unbounded would exhaust the
+// router's RAM. The on-disk cap is for the one big body we stream to a file
+// (/vpn/logicals, ~13 MB) — /tmp is RAM too, so curl must refuse an oversized
+// download itself instead of letting us find out after it landed.
+const MAX_RESPONSE = 1024 * 1024;
+const MAX_FILE_RESPONSE = 32 * 1024 * 1024;
 
 // ── HTTP plumbing ────────────────────────────────────────────────────────
 
@@ -140,7 +157,8 @@ function api_call(opts) {
 		'--config', '/proc/self/fd/' + rfd
 	];
 	if (opts.out_file)
-		push(argv, '-o', opts.out_file);
+		push(argv, '--max-filesize', '' + (opts.max_filesize || MAX_FILE_RESPONSE),
+			'-o', opts.out_file);
 	push(argv, opts.url);
 	let proc = open_cmd(argv, 'r');
 	if (!proc) {
@@ -149,18 +167,30 @@ function api_call(opts) {
 		return { code: 0, data: null, raw: '', error: 'failed to start curl' };
 	}
 	// Collect chunks and join once: repeated string concatenation is quadratic.
+	// Bounded by MAX_RESPONSE so a runaway body cannot eat the router's RAM.
 	let chunks = [];
-	while (true) {
+	let total = 0;
+	while (total < MAX_RESPONSE) {
 		let chunk = proc.read(65536);
 		if (chunk == null || chunk == '')
 			break;
 		push(chunks, chunk);
+		total += length(chunk);
 	}
-	let out = join('', chunks);
+	let truncated = (total >= MAX_RESPONSE);
+	let out = truncated ? '' : join('', chunks);
+	chunks = null;
 	proc.close();
 	r.close();
 	if (br)
 		br.close();
+
+	// Hitting the cap means the body was cut mid-stream, so neither the JSON
+	// nor the trailing status line can be trusted — report it as a failure
+	// rather than hand a caller half a document.
+	if (truncated)
+		return { code: 0, data: null, raw: '',
+			error: 'the API response exceeded the size limit' };
 
 	// With out_file the body is on disk and stdout holds just the status code.
 	if (opts.out_file)
@@ -370,15 +400,9 @@ function totp_submit(code) {
 
 // ── Session maintenance ──────────────────────────────────────────────────
 
-// POST /auth/refresh { RefreshToken, UID } -> rotated token pair. The
-// refresh token is single-use: always persist the rotated pair on success.
-// Called by the daemon (should_refresh_session) and by any API call that
-// met a 401.
-function auth_refresh() {
-	let s = session_load();
-	if (!s)
-		return { error: 'no session to refresh' };
-
+// The refresh itself, with the session lock already held and `s` re-read
+// under it. Split out so every exit path below runs through one release.
+function auth_refresh_locked(s) {
 	let res = api_call({ url: AUTH_REFRESH_URL, uid: s.uid, token: s.access_token,
 		body: { UID: s.uid, RefreshToken: s.refresh_token, ResponseType: 'token',
 			GrantType: 'refresh_token', RedirectURI: 'http://protonmail.ch' } });
@@ -411,6 +435,58 @@ function auth_refresh() {
 	if (!session_store(s))
 		return { error: 'could not persist the refreshed session' };
 	return { ok: true };
+}
+
+// POST /auth/refresh { RefreshToken, UID } -> rotated token pair. The
+// refresh token is single-use: always persist the rotated pair on success.
+// Called by the daemon (should_refresh_session) and by any API call that
+// met a 401.
+//
+// Three callers race for that single-use token — the daemon tick, the
+// cache-update child retrying its 401, and rpcd — and the read-modify-write of
+// the session file is not atomic. Unserialized, the loser spends a token the
+// winner already burned and then writes the dead pair over the live one; the
+// session is gone and only a manual SRP re-login brings it back. Hence the
+// lock, plus a re-read under it: whoever waited must notice the pair already
+// rotated rather than spend it a second time.
+function auth_refresh() {
+	let before = session_load();
+	if (!before)
+		return { error: 'no session to refresh' };
+
+	let lock = null;
+	// The holder is doing one HTTP round trip, so a wait of ~30s covers a
+	// normal refresh; max_age is above TOTAL_TIMEOUT so a slow but live curl is
+	// never mistaken for a crashed holder.
+	for (let i = 0; i < 150 && !lock; i++) {
+		lock = acquire_lock(SESSION_LOCK_FILE, 90);
+		if (lock)
+			break;
+		sleep(200);
+		// The holder may already be done. A rotated pair is exactly what this
+		// call wanted, so take it and leave their token alone. A read that comes
+		// back empty is not decided here: the holder releases the lock right
+		// after dropping the session, so the check below the loop settles it.
+		let cur = session_load();
+		if (cur && cur.access_token != before.access_token)
+			return { ok: true };
+	}
+	if (!lock)
+		return { error: 'another session refresh is still running' };
+
+	let s = session_load();
+	if (!s) {
+		release_lock(lock);
+		return { error: 'no session to refresh' };
+	}
+	if (s.access_token != before.access_token) {
+		release_lock(lock);
+		return { ok: true };
+	}
+
+	let res = auth_refresh_locked(s);
+	release_lock(lock);
+	return res;
 }
 
 // Forget the session locally (optionally best-effort revoke server-side).

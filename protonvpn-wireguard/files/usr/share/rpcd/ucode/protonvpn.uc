@@ -353,6 +353,21 @@ methods.disconnect = {
 	}
 };
 
+// Drop the instance's WireGuard identity (key, peer, certificate) while
+// keeping its settings, so it returns to "not configured" rather than
+// disappearing. Deliberately separate from disconnect, which only parks the
+// tunnel, and from delete_instance, which removes the section as well.
+methods.clear_credentials = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return _apply.clear_credentials(uci, name);
+	}
+};
+
 // Instance management. These deliberately do NOT go through req_instance():
 // it defaults an empty argument to 'main', and a create/delete that quietly
 // acts on 'main' because the caller sent nothing is not a mistake worth being

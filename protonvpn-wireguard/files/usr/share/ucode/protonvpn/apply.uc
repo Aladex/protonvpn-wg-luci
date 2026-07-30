@@ -45,6 +45,28 @@ const enforce_routing = require('protonvpn.routing').enforce;
 const CERT_STATE_DIR = getenv('PROTONVPN_STATE_DIR') || '/etc/protonvpn';
 const CERT_STATE_FILE = CERT_STATE_DIR + '/certificate.json';
 
+// One file holds EVERY instance's entry while the daemon forks one task per
+// instance, so the read-modify-write below is a genuine race. Losing it does
+// not just lose a serial number: key_seed is the only copy of an instance's
+// Ed25519 identity, the certificate is registered against it, and it cannot be
+// regenerated — so a lost update costs the tunnel permanently. On tmpfs, since
+// it is taken on every renewal and flash should not wear out for a lock.
+const CERT_STATE_LOCK = '/tmp/protonvpn_cert_state.lock';
+
+// Take the certificate-state lock. The critical section is a read, a merge and
+// an atomic write — milliseconds — so a holder that outlives the reclamation
+// window is a crashed one; wait that window out rather than drop an update.
+// Returns the token or null.
+function lock_cert_state() {
+	let lock = null;
+	for (let i = 0; i < 1550 && !lock; i++) {
+		lock = _common.acquire_lock(CERT_STATE_LOCK, 30);
+		if (!lock)
+			sleep(20);
+	}
+	return lock;
+}
+
 // Locate the managed peer section (type wireguard_<iface>, interface=<iface>).
 function find_peer(uci, iface) {
 	let found = null;
@@ -76,9 +98,8 @@ function read_cert_state(instance) {
 	return all[n] || null;
 }
 
-// Merge the certificate metadata of one instance into the state file
-// (atomic write, 0600 — the file sits next to bearer tokens).
-function record_cert_state(instance, fields) {
+// The merge itself, with the state lock already held.
+function record_cert_state_locked(instance, fields) {
 	let all = {};
 	let raw = readfile(CERT_STATE_FILE);
 	if (raw) {
@@ -105,9 +126,23 @@ function record_cert_state(instance, fields) {
 	return true;
 }
 
-// Drop one instance's certificate metadata, leaving the other instances'
-// entries intact.
-function forget_cert_state(instance) {
+// Merge the certificate metadata of one instance into the state file
+// (atomic write, 0600 — the file sits next to bearer tokens), serialized
+// against the other instances' workers.
+function record_cert_state(instance, fields) {
+	let lock = lock_cert_state();
+	if (!lock) {
+		log('could not lock the certificate state for ' +
+			(validate_instance(instance) || 'main'));
+		return false;
+	}
+	let ok = record_cert_state_locked(instance, fields);
+	_common.release_lock(lock);
+	return ok;
+}
+
+// The removal itself, with the state lock already held.
+function forget_cert_state_locked(instance) {
 	let raw = readfile(CERT_STATE_FILE);
 	if (!raw)
 		return true;
@@ -127,6 +162,79 @@ function forget_cert_state(instance) {
 		return false;
 	chmod(CERT_STATE_FILE, 0o600);
 	return true;
+}
+
+// Drop one instance's certificate metadata, leaving the other instances'
+// entries intact — the same shared file, so the same lock.
+function forget_cert_state(instance) {
+	let lock = lock_cert_state();
+	if (!lock) {
+		log('could not lock the certificate state for ' +
+			(validate_instance(instance) || 'main'));
+		return false;
+	}
+	let ok = forget_cert_state_locked(instance);
+	_common.release_lock(lock);
+	return ok;
+}
+
+// Release an instance's Proton-side registration. Certificates live up to a
+// year and the per-account limit is unknown, so leaving one behind for an
+// instance nobody uses any more slowly consumes a budget we cannot see. Best
+// effort throughout — a certificate cannot be revoked with the VPN scope, and
+// a dead session must not block the caller.
+function retire_certificate(name) {
+	let cs = read_cert_state(name);
+	if (!cs || !cs.serial)
+		return false;
+
+	// Our token cannot revoke (403/9100 — only a web session can), so instead
+	// of leaving a year-long registration squatting a device slot, renew it
+	// down to the shortest life the API grants: a renewal supersedes the
+	// previous registration for the same key, and what is left expires within
+	// minutes.
+	let done = false;
+	if (cs.key_seed) {
+		let pem = _api.pem_from_seed(cs.key_seed);
+		if (!pem.error) {
+			let t = _api.certificate_tombstone(pem.pem_public);
+			if (t.ok) {
+				done = true;
+				log('certificate for ' + name + ' set to expire within minutes');
+			} else {
+				log('could not shorten the certificate for ' + name + ': ' +
+					(t.error || 'unknown error'));
+			}
+		}
+	}
+	// No seed (an instance from before the seed was kept): the listing hands
+	// back the public key of every certificate, which is all a tombstone needs,
+	// so look ours up by serial.
+	if (!done) {
+		let listed = _api.certificate_list('persistent');
+		if (listed.ok) {
+			for (let c in listed.certificates) {
+				if (c.serial != cs.serial || !length(c.client_key || ''))
+					continue;
+				let t = _api.certificate_tombstone(c.client_key);
+				if (t.ok) {
+					done = true;
+					log('certificate for ' + name + ' set to expire within minutes');
+				}
+				break;
+			}
+		}
+	}
+	if (!done) {
+		// Everything above failed: our token cannot revoke (403/9100 — the
+		// dashboard gets there by re-authenticating with the password to obtain
+		// the 'locked' scope, which a VPN session does not reach).
+		_api.certificate_delete(cs.serial);
+		log('certificate ' + cs.serial + ' for ' + name +
+			' stays on the account until it expires; remove it under ' +
+			'Downloads -> WireGuard configuration at account.protonvpn.com');
+	}
+	return done;
 }
 
 // Repair an instance created before the WireGuard key derivation was fixed.
@@ -616,6 +724,41 @@ function disconnect(uci, instance) {
 	return { ok: true, interface: iface };
 }
 
+// Forget the instance's WireGuard identity so it goes back to "not
+// configured", without deleting it: the location set, rotation schedule and
+// routing options stay, so the next apply generates a fresh keypair,
+// registers a new certificate and reconnects exactly as before.
+//
+// Proton-specific: the private key is only half of the identity. The Ed25519
+// seed it was derived from lives in the certificate state file and the
+// registration lives on the account, so both have to go too — otherwise the
+// dropped key keeps occupying a device slot for up to a year (retire it the
+// same way delete_instance does).
+function clear_credentials(uci, instance) {
+	let s = load_settings(uci, instance);
+	let iface = validate_interface(s.interface);
+	if (!iface)
+		return { error: 'invalid interface name' };
+
+	run([ 'ifdown', iface ]);
+
+	retire_certificate(s.name);
+	forget_cert_state(s.name);
+
+	let peer = find_peer(uci, iface);
+	if (peer)
+		uci.delete('network', peer);
+	if (uci.get('network', iface) != null) {
+		uci.delete('network', iface, 'private_key');
+		// Keep the interface itself: the settings that describe it are kept as
+		// well, so leave netifd a section to bring back up — just not on boot.
+		uci.set('network', iface, 'auto', '0');
+	}
+	uci.commit('network');
+	log('cleared the WireGuard identity of ' + s.name);
+	return { ok: true, interface: iface };
+}
+
 // Create an additional VPN instance (interface pv_<name>). Committed
 // atomically here (not via the UI's staged-apply machinery, whose rollback
 // window makes programmatic section creation fragile).
@@ -677,60 +820,7 @@ function delete_instance(uci, name) {
 	if (routing.changed_network || routing.changed_firewall)
 		uci = cursor(); // see apply(): committed deletions break iteration
 
-	// Release the Proton-side registration as well: certificates live up to a
-	// year and the per-account limit is unknown, so leaving one behind for a
-	// deleted instance slowly consumes a budget we cannot see. Best effort —
-	// a session-mode certificate cannot be revoked with the VPN scope, and a
-	// dead session must not block the deletion.
-	let cs = read_cert_state(name);
-	if (cs && cs.serial) {
-		// Our token cannot revoke (403/9100 — only a web session can), so
-		// instead of leaving a year-long registration squatting a device slot,
-		// renew it down to the shortest life the API grants: a renewal
-		// supersedes the previous registration for the same key, and what is
-		// left expires within minutes.
-		let done = false;
-		if (cs.key_seed) {
-			let pem = _api.pem_from_seed(cs.key_seed);
-			if (!pem.error) {
-				let t = _api.certificate_tombstone(pem.pem_public);
-				if (t.ok) {
-					done = true;
-					log('certificate for ' + name + ' set to expire within minutes');
-				} else {
-					log('could not shorten the certificate for ' + name + ': ' +
-						(t.error || 'unknown error'));
-				}
-			}
-		}
-		// No seed (an instance from before the seed was kept): the listing
-		// hands back the public key of every certificate, which is all a
-		// tombstone needs, so look ours up by serial.
-		if (!done) {
-			let listed = _api.certificate_list('persistent');
-			if (listed.ok) {
-				for (let c in listed.certificates) {
-					if (c.serial != cs.serial || !length(c.client_key || ''))
-						continue;
-					let t = _api.certificate_tombstone(c.client_key);
-					if (t.ok) {
-						done = true;
-						log('certificate for ' + name + ' set to expire within minutes');
-					}
-					break;
-				}
-			}
-		}
-		if (!done) {
-			// Everything above failed: our token cannot revoke (403/9100 — the
-			// dashboard gets there by re-authenticating with the password to
-			// obtain the 'locked' scope, which a VPN session does not reach).
-			_api.certificate_delete(cs.serial);
-			log('certificate ' + cs.serial + ' for ' + name +
-				' stays on the account until it expires; remove it under ' +
-				'Downloads -> WireGuard configuration at account.protonvpn.com');
-		}
-	}
+	retire_certificate(name);
 	forget_cert_state(name);
 
 	run([ 'ifdown', iface ]);
@@ -761,8 +851,8 @@ function delete_instance(uci, name) {
 
 return {
 	ensure_keypair, current_peer, restore_peer, write_relay, bring_up,
-	verify_handshake, connect_one, apply, disconnect,
+	verify_handshake, connect_one, apply, disconnect, clear_credentials,
 	create_instance, delete_instance, restore_wan_default,
-	renew_certificate,
+	renew_certificate, retire_certificate,
 	read_cert_state, record_cert_state, forget_cert_state, migrate_legacy_key
 };

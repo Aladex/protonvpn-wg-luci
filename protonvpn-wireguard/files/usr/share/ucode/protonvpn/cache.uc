@@ -351,20 +351,27 @@ function fetch_servers() {
 	// document is kept — never the raw body. It is streamed to a temp file
 	// because passing that much through a pipe is quadratic in ucode.
 	let tmp = LOGICALS_TMP;
+	// max_filesize makes curl refuse an oversized body up front: /tmp is RAM on
+	// a router, so finding out after the download is already too late.
 	let res = _api.api_call({ url: LOGICALS_URL, uid: session.uid,
-		token: session.access_token, out_file: tmp, timeout: 180 });
+		token: session.access_token, out_file: tmp, max_filesize: MAX_RESPONSE,
+		timeout: 180 });
 
 	// A stale access token is routine (it lives 30 minutes): refresh once and
 	// retry before reporting anything to the user.
 	if (res.code == 401) {
 		let rf = _api.auth_refresh();
 		if (!rf.ok) {
+			// curl has already written the 401 body here; leaving it behind
+			// squats tmpfs until the next successful fetch overwrites it.
+			unlink(tmp);
 			write_fetch_status({ state: 'error', error: rf.error || 'session expired' });
 			return { error: rf.error || 'session expired' };
 		}
 		session = _api.session_load();
 		res = _api.api_call({ url: LOGICALS_URL, uid: session.uid,
-			token: session.access_token, out_file: tmp, timeout: 180 });
+			token: session.access_token, out_file: tmp, max_filesize: MAX_RESPONSE,
+			timeout: 180 });
 	}
 
 	if (res.code != 200) {

@@ -62,11 +62,23 @@ const DIR_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 // ── Primitive validators ─────────────────────────────────────────────────
 // Each returns a normalized value or null; callers treat null as invalid.
 
-// Coerce to an int within [min, max], else null.
+// Coerce to an int within [min, max], else null. Only numbers and numeric
+// strings are accepted: int() happily turns a bool, an array or a garbage
+// string into 0, which would silently pass a bounds check that spans zero.
 function bounded_int(v, min, max) {
-	if (type(v) == 'string' && !match(v, /^-?[0-9]+$/))
+	let n;
+	let t = type(v);
+	if (t == 'int') {
+		n = v;
+	} else if (t == 'double') {
+		n = int(v);
+	} else if (t == 'string') {
+		if (!match(v, /^-?[0-9]+$/))
+			return null;
+		n = int(v);
+	} else {
 		return null;
-	let n = int(v);
+	}
 	if (n < min || n > max)
 		return null;
 	return n;
@@ -303,9 +315,12 @@ function load_settings(uci, instance) {
 	};
 }
 
-// Absolute path of the shared server-list cache file.
+// Absolute path of the shared server-list cache file. Callers reach for this
+// on paths where the settings may not have been loaded yet (an unknown
+// instance, a failed load), so a missing object must yield the default path
+// instead of throwing.
 function cache_file_path(settings) {
-	let dir = validate_dir(settings.cache_dir);
+	let dir = validate_dir(settings ? settings.cache_dir : '');
 	if (!dir)
 		dir = DEFAULT_CACHE_DIR;
 	return dir + '/' + CACHE_FILENAME;

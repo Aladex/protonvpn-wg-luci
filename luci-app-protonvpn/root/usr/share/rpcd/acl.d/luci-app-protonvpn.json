@@ -29,6 +29,7 @@
 					"certificate_renew",
 					"apply",
 					"disconnect",
+					"clear_credentials",
 					"refresh_locations",
 					"rotate_now",
 					"create_instance",
