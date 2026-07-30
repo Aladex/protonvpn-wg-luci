@@ -46,11 +46,6 @@ var callDeleteInstance = rpc.declare({
 });
 
 var STYLE = '' +
-	'.pv-status-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75em;font-size:1.05em}' +
-	'.pv-state{font-weight:700}' +
-	'.pv-status-details{color:var(--text-color-medium,#666);font-size:.9em;margin-top:.3em}' +
-	'.pv-status-actions{margin-top:.7em;display:flex;gap:.5em;flex-wrap:wrap}' +
-	'.pv-mono{font-family:monospace}' +
 	'.pv-inline-note{font-style:italic;color:var(--text-color-medium,#666)}' +
 	'.pv-inline{display:flex;align-items:center;gap:.75em;flex-wrap:wrap}' +
 	'.pv-radio-group{display:flex;align-items:center;gap:1.25em;flex-wrap:wrap;min-height:1.9em}' +
@@ -111,9 +106,6 @@ var STYLE = '' +
 	'.pv-inst-name{font-weight:bold}' +
 	'.pv-inst-dim{color:var(--text-color-medium,#666);font-size:.92em}' +
 	'.pv-inst-act{flex:none;margin-left:auto}' +
-	'.pv-token-field>div{display:block;width:100%}' +
-	'.pv-token-field .control-group{display:flex;width:100%}' +
-	'.pv-token-field .control-group input{flex:1 1 auto;width:100%}' +
 	'details.pv-advanced>summary{cursor:pointer;font-weight:700;padding:.3em 0}' +
 	// ── ProtonVPN account card ───────────────────────────────────────────
 	// A real card, not a bare paragraph: the credential state is the first
@@ -142,7 +134,10 @@ var STYLE = '' +
 	'padding:.85em 1.1em;margin-bottom:1.2em;border-radius:6px;' +
 	'border:1px solid var(--border-color-medium,#444)}' +
 	'.pv-state-main{flex:1 1 24em;min-width:16em}' +
-	'.pv-state-title{font-weight:700;display:flex;align-items:center;gap:.5em}' +
+	// The bold lives on the state word alone, not on the whole heading row:
+	// the row also carries the LED and the instance tag, which must stay light.
+	'.pv-state-title{display:flex;align-items:center;gap:.5em}' +
+	'.pv-state-label{font-weight:700}' +
 	'.pv-state-sub{font-size:90%;opacity:.8;margin-top:.3em;line-height:1.5}' +
 	'.pv-state-actions{display:flex;gap:.6em;flex-wrap:wrap;margin-left:auto}' +
 	'.pv-quota{font-size:85%;opacity:.75}' +
@@ -235,6 +230,41 @@ return view.extend({
 		return map[state] || { label: _('Unknown'), color: 'var(--text-color-medium,#666)' };
 	},
 
+	// A raw second count is unreadable past a minute or two ("3600s ago"), so
+	// anything but a fresh handshake is expressed in minutes.
+	// The minutes branch starts at 90s, so it renders "1 minute" for a whole
+	// half-minute window — singular is worth spelling out rather than shipping
+	// "1 minutes ago" on the most visible line of the page.
+	fmtHandshake: function (sec) {
+		if (sec == null)
+			return null;
+		if (sec < 90)
+			return (sec == 1) ? _('Handshake 1 second ago')
+				: _('Handshake %d seconds ago').format(sec);
+		var min = Math.floor(sec / 60);
+		return (min == 1) ? _('Handshake 1 minute ago')
+			: _('Handshake %d minutes ago').format(min);
+	},
+
+	// Display names for the country/city pair the tunnel reports. The country
+	// name comes from the browser (Proton only sends ISO codes); the city name
+	// only exists in the locations tree, so a missing or not-yet-loaded tree
+	// falls back to the raw 'cc-city' code rather than dropping the city.
+	locationNames: function (cc, cityCode) {
+		var countries = Array.isArray((this.locations || {}).countries)
+			? this.locations.countries : [];
+		var city = cityCode || '';
+		countries.forEach(function (c) {
+			if (c.code !== cc)
+				return;
+			(c.cities || []).forEach(function (ct) {
+				if (ct.code === cityCode)
+					city = ct.name || cityCode;
+			});
+		});
+		return [ cc ? this.countryLabel(cc) : '', city ];
+	},
+
 	updateInstancesTable: function () {
 		if (!this.instancesNode)
 			return;
@@ -296,7 +326,7 @@ return view.extend({
 			this.discardBtn.disabled = true;
 		this.status = this.statusOf(name) || {};
 		// Belongs to the tunnel we just left.
-		this.externalIp = null;
+		this.forgetExternalIp();
 		this.updateInstancesTable();
 		this.updateStatusBand();
 		dom.content(this.formNode, this.buildFormSections());
@@ -387,7 +417,7 @@ return view.extend({
 				return this.refreshStatus();
 			}, this)).then(L.bind(function () {
 				this.status = this.statusOf(this.instance) || {};
-				this.externalIp = null;
+				this.forgetExternalIp();
 				this.updateInstancesTable();
 				this.updateStatusBand();
 				dom.content(this.formNode, this.buildFormSections());
@@ -749,16 +779,28 @@ return view.extend({
 
 	handleLogout: function () {
 		var self = this;
-		return callLogout().then(function () {
+		var n = this.notice(_('Signing out…'), 'info');
+		return callLogout().then(function (res) {
+			self.dismiss(n);
+			if (res && res.error)
+				self.notice(_('Sign-out failed: %s').format(res.error), 'error');
+			else
+				// Signing out takes every tunnel down (the backend disconnects
+				// them before dropping the session), which is a big enough
+				// consequence to spell out rather than leave to be discovered.
+				self.notice(_('Signed out. Every tunnel was taken down and its networks are back on normal routing — sign in again to restore them.'), 'info', 6000);
 			// Without a session the plan and the connection quota are no longer
 			// knowable, so drop them instead of showing a stale figure.
 			self.account = null;
-			self.externalIp = null;
+			self.forgetExternalIp();
 			return callSessionState();
 		}).then(function (st) {
 			self.session = st || {};
 			self.renderBand();
 			return self.refreshStatus();
+		}).catch(function (e) {
+			self.dismiss(n);
+			self.notice(_('Sign-out failed: %s').format(e), 'error');
 		});
 	},
 
@@ -1428,41 +1470,109 @@ return view.extend({
 	// What the tunnel is doing right now, plus the actions that change it.
 	// Kept separate from the account card above: one is about credentials,
 	// this one is about the link.
+	// The action row, gated by state so it never offers something the backend
+	// would refuse. Three cases, in order:
+	//   * no keypair yet — there is nothing to act on, so only Refresh; the
+	//     instance is started from the form below (or the login banner),
+	//   * administratively off (`disconnect` sets enabled=0 and hands the
+	//     networks back to normal routing) — the only sensible action is
+	//     Enable, so the rest would be noise,
+	//   * running — Reconnect, Rotate and Disable.
+	// "Disable", not "Disconnect": the button does not merely drop the tunnel,
+	// it turns the instance off, and the daemon will not bring it back.
+	actionButtons: function (st, disp) {
+		var btns = [ E('button', { class: 'cbi-button',
+			click: ui.createHandlerFn(this, 'refreshStatus') }, _('Refresh')) ];
+
+		if (!st.configured)
+			return btns;
+
+		if (st.enabled === false) {
+			btns.push(E('button', { class: 'cbi-button cbi-button-apply',
+				click: ui.createHandlerFn(this, 'handleConnect') }, _('Enable')));
+			return btns;
+		}
+
+		btns.push(E('button', { class: 'cbi-button cbi-button-apply',
+			click: ui.createHandlerFn(this, 'handleConnect') }, _('Reconnect')));
+
+		// Rotation cannot work on a pinned server — the backend refuses it — so
+		// that case drops the button entirely. Otherwise it stays put and is
+		// merely greyed while there is no live tunnel: a control that appears
+		// and disappears under a 5-second poll is worse than a dead one.
+		if (!st.fixed) {
+			var live = (disp === 'connected' || disp === 'degraded');
+			btns.push(E('button', { class: 'cbi-button', disabled: !live || null,
+				click: ui.createHandlerFn(this, 'handleRotateNow') }, _('Rotate now')));
+		}
+
+		btns.push(E('button', { class: 'cbi-button cbi-button-remove',
+			click: ui.createHandlerFn(this, 'handleDisconnect') }, _('Disable')));
+		return btns;
+	},
+
 	updateStatusBand: function () {
 		if (!this.stateEl)
 			return;
 		var st = this.status || {};
-		var led = 'pv-led-bad', title, sub = [], cls = 'pv-state';
+		var sub = [], cls = 'pv-state';
 
-		if (st.state === 'connected') {
-			led = 'pv-led-ok';
-			title = _('Connected');
-		} else if (st.state === 'degraded') {
-			led = 'pv-led-warn';
+		// One source of truth for "what state is this in": the instances table
+		// and this card must never disagree, and an administratively disabled
+		// instance has to read as deliberate rather than as a failure.
+		var disp = this.dispState(st);
+		var titles = {
+			connected:      _('Connected'),
+			connecting:     _('Connecting…'),
+			degraded:       _('Degraded — no recent handshake'),
+			disconnected:   _('Disconnected'),
+			disabled:       _('Disabled'),
+			error:          _('Error'),
+			not_configured: _('Not set up yet')
+		};
+		var leds = {
+			connected: 'pv-led-ok',
+			connecting: 'pv-led-warn',
+			degraded: 'pv-led-warn',
+			// Switched off on purpose — worth noticing, but not a fault.
+			disabled: 'pv-led-warn'
+		};
+		var title = titles[disp] || this.stateInfo(disp).label;
+		var led = leds[disp] || 'pv-led-bad';
+		if (disp === 'degraded')
 			cls += ' pv-acct-warn';
-			title = _('Degraded — no recent handshake');
-		} else if (st.state === 'connecting') {
-			led = 'pv-led-warn';
-			title = _('Connecting…');
-		} else if (st.state === 'not_configured') {
-			title = _('Not set up yet');
-		} else if (!st.enabled) {
-			title = _('Disabled');
-		} else {
-			title = _('Disconnected');
-		}
 
 		if (st.gateway)
 			sub.push(_('Server %s').format(st.gateway));
-		if (st.location && st.location.country)
-			sub.push(this.countryFlag(st.location.country) + ' ' +
-				this.countryLabel(st.location.country));
+		if (st.location && st.location.country) {
+			var where = this.locationNames(st.location.country, st.location.city)
+				.filter(Boolean).join(' / ');
+			var flag = this.countryFlag(st.location.country);
+			if (where)
+				sub.push((flag ? flag + ' ' : '') + where);
+		}
 		if (st.endpoint)
 			sub.push(st.endpoint);
-		if (st.latest_handshake_seconds != null)
-			sub.push(_('handshake %ds ago').format(st.latest_handshake_seconds));
-		if (this.externalIp)
-			sub.push(_('external IP %s').format(this.externalIp));
+		var hs = this.fmtHandshake(st.latest_handshake_seconds);
+		if (hs)
+			sub.push(hs);
+		// A Tor exit is a different product, not a flag on an ordinary server —
+		// the extra latency and the sites that reject Tor need explaining.
+		if (st.hop_mode === 'tor')
+			sub.push(_('🧅 Tor over VPN'));
+		// From the LAN a working kill switch looks exactly like a broken
+		// internet connection, so name it whenever it is the reason.
+		if (disp !== 'connected' && st.routing && st.routing.killswitch)
+			sub.push(_('Kill switch is blocking LAN traffic'));
+		if (disp === 'connected') {
+			var ipKey = this.instance + '|' + (st.gateway || '');
+			if (this.extIp && this.extIp.key === ipKey)
+				sub.push(_('external IP %s').format(this.extIp.ip));
+			else
+				this.maybeFetchExternalIp(ipKey);
+		}
+		if (st.rotation && st.rotation.enabled)
+			sub.push(_('Automatic rotation is on'));
 		if (st.certificate && st.certificate.present && st.certificate.days_left != null)
 			sub.push(_('certificate %d days left').format(st.certificate.days_left));
 
@@ -1481,32 +1591,72 @@ return view.extend({
 				this.account.plan || '', this.account.devices_used != null
 					? this.account.devices_used : '?', this.account.max_connect);
 
-		var actions = [];
-		var configured = st.configured;
-		if (st.state === 'connected' || st.state === 'degraded' || st.enabled) {
-			actions.push(E('button', { class: 'cbi-button cbi-button-remove',
-				click: ui.createHandlerFn(this, 'handleDisconnect') }, _('Disconnect')));
-		}
-		actions.push(E('button', { class: 'cbi-button cbi-button-apply',
-			click: ui.createHandlerFn(this, 'handleConnect') },
-			configured ? _('Reconnect') : _('Connect')));
-		// Rotation makes no sense on a pinned server; the backend refuses it
-		// anyway, so do not offer a button that cannot work.
-		if (!st.fixed && st.state === 'connected')
-			actions.push(E('button', { class: 'cbi-button',
-				click: ui.createHandlerFn(this, 'handleRotateNow') }, _('Rotate now')));
+		var actions = this.actionButtons(st, disp);
+
+		var heading = [
+			E('span', { class: 'pv-led ' + led }),
+			E('span', { class: 'pv-state-label' }, title)
+		];
+		// With several tunnels running side by side the card has to say which
+		// one it is describing.
+		if ((this.instances || []).length > 1)
+			heading.push(E('span', { class: 'pv-tagline' }, this.instance));
 
 		this.stateEl.className = cls;
 		dom.content(this.stateEl, [
 			E('div', { class: 'pv-state-main' }, [
-				E('div', { class: 'pv-state-title' }, [
-					E('span', { class: 'pv-led ' + led }), E('span', {}, title)
-				]),
+				E('div', { class: 'pv-state-title' }, heading),
 				E('div', { class: 'pv-state-sub' }, sub.join(' · ') || _('No tunnel yet.')),
 				quota ? E('div', { class: 'pv-quota' }, quota) : ''
 			]),
 			E('div', { class: 'pv-state-actions' }, actions)
 		]);
+	},
+
+	// Fetch the tunnel's public IP once per instance+gateway combination. The
+	// status poll runs every 5 s and this is a live lookup through the tunnel,
+	// so the result is cached until the tunnel actually moves. Fetching lazily
+	// from the band (rather than only after a manual Connect) is what makes the
+	// IP appear when the page is opened on an already-connected tunnel.
+	maybeFetchExternalIp: function (key) {
+		if (this._extIpPending === key)
+			return;
+		// Nothing caches this on the router: every call is up to two curl
+		// attempts against public services with an 8 s timeout each, bound to
+		// the tunnel device. A key that just failed must therefore back off
+		// instead of being retried on the next 5-second tick — a tunnel that
+		// is up but not passing traffic would otherwise keep rpcd busy
+		// permanently. The cooldown still lets a transient failure recover.
+		var fail = this._extIpFail;
+		if (fail && fail.key === key && (Date.now() - fail.at) < 60000)
+			return;
+		this._extIpPending = key;
+		callExternalIp(this.instance).then(L.bind(function (res) {
+			// A newer gateway superseded this lookup while it was in flight.
+			if (this._extIpPending !== key)
+				return;
+			this._extIpPending = null;
+			if (res && res.ip) {
+				this._extIpFail = null;
+				this.extIp = { key: key, ip: res.ip };
+				this.updateStatusBand();
+			} else {
+				this._extIpFail = { key: key, at: Date.now() };
+			}
+		}, this)).catch(L.bind(function () {
+			this._extIpPending = null;
+			this._extIpFail = { key: key, at: Date.now() };
+		}, this));
+	},
+
+	// Drop the cached public IP (and any lookup still in flight) whenever the
+	// tunnel it belonged to is gone: showing the previous exit address would be
+	// worse than showing nothing. The back-off goes with it, so an explicit
+	// reconnect always gets a fresh attempt.
+	forgetExternalIp: function () {
+		this.extIp = null;
+		this._extIpPending = null;
+		this._extIpFail = null;
 	},
 
 	// Plan and connection quota. Two live API calls, so this is refreshed only
@@ -1535,28 +1685,33 @@ return view.extend({
 			self.updateInstancesTable();
 			self.updateStatusBand();
 			self.renderBand();
+			// "Next rotation" is a countdown, not a constant: recompute it on
+			// every tick or it freezes at whatever it said when the form was
+			// built and quietly goes stale by hours.
+			if (self.rotNextSpan)
+				dom.content(self.rotNextSpan, self.nextRotationText());
 		});
 	},
 
 	handleConnect: function () {
 		var self = this;
 		var n = this.notice(_('Connecting… this verifies a real WireGuard handshake and can take a few seconds.'), 'info');
+		// The public IP of the tunnel we are leaving is about to be wrong; the
+		// band re-fetches it lazily once the new gateway is known.
+		this.forgetExternalIp();
 		return callApply(this.instance).then(function (res) {
 			self.dismiss(n);
-			if (!res || res.error) {
+			if (!res || res.error)
 				self.notice((res && res.error) || _('apply failed'), 'warning');
-			} else if (res.state === 'success') {
+			else if (res.state === 'success')
 				self.notice(_('Connected via %s.').format(res.gateway || '?'), 'info', 4000);
-				// Only worth asking once the tunnel is actually up.
-				callExternalIp(self.instance).then(function (ip) {
-					if (ip && ip.ip) {
-						self.externalIp = ip.ip;
-						self.updateStatusBand();
-					}
-				}).catch(function () {});
-			} else {
+			else if (res.state === 'partial_failure')
+				// The interface is up but no handshake came back: routing and
+				// firewall are already in place, so this is not a clean failure.
+				self.notice(_('The interface came up on %s, but the server never answered the handshake. Traffic may not pass — try reconnecting or pick another location.')
+					.format(res.gateway || '?'), 'warning');
+			else
 				self.notice(res.error || _('the tunnel did not come up'), 'warning');
-			}
 			return self.refreshStatus().then(function () { return self.loadAccount(); });
 		}).catch(function (e) {
 			self.dismiss(n);
@@ -1566,9 +1721,21 @@ return view.extend({
 
 	handleDisconnect: function () {
 		var self = this;
-		this.externalIp = null;
-		return callDisconnect(this.instance).then(function () {
+		var n = this.notice(_('Disconnecting…'), 'info');
+		this.forgetExternalIp();
+		return callDisconnect(this.instance).then(function (res) {
+			self.dismiss(n);
+			if (res && res.error)
+				self.notice(_('Disconnect failed: %s').format(res.error), 'error');
+			else
+				// Taking the tunnel down also removes the routing and firewall
+				// objects it owned, so LAN traffic changes path — say so, or a
+				// disconnect looks like it did nothing at all.
+				self.notice(_('Instance disabled: its networks are back on normal routing (IPv6 included). Reconnect restores the VPN.'), 'info', 6000);
 			return self.refreshStatus();
+		}).catch(function (e) {
+			self.dismiss(n);
+			self.notice(_('Disconnect failed: %s').format(e), 'error');
 		});
 	},
 
@@ -1583,7 +1750,7 @@ return view.extend({
 				self.notice(res.reason || _('nothing to rotate to'), 'info', 4000);
 			else if (res && res.server)
 				self.notice(_('Rotated to %s.').format(res.server), 'info', 4000);
-			self.externalIp = null;
+			self.forgetExternalIp();
 			return self.refreshStatus();
 		}).catch(function (e) {
 			self.dismiss(n);
@@ -1636,13 +1803,25 @@ return view.extend({
 		this.poolChips = E('div', { class: 'pv-pool' });
 		this.poolCount = E('span', { class: 'pv-pool-count' });
 		this.poolNote = E('div', { class: 'cbi-value-description' });
-		this.poolTrigger = E('button', { class: 'cbi-button',
-			click: ui.createHandlerFn(this, 'poolTogglePanel') }, '+ ' + _('Add a location'));
+		// pv-pool-trigger draws the ▾ caret: without it neither control reads as
+		// a dropdown, they just look like ordinary buttons. type=button keeps
+		// them from submitting the surrounding LuCI form, and the click is
+		// stopped so it never reaches anything that would reopen/close a panel.
+		this.poolTrigger = E('button', { type: 'button', class: 'cbi-button pv-pool-trigger',
+			click: L.bind(function (ev) {
+				ev.preventDefault();
+				ev.stopPropagation();
+				this.poolTogglePanel();
+			}, this) }, '+ ' + _('Add a location'));
 		this.poolPanel = E('div', { class: 'pv-pool-panel hidden' });
 		this.poolWrap = E('div', { class: 'pv-pool-wrap' }, [ this.poolTrigger, this.poolPanel ]);
 
-		this.srvTrigger = E('button', { class: 'cbi-button pv-srv-trigger',
-			click: ui.createHandlerFn(this, 'srvTogglePanel') }, _('Automatic server'));
+		this.srvTrigger = E('button', { type: 'button', class: 'cbi-button pv-pool-trigger pv-srv-trigger',
+			click: L.bind(function (ev) {
+				ev.preventDefault();
+				ev.stopPropagation();
+				this.srvTogglePanel();
+			}, this) }, _('Automatic server'));
 		this.srvPanel = E('div', { class: 'pv-pool-panel hidden' });
 
 		this.srvWrap = E('span', { class: 'pv-pool-wrap' }, [ this.srvTrigger, this.srvPanel ]);
@@ -2141,6 +2320,9 @@ return view.extend({
 			self.clearChangeIndicator();
 			self.dismiss(p);
 			p = self.notice(_('Applying and reconnecting…'), 'info');
+			// The tunnel is about to move; the band re-fetches the public IP
+			// lazily once the new gateway is known.
+			self.forgetExternalIp();
 			return callApply(self.instance);
 		}).then(function (res) {
 			self.dismiss(p);
@@ -2148,6 +2330,10 @@ return view.extend({
 				self.notice(_('Apply failed: %s').format(res.error), 'error');
 			else if (res && res.state === 'success')
 				self.notice(_('Connected via %s.').format(res.gateway || '?'), 'info', 4000);
+			else if (res && res.state === 'partial_failure')
+				// Settings are saved and the interface is up; only the handshake
+				// is missing, so this must not read as "nothing was applied".
+				self.notice(_('Settings saved, but the server never answered the handshake. The interface is up — try reconnecting or pick another location.'), 'warning');
 			else
 				self.notice(_('Could not connect: %s')
 					.format((res && res.error) || _('unknown error')), 'error');
@@ -2174,12 +2360,15 @@ return view.extend({
 			((data[3] && !data[3].error) ? data[3] : {});
 		this.session = session;
 		this.locations = locations;
-		this.externalIp = null;
+		this.forgetExternalIp();
 		this._serversReq = 0;
 		this._dirty = false;
 
 		this.bandEl = E('div', { class: 'pv-acct' });
-		this.stateEl = E('div', { class: 'pv-state' });
+		// The card is repainted by a background poll, so a screen reader has to
+		// be told the state changed; updateStatusBand only rewrites className
+		// and children, which leaves this attribute in place.
+		this.stateEl = E('div', { class: 'pv-state', 'aria-live': 'polite' });
 		this.instancesNode = E('div', {});
 		this.formNode = E('div', {});
 		dom.content(this.formNode, this.buildFormSections());
