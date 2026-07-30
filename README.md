@@ -8,8 +8,9 @@
 > package feed still needs its signing keys and a build runner. Treat this as
 > a release of the software, not of an installable package.
 >
-> The reconnaissance notes that drive the design live in `RECON.md`; the
-> implementation plan and its per-phase reports in `PLAN_PROTONVPN_LUCI.md`.
+> Every API behaviour this depends on was checked against the live Proton API
+> rather than assumed; the reasoning is recorded in the code comments next to
+> the calls that rely on it.
 
 Configure ProtonVPN's WireGuard service on OpenWrt: browser-side SRP-6a login
 (TOTP 2FA supported), locally generated WireGuard keypairs registered as
@@ -108,7 +109,7 @@ the LuCI app stays a thin frontend:
   backend's ubus methods — and computes the SRP-6a login in the browser
   (native BigInt), because the router's ucode cannot do 2048-bit modexp.
 
-Two Proton-specific facts shape the design (see `RECON.md`):
+Two Proton-specific facts shape the design:
 
 1. **Auth is SRP-6a**, not a token. The browser runs SRP; rpcd only relays
    `POST /auth/info` and `POST /auth`. The Proton password never leaves the

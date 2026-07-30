@@ -47,7 +47,7 @@ const WATCHDOG_GRACE = 60;
 const WATCHDOG_COOLDOWN_BASE = 120;
 const WATCHDOG_COOLDOWN_MAX = 900;
 
-// Credential lifetimes (see RECON.md): the session lives 30 days and is
+// Credential lifetimes: the session lives 30 days and is
 // auto-refreshed by the daemon well before that; a persistent certificate
 // lives up to 365 days and is renewed ahead of expiry over the live session.
 const SESSION_MAX_AGE = 30 * 86400;       // session hard expiry (30 days)

@@ -1,3 +1,8 @@
 node_modules/
 package-lock.json
 uc.out
+
+# Internal working notes: kept on disk, deliberately not part of the public
+# repository (they remain in the history before this commit).
+RECON.md
+PLAN_PROTONVPN_LUCI.md

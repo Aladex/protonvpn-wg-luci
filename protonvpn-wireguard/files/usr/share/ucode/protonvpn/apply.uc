@@ -37,8 +37,8 @@ const enforce_routing = require('protonvpn.routing').enforce;
 
 // Certificate metadata lives next to the session state (same root-only
 // directory), NOT in UCI — it must survive a session loss, because the
-// certificate outlives the session and its expiry is the real deadline
-// (see RECON.md). Keyed by instance name: every instance carries its own
+// certificate outlives the session and its expiry is the real deadline.
+// Keyed by instance name: every instance carries its own
 // keypair and therefore its own registration.
 // PROTONVPN_STATE_DIR relocates it for the offline test suite, which cannot
 // write to /etc (same convention as protonvpn.api's session file).

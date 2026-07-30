@@ -75,7 +75,7 @@ for (let name in modules) {
 		check(sprintf('%s exports %s', name, sym), m[sym] != null);
 }
 
-// Proton-specific constants are what RECON.md promises.
+// Proton-specific constants, as verified against the live API.
 let common = require('protonvpn.common');
 check('client address is 10.2.0.2/32', common.FIXED_ADDRESS == '10.2.0.2/32');
 check('client IPv6 is 2a07:b944::2:2/128', common.FIXED_ADDRESS6 == '2a07:b944::2:2/128');

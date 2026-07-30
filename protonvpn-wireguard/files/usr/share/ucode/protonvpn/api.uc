@@ -3,7 +3,7 @@
 // WireGuard certificate registration. This module owns every authenticated
 // HTTP call to api.protonvpn.ch.
 //
-// Design (see RECON.md): SRP needs 2048-bit modexp, which ucode cannot do —
+// Design: SRP needs 2048-bit modexp, which ucode cannot do —
 // so the browser computes the SRP proof (native BigInt in LuCI JS) and rpcd
 // only relays the HTTP steps:
 //
@@ -268,8 +268,8 @@ function auth_headers() {
 // SRP step 1: POST /auth/info { Username } -> SRP parameters for the
 // browser: { Modulus (PGP-signed), ServerEphemeral, Salt, SRPSession,
 // Version }. The browser derives the client proof from these with BigInt.
-// NOTE: optionally verify the PGP signature on Modulus, or pin a known
-// modulus (see RECON.md "Верификация PGP-подписи modulus").
+// NOTE: the signature on Modulus is not verified. Doing so needs OpenPGP in
+// the browser; pinning the known moduli by hash is the cheaper alternative.
 function auth_info(username) {
 	if (!username || length(username) > 128)
 		return { error: 'invalid username' };
