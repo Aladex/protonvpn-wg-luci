@@ -1,0 +1,3 @@
+# Third-party code kept byte-identical to upstream so it can be diffed against
+# it: exempt from the whitespace check, and not counted as ours by GitHub.
+luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/vendor/** -whitespace linguist-vendored
