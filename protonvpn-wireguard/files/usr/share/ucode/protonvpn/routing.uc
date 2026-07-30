@@ -22,7 +22,9 @@ const ROLE = 'protonvpn_role';
 const VPN_DNS = {
 	standard: '10.2.0.1 2a07:b944::2:1'
 };
-const RT_TABLES = '/etc/iproute2/rt_tables';
+// PROTONVPN_RT_TABLES relocates the table registry for the offline suite,
+// which must not touch the host's /etc (same convention as the state dir).
+const RT_TABLES = getenv('PROTONVPN_RT_TABLES') || '/etc/iproute2/rt_tables';
 
 // ── Small uci helpers ────────────────────────────────────────────────
 
@@ -827,4 +829,5 @@ function enforce(uci, s) {
 	return { changed_network: cn, changed_firewall: cf, notes: notes };
 }
 
-return { detect, enforce, find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu };
+return { detect, enforce, find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu,
+	ensure_rt_table, drop_rt_table };

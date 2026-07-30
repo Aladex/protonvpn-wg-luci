@@ -23,6 +23,11 @@ PROTONVPN_STATE_DIR="${PROTONVPN_STATE_DIR:-/tmp/protonvpn-test-state}"
 mkdir -p "$PROTONVPN_STATE_DIR"
 export PROTONVPN_STATE_DIR
 
+# Routing-table registry: the same relocation, so allocation can be tested
+# without writing to the host's /etc/iproute2/rt_tables.
+PROTONVPN_RT_TABLES="${PROTONVPN_RT_TABLES:-$PROTONVPN_STATE_DIR/rt_tables}"
+export PROTONVPN_RT_TABLES
+
 if ! command -v "$UCODE" >/dev/null 2>&1; then
 	echo "ucode not found (set \$UCODE to a built interpreter); skipping" >&2
 	exit 2

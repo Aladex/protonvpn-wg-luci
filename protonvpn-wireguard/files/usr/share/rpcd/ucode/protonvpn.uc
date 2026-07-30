@@ -341,6 +341,40 @@ methods.disconnect = {
 	}
 };
 
+// Instance management. These deliberately do NOT go through req_instance():
+// it defaults an empty argument to 'main', and a create/delete that quietly
+// acts on 'main' because the caller sent nothing is not a mistake worth being
+// forgiving about — deleting 'main' resets every one of its settings.
+function named_instance(request) {
+	let a = (request && request.args) ? request.args : {};
+	if (a.instance == null || a.instance == '')
+		return null;
+	return validate_instance(a.instance);
+}
+
+methods.create_instance = {
+	args: { instance: '' },
+	call: function(request) {
+		let name = named_instance(request);
+		if (!name)
+			return { error: 'invalid instance name' };
+		return _apply.create_instance(cursor(), name);
+	}
+};
+
+methods.delete_instance = {
+	args: { instance: '' },
+	call: function(request) {
+		let name = named_instance(request);
+		if (!name)
+			return { error: 'invalid instance name' };
+		let uci = cursor();
+		if (uci.get('protonvpn', name) == null)
+			return { error: 'no such instance' };
+		return _apply.delete_instance(uci, name);
+	}
+};
+
 methods.refresh_locations = {
 	call: function(request) {
 		if (!_api.session_load())
