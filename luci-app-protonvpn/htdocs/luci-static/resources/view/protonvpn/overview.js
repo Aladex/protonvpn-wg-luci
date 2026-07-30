@@ -337,8 +337,31 @@ return view.extend({
 			this.discardBtn.disabled = false;
 	},
 
-	notice: function (text, kind) {
-		ui.addNotification(null, E('p', {}, text), kind || 'info');
+	// Returns the node so a progress banner can be taken down again: LuCI's
+	// notifications are sticky, and "Applying…" left on screen reads as a hang.
+	// `timeout` is for terminal good news only — errors stay until dismissed.
+	notice: function (text, kind, timeout) {
+		var node = ui.addNotification(null, E('p', {}, text), kind || 'info');
+		if (timeout)
+			setTimeout(L.bind(this.dismiss, this, node), timeout);
+		return node;
+	},
+
+	dismiss: function (node) {
+		try {
+			if (node && node.parentNode)
+				node.parentNode.removeChild(node);
+		} catch (e) {}
+	},
+
+	// We call uci.apply() ourselves (the framework's own apply would reload the
+	// page and abort the reconnect), so the global "Unsaved Changes" indicator
+	// has to be cleared by hand once our commit lands.
+	clearChangeIndicator: function () {
+		try {
+			if (L.ui && L.ui.changes)
+				L.ui.changes.setIndicator(0);
+		} catch (e) {}
 	},
 
 	// ── login (SRP happens in this page) ─────────────────────────────────
@@ -457,7 +480,7 @@ return view.extend({
 				return;
 			}
 			ui.hideModal();
-			self.notice(_('Signed in.'), 'info');
+			self.notice(_('Signed in.'), 'info', 4000);
 			return self.afterLogin();
 		}).catch(function (err) {
 			fail(err.message || ('' + err));
@@ -476,7 +499,7 @@ return view.extend({
 				return fail((res && res.error) || _('no response'));
 			}
 			ui.hideModal();
-			self.notice(_('Signed in.'), 'info');
+			self.notice(_('Signed in.'), 'info', 4000);
 			return self.afterLogin();
 		});
 	},
@@ -523,21 +546,24 @@ return view.extend({
 				self.notice(r.error, 'warning');
 				return;
 			}
-			self.notice(_('Downloading the server list…'), 'info');
+			var n = self.notice(_('Downloading the server list…'), 'info');
 			var tries = 0;
 			var poll_ = function () {
 				return callLocations().then(function (res) {
 					if (res && res.available) {
+						self.dismiss(n);
 						self.locations = res;
 						self.rebuildPoolWidget();
 						self.refreshServerList();
 						self.renderBand();
 						self.notice(_('Server list updated: %d servers.')
-							.format(res.stats.gateways), 'info');
+							.format(res.stats.gateways), 'info', 4000);
 						return;
 					}
-					if (++tries > 40)
+					if (++tries > 40) {
+						self.dismiss(n);
 						return self.notice(_('The server list did not arrive in time.'), 'warning');
+					}
 					return new Promise(function (r2) { setTimeout(r2, 2000); }).then(poll_);
 				});
 			};
@@ -1259,12 +1285,13 @@ return view.extend({
 
 	handleConnect: function () {
 		var self = this;
-		this.notice(_('Connecting… this verifies a real WireGuard handshake and can take a few seconds.'), 'info');
+		var n = this.notice(_('Connecting… this verifies a real WireGuard handshake and can take a few seconds.'), 'info');
 		return callApply(this.instance).then(function (res) {
+			self.dismiss(n);
 			if (!res || res.error) {
 				self.notice((res && res.error) || _('apply failed'), 'warning');
 			} else if (res.state === 'success') {
-				self.notice(_('Connected via %s.').format(res.gateway || '?'), 'info');
+				self.notice(_('Connected via %s.').format(res.gateway || '?'), 'info', 4000);
 				// Only worth asking once the tunnel is actually up.
 				callExternalIp(self.instance).then(function (ip) {
 					if (ip && ip.ip) {
@@ -1276,6 +1303,9 @@ return view.extend({
 				self.notice(res.error || _('the tunnel did not come up'), 'warning');
 			}
 			return self.refreshStatus().then(function () { return self.loadAccount(); });
+		}).catch(function (e) {
+			self.dismiss(n);
+			self.notice(_('Connect failed: %s').format(e), 'error');
 		});
 	},
 
@@ -1289,16 +1319,20 @@ return view.extend({
 
 	handleRotateNow: function () {
 		var self = this;
-		this.notice(_('Rotating…'), 'info');
+		var n = this.notice(_('Rotating…'), 'info');
 		return callRotateNow(this.instance).then(function (res) {
+			self.dismiss(n);
 			if (res && res.error)
 				self.notice(res.error, 'warning');
 			else if (res && res.skipped)
-				self.notice(res.reason || _('nothing to rotate to'), 'info');
+				self.notice(res.reason || _('nothing to rotate to'), 'info', 4000);
 			else if (res && res.server)
-				self.notice(_('Rotated to %s.').format(res.server), 'info');
+				self.notice(_('Rotated to %s.').format(res.server), 'info', 4000);
 			self.externalIp = null;
 			return self.refreshStatus();
+		}).catch(function (e) {
+			self.dismiss(n);
+			self.notice(_('Rotation failed: %s').format(e), 'error');
 		});
 	},
 
@@ -1831,19 +1865,37 @@ return view.extend({
 			return;
 		}
 		this.collectIntoUci();
+		if (this.saveBtn)
+			this.saveBtn.disabled = true;
+		if (this.discardBtn)
+			this.discardBtn.disabled = true;
+		var p = this.notice(_('Saving configuration…'), 'info');
+
 		return uci.save().then(function () {
 			return uci.apply();
 		}).then(function () {
 			self._dirty = false;
-			if (self.saveBtn)
-				self.saveBtn.disabled = true;
-			if (self.discardBtn)
-				self.discardBtn.disabled = true;
-			self.notice(_('Saved. Applying…'), 'info');
+			self.clearChangeIndicator();
+			self.dismiss(p);
+			p = self.notice(_('Applying and reconnecting…'), 'info');
 			return callApply(self.instance);
 		}).then(function (res) {
+			self.dismiss(p);
 			if (res && res.error)
-				self.notice(res.error, 'warning');
+				self.notice(_('Apply failed: %s').format(res.error), 'error');
+			else if (res && res.state === 'success')
+				self.notice(_('Connected via %s.').format(res.gateway || '?'), 'info', 4000);
+			else
+				self.notice(_('Could not connect: %s')
+					.format((res && res.error) || _('unknown error')), 'error');
+			// Rebuild the whole form, not just the status band: a saved change
+			// can flip the detected routing mode, and the panel's shape follows it.
+			return self.refreshStatus().then(function () {
+				dom.content(self.formNode, self.buildFormSections());
+			});
+		}).catch(function (e) {
+			self.dismiss(p);
+			self.notice(_('Save failed: %s').format(e), 'error');
 		});
 	},
 
