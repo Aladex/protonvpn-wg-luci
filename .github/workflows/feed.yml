@@ -5,8 +5,11 @@ name: Package feed
 # the matching public keys are committed under keys/.
 #
 # This feed has its own keypair, generated for this repository and not shared
-# with nordvpn-luci: usign for opkg (keys/4fcb996825e11695) and Ed25519 PEM for
-# apk (keys/protonvpn-wg-luci-apk.pem). The private halves are the repository
+# with nordvpn-luci: usign for opkg (keys/4fcb996825e11695) and an ECDSA
+# prime256v1 PEM for apk (keys/protonvpn-wg-luci-apk.pem). The curve is not a
+# free choice: the SDK generates its own key with `openssl ecparam -name
+# prime256v1`, and dropping an Ed25519 key in its place makes
+# package/toolchain fail to build with no usable error message. The private halves are the repository
 # secrets OPKG_USIGN_SEC and APK_SEC_PEM.
 #
 # Note: publishing to GitHub Pages from a PRIVATE repository needs a paid plan.
@@ -86,8 +89,10 @@ jobs:
           ./scripts/feeds install -a
           ./scripts/feeds install luci-app-protonvpn
           make defconfig
-          make package/protonvpn-wireguard/compile
-          make package/luci-app-protonvpn/compile
+          # V=s on purpose: without it a failure inside the SDK prints only
+          # "package/<name> failed to build" and the real cause is invisible.
+          make package/protonvpn-wireguard/compile V=s
+          make package/luci-app-protonvpn/compile V=s
 
       - name: Collect and sign the feed
         run: |
