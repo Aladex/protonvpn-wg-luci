@@ -265,15 +265,24 @@ function reset_uci() {
 		return { code: 200, data: { VPN: { PlanTitle: 'VPN Plus', MaxTier: 2,
 			MaxConnect: 11, Name: 'leaky', Password: 'leaky' } } };
 	};
+	// The API keeps listing certificates after they expire, so the card must
+	// count only the live ones.
 	_api.certificate_list = function(mode) {
-		return { ok: true, certificates: [ { serial: '1' }, { serial: '2' },
-			{ serial: '3' } ] };
+		let now = time();
+		return { ok: true, certificates: [
+			{ serial: '1', expires_at: now + 86400 },
+			{ serial: '2', expires_at: now + 86400 },
+			{ serial: '3', expires_at: now + 86400 },
+			{ serial: 'stale', expires_at: now - 60 },
+			{ serial: 'ancient', expires_at: 0 }
+		] };
 	};
 
 	let acct = m.account.call({});
 	check('the card reports the plan', acct.plan == 'VPN Plus');
 	check('and the device allowance', acct.max_connect == 11);
 	check('and counts registered certificates', acct.devices_used == 3);
+	check('expired certificates are not counted', acct.devices_used != 5);
 	check('the old sessions field is gone', acct.sessions_used == null);
 	check('the legacy OpenVPN credentials are never echoed',
 		index(sprintf('%J', acct), 'leaky') < 0);

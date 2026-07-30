@@ -259,8 +259,17 @@ methods.account = {
 		// have — the field simply stays null.
 		let used = null;
 		let certs = _api.certificate_list('persistent');
-		if (certs.ok && type(certs.certificates) == 'array')
-			used = length(certs.certificates);
+		if (certs.ok && type(certs.certificates) == 'array') {
+			// The listing keeps returning certificates well past their expiry,
+			// so count only the ones still valid — an expired registration is
+			// not occupying anything, and counting it made the card climb every
+			// time an instance was created and removed.
+			let now = time();
+			used = 0;
+			for (let c in certs.certificates)
+				if ((c.expires_at || 0) > now)
+					used++;
+		}
 
 		// Never echo VPN.Name / VPN.Password: those are the legacy
 		// OpenVPN/IKEv2 credentials and have no business in a status response.
