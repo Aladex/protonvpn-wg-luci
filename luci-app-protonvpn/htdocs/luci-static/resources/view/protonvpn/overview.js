@@ -38,6 +38,12 @@ var callExternalIp = rpc.declare({
 var callApply = rpc.declare({ object: 'protonvpn', method: 'apply', params: [ 'instance' ] });
 var callDisconnect = rpc.declare({ object: 'protonvpn', method: 'disconnect', params: [ 'instance' ] });
 var callRotateNow = rpc.declare({ object: 'protonvpn', method: 'rotate_now', params: [ 'instance' ] });
+var callCreateInstance = rpc.declare({
+	object: 'protonvpn', method: 'create_instance', params: [ 'instance' ]
+});
+var callDeleteInstance = rpc.declare({
+	object: 'protonvpn', method: 'delete_instance', params: [ 'instance' ]
+});
 
 var STYLE = '' +
 	'.pv-status-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75em;font-size:1.05em}' +
@@ -184,7 +190,8 @@ return view.extend({
 			uci.load('protonvpn'),
 			callSessionState().catch(function () { return { state: 'error' }; }),
 			callLocations().catch(function () { return { available: false }; }),
-			callStatus('main').catch(function () { return {}; })
+			callStatus('main').catch(function () { return {}; }),
+			callInstances().catch(function () { return { instances: [] }; })
 			// NOTE: the account/limits call is deliberately NOT here. It makes
 			// two live HTTPS round-trips to Proton, which would sit in the
 			// critical path of every page load. It is fetched after render and
@@ -193,6 +200,203 @@ return view.extend({
 	},
 
 	// ── small helpers ────────────────────────────────────────────────────
+
+	// ── instances ────────────────────────────────────────────────────────
+
+	// One account, many tunnels: every instance carries its own key,
+	// certificate, interface and schedule, and they run side by side.
+	statusOf: function (name) {
+		var found = null;
+		(this.instances || []).forEach(function (st) {
+			if (st.instance === name)
+				found = st;
+		});
+		return found;
+	},
+
+	// An instance that exists but is switched off reads as "disabled" rather
+	// than whatever its last tunnel state happened to be.
+	dispState: function (s) {
+		if (s && s.configured && s.enabled === false)
+			return 'disabled';
+		return (s && s.state) || 'not_configured';
+	},
+
+	stateInfo: function (state) {
+		var map = {
+			connected:      { label: _('Connected'),      color: 'var(--success-color,#2d8f4e)' },
+			connecting:     { label: _('Connecting'),     color: 'var(--warning-color,#b8860b)' },
+			degraded:       { label: _('Degraded'),       color: 'var(--warning-color,#b8860b)' },
+			disconnected:   { label: _('Disconnected'),   color: 'var(--error-color,#c0392b)' },
+			disabled:       { label: _('Disabled'),       color: 'var(--text-color-medium,#666)' },
+			error:          { label: _('Error'),          color: 'var(--error-color,#c0392b)' },
+			not_configured: { label: _('Not configured'), color: 'var(--text-color-medium,#666)' }
+		};
+		return map[state] || { label: _('Unknown'), color: 'var(--text-color-medium,#666)' };
+	},
+
+	updateInstancesTable: function () {
+		if (!this.instancesNode)
+			return;
+		var rows = [];
+
+		(this.instances || []).forEach(L.bind(function (st) {
+			var info = this.stateInfo(this.dispState(st));
+			var loc = st.location || {};
+			var flag = this.countryFlag(loc.country);
+			var selected = (st.instance === this.instance);
+			var r = st.rotation || {};
+			var next = '';
+			if (r.enabled && r.next_run)
+				next = new Date(r.next_run * 1000).toLocaleTimeString();
+			else if (r.enabled)
+				next = _('on schedule');
+
+			rows.push(E('div', {
+				class: 'pv-inst-row',
+				click: L.bind(this.selectInstance, this, st.instance)
+			}, [
+				E('div', { class: 'pv-inst-info' }, [
+					E('span', { class: 'pv-inst-name' }, (selected ? '▸ ' : '') + st.instance),
+					E('span', { style: 'color:' + info.color }, info.label),
+					E('span', {}, (flag ? flag + ' ' : '') + (st.gateway || '—')),
+					next ? E('span', { class: 'pv-inst-dim' }, '⟳ ' + next) : ''
+				]),
+				E('span', { class: 'pv-inst-act' }, E('button', {
+					class: 'cbi-button cbi-button-remove',
+					click: L.bind(this.showDeleteInstanceModal, this, st.instance)
+				}, st.instance === 'main' ? _('Reset') : _('Delete')))
+			]));
+		}, this));
+
+		dom.content(this.instancesNode, E('fieldset', { class: 'cbi-section' }, [
+			E('legend', {}, _('VPN instances')),
+			E('div', { class: 'cbi-section-node' }, [
+				E('div', {}, rows),
+				E('div', { style: 'margin-top:.6em' }, [
+					E('button', {
+						class: 'cbi-button cbi-button-add',
+						click: L.bind(this.showAddInstanceModal, this)
+					}, _('Add instance'))
+				])
+			])
+		]));
+	},
+
+	selectInstance: function (name) {
+		if (name === this.instance)
+			return;
+		if (this._dirty && !window.confirm(_('Discard unsaved changes?')))
+			return;
+		this.instance = name;
+		this._dirty = false;
+		if (this.saveBtn)
+			this.saveBtn.disabled = true;
+		if (this.discardBtn)
+			this.discardBtn.disabled = true;
+		this.status = this.statusOf(name) || {};
+		// Belongs to the tunnel we just left.
+		this.externalIp = null;
+		this.updateInstancesTable();
+		this.updateStatusBand();
+		dom.content(this.formNode, this.buildFormSections());
+	},
+
+	showAddInstanceModal: function () {
+		var input = E('input', { type: 'text', class: 'cbi-input-text',
+			placeholder: _('e.g. media') });
+		var err = E('div', { class: 'cbi-value-description',
+			style: 'color:var(--error-color,#c0392b)' });
+		ui.showModal(_('Add VPN instance'), [
+			E('p', {}, _('A new instance runs its own tunnel on its own WireGuard interface, with its own locations and schedule. It uses the same Proton account — no separate credentials — but registers a certificate of its own.')),
+			E('div', { class: 'cbi-value' }, [ input ]),
+			err,
+			E('div', { class: 'right' }, [
+				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+				' ',
+				E('button', { class: 'cbi-button cbi-button-action',
+					click: L.bind(this.addInstance, this, input, err) }, _('Add'))
+			])
+		]);
+	},
+
+	addInstance: function (input, err) {
+		var name = (input.value || '').trim();
+		// The backend prefixes the interface with 'pv_', which netifd caps.
+		if (!/^[A-Za-z0-9_]{1,12}$/.test(name)) {
+			dom.content(err, _('Use 1-12 letters, digits or underscores.'));
+			return;
+		}
+		return callCreateInstance(name).then(L.bind(function (res) {
+			if (res && res.error) {
+				dom.content(err, res.error);
+				return;
+			}
+			ui.hideModal();
+			uci.unload('protonvpn');
+			return uci.load('protonvpn').then(L.bind(function () {
+				return this.refreshStatus();
+			}, this)).then(L.bind(function () {
+				this.selectInstance(name);
+				this.notice(_('Instance "%s" created. Pick its locations, then save.')
+					.format(name), 'info', 6000);
+			}, this));
+		}, this)).catch(L.bind(function (e) {
+			dom.content(err, '' + e);
+		}, this));
+	},
+
+	showDeleteInstanceModal: function (name, ev) {
+		// The row underneath is a selector; the button must not trigger it.
+		if (ev)
+			ev.stopPropagation();
+		var main = (name === 'main');
+		ui.showModal(main ? _('Reset "main" to defaults?')
+			: _('Delete instance "%s"?').format(name), [
+			E('p', {}, main
+				? _('The tunnel is taken down, its certificate is revoked, the key, interface and firewall objects are removed, and every setting returns to its default. Other instances are not affected.')
+				: _('The tunnel is taken down, its certificate is revoked, and its interface, firewall objects and settings are removed. Networks routed through it fall back to your other routes.')),
+			E('div', { class: 'right' }, [
+				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+				' ',
+				E('button', { class: 'cbi-button cbi-button-negative',
+					click: L.bind(this.deleteInstance, this, name) },
+					main ? _('Reset') : _('Delete'))
+			])
+		]);
+	},
+
+	deleteInstance: function (name) {
+		ui.hideModal();
+		var n = this.notice(_('Deleting instance "%s"…').format(name), 'info');
+		return callDeleteInstance(name).then(L.bind(function (res) {
+			this.dismiss(n);
+			if (res && res.error) {
+				this.notice(_('Delete failed: %s').format(res.error), 'error');
+				return;
+			}
+			this.notice(res && res.reset
+				? _('Instance "%s" was reset to defaults.').format(name)
+				: _('Instance "%s" deleted.').format(name), 'info', 6000);
+			uci.unload('protonvpn');
+			return uci.load('protonvpn').then(L.bind(function () {
+				// The selected instance may be the one that just went away.
+				if (!this.statusOf(this.instance))
+					this.instance = 'main';
+				this._dirty = false;
+				return this.refreshStatus();
+			}, this)).then(L.bind(function () {
+				this.status = this.statusOf(this.instance) || {};
+				this.externalIp = null;
+				this.updateInstancesTable();
+				this.updateStatusBand();
+				dom.content(this.formNode, this.buildFormSections());
+			}, this));
+		}, this)).catch(L.bind(function (e) {
+			this.dismiss(n);
+			this.notice(_('Delete failed: %s').format(e), 'error');
+		}, this));
+	},
 
 	countryFlag: function (code) {
 		if (typeof code !== 'string' || !/^[A-Za-z]{2}$/.test(code))
@@ -769,6 +973,34 @@ return view.extend({
 			this.poolTrigger.disabled = !(this.locations || {}).available;
 	},
 
+	/* ---- pickers ------------------------------------------------------ */
+
+	// Both pickers are inline panels rather than modals, so nothing dismisses
+	// them on its own: without this they could only be closed through their own
+	// ✕, which is not how a dropdown is expected to behave. One document-level
+	// listener serves both.
+	//
+	// Capture phase on purpose: it runs BEFORE the trigger's own handler, so
+	// the click that opens a panel is still seen while that panel is closed and
+	// cannot immediately shut it again. Clicks on a panel or on its trigger are
+	// left alone; everything else closes whatever is open — including opening
+	// one picker while the other is still up.
+	bindOutsideClose: function () {
+		if (this._outsideBound)
+			return;
+		this._outsideBound = true;
+		document.addEventListener('click', L.bind(function (ev) {
+			var t = ev.target;
+			var inside = function (node) {
+				return node && node.contains && node.contains(t);
+			};
+			if (this._poolOpen && !inside(this.poolPanel) && !inside(this.poolTrigger))
+				this.poolClosePanel();
+			if (this._srvOpen && !inside(this.srvPanel) && !inside(this.srvTrigger))
+				this.srvClosePanel();
+		}, this), true);
+	},
+
 	/* ---- location picker panel --------------------------------------- */
 
 	poolTogglePanel: function() {
@@ -1272,12 +1504,16 @@ return view.extend({
 		var self = this;
 		return Promise.all([
 			callStatus(this.instance).catch(function () { return null; }),
-			callSessionState().catch(function () { return null; })
+			callSessionState().catch(function () { return null; }),
+			callInstances().catch(function () { return null; })
 		]).then(function (res) {
 			if (res[0] && !res[0].error)
 				self.status = res[0];
 			if (res[1])
 				self.session = res[1];
+			if (res[2] && res[2].instances)
+				self.instances = res[2].instances;
+			self.updateInstancesTable();
 			self.updateStatusBand();
 			self.renderBand();
 		});
@@ -1643,6 +1879,14 @@ return view.extend({
 		var self = this;
 		var g = function (o, d) { return uci.get('protonvpn', self.instance, o) || d; };
 		// The server-list cache is shared between instances (owned by 'main').
+		// Say so out loud on the other instances: editing a row here changes
+		// something global, which is not what the rest of this panel does.
+		var shared = function (text) {
+			if (self.instance === 'main')
+				return text;
+			var note = _('Shared by all instances (stored on "main").');
+			return text ? text + ' ' + note : note;
+		};
 		var gm = function (o, d) { return uci.get('protonvpn', 'main', o) || d; };
 		this.cacheRow = E('span', {}, this.cacheSummary());
 
@@ -1700,13 +1944,13 @@ return view.extend({
 				E('label', { class: 'pv-check' }, [ this.wdBox, _('Reconnect automatically when the tunnel goes stale') ])
 			], _('Auto-reconnect when the tunnel goes stale (handshake-based; no external probe; off when a specific server is pinned)')),
 			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', gm('cache_dir', ''), { placeholder: '/tmp' }) ],
-				_('Where to store the downloaded server list, shared by all instances (leave empty for /tmp)')),
+				shared(_('Where to store the downloaded server list (leave empty for /tmp)'))),
 			this.row(_('Server cache'), [
 				E('div', { class: 'pv-inline' }, [
 					this.cacheRow,
 					E('button', { class: 'cbi-button', click: L.bind(this.refreshCache, this) }, _('Refresh server list'))
 				])
-			]),
+			], shared('')),
 			this.row(_('DNS'), [ this.dnsSel ],
 				_('Which resolver to use while connected. Proton runs a single in-tunnel resolver (10.2.0.1); it only works through the tunnel.'))
 		]);
@@ -1902,9 +2146,13 @@ return view.extend({
 	render: function (data) {
 		var session = data[1] || {};
 		var locations = data[2] || {};
-		this.status = (data[3] && !data[3].error) ? data[3] : {};
+		this.instances = (data[4] && data[4].instances) || [];
 		this.account = null;
-		this.instance = 'main';
+		// The first instance is the one the page opens on; 'main' always exists,
+		// but it need not be first once others are added.
+		this.instance = this.instances.length ? this.instances[0].instance : 'main';
+		this.status = this.statusOf(this.instance) ||
+			((data[3] && !data[3].error) ? data[3] : {});
 		this.session = session;
 		this.locations = locations;
 		this.externalIp = null;
@@ -1913,6 +2161,7 @@ return view.extend({
 
 		this.bandEl = E('div', { class: 'pv-acct' });
 		this.stateEl = E('div', { class: 'pv-state' });
+		this.instancesNode = E('div', {});
 		this.formNode = E('div', {});
 		dom.content(this.formNode, this.buildFormSections());
 
@@ -1921,11 +2170,14 @@ return view.extend({
 			E('h2', {}, _('ProtonVPN')),
 			this.bandEl,
 			this.stateEl,
+			this.instancesNode,
 			this.formNode,
 			this.buildActions()
 		]);
 
+		this.bindOutsideClose();
 		this.renderBand();
+		this.updateInstancesTable();
 		this.updateStatusBand();
 		// Limits arrive out of band; the quota line simply appears once known.
 		this.loadAccount();
