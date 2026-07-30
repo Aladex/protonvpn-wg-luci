@@ -22,6 +22,7 @@ define Package/protonvpn-wireguard
 	+ca-bundle \
 	+curl \
 	+kmod-wireguard \
+	+openssl-util \
 	+rpcd \
 	+rpcd-mod-ucode \
 	+ucode \

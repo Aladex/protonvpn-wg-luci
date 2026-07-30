@@ -23,6 +23,41 @@ page.
 > supported by Proton AG. "ProtonVPN" is a trademark of its respective owner.
 > Use your own ProtonVPN account.
 
+## Installation
+
+> The feed is published from GitHub Pages, which a **private** repository
+> cannot serve on the free plan — until this repository is public the build and
+> signing steps run but the final publish does not, so the URLs below are not
+> live yet. Until then, build with the SDK (see *Development*).
+
+CI builds signed, architecture-independent packages for every tag.
+
+**OpenWrt 24.10 (opkg):**
+
+```sh
+wget -O /etc/opkg/keys/4fcb996825e11695 \
+  https://aladex.github.io/protonvpn-wg-luci/keys/4fcb996825e11695
+echo 'src/gz protonvpn_luci https://aladex.github.io/protonvpn-wg-luci/packages/opkg' \
+  >> /etc/opkg/customfeeds.conf
+opkg update
+opkg install luci-app-protonvpn      # or just protonvpn-wireguard for headless
+```
+
+**OpenWrt snapshots / 25.x (apk):**
+
+```sh
+wget -O /etc/apk/keys/protonvpn-wg-luci-apk.pem \
+  https://aladex.github.io/protonvpn-wg-luci/keys/protonvpn-wg-luci-apk.pem
+echo 'https://aladex.github.io/protonvpn-wg-luci/packages/apk/packages.adb' \
+  >> /etc/apk/repositories.d/customfeeds.list
+apk update
+apk add luci-app-protonvpn
+```
+
+The backend needs `openssl-util` (Ed25519 key generation) and `curl`; both are
+pulled in as dependencies. Log out of LuCI and back in after installing, then
+open **VPN → ProtonVPN** and sign in with your Proton account.
+
 ## Screenshots
 
 The account card and the status band: session horizon, the connected server
