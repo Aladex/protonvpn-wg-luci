@@ -47,6 +47,12 @@ jobs:
           node-version: lts/*
       - run: npm install --no-save --no-audit --no-fund --legacy-peer-deps eslint@9 @eslint/js@9 globals@15
       - run: npx eslint luci-app-protonvpn
+      # The SRP suite carries cross-implementation vectors: a regression here
+      # means the browser computes a proof the Proton API rejects, which is
+      # only visible as a failed login on a live account. Node's test runner
+      # needs the files globbed — a bare directory argument is not expanded.
+      - name: Node unit tests (SRP vectors)
+        run: node --test luci-app-protonvpn/tests/*.test.mjs
 
   ucode:
     name: ucode syntax + offline tests
