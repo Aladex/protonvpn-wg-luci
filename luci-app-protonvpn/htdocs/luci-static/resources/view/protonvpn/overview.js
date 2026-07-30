@@ -444,10 +444,24 @@ return view.extend({
 		if (this.hopValue === mode)
 			return;
 		this.hopValue = mode;
+		this.onHopChange();
+	},
+
+	// The single hop-mode transition. It used to live here AND inline in
+	// setHopMode, which quietly won — so edits to this one changed nothing.
+	onHopChange: function () {
 		this.markDirty();
 		this.updateHopButtons();
-		// Entries that do not exist in the new mode are hidden, not deleted, so
-		// switching back restores the previous selection.
+		// Start the set empty. The three modes are different products, not
+		// filters over one list: in Secure Core the country is the *exit*
+		// country reached through a partner country, and a Tor exit is a
+		// different machine again. Carrying a Standard pick across reads as
+		// "still selected" when it now means something else — and a country
+		// that exists in both modes would quietly survive with a completely
+		// different server behind it. The cost is that a round trip through
+		// another mode no longer restores the old set.
+		this.poolEntries = [];
+		this._serverChosen = '';
 		this.rebuildPoolWidget();
 		this.refreshServerList();
 	},
@@ -503,6 +517,11 @@ return view.extend({
 		this.srvTrigger.disabled = !codes.length;
 		if (!codes.length) {
 			this.srvRenderTrigger();
+			// Nothing to pin any more, so the rotation rows this gates must be
+			// re-evaluated here too — the early return skips the one below.
+			this._building = true;
+			this.updateRotationAvailability();
+			this._building = false;
 			return;
 		}
 		callServers(codes, this.hopMode()).then(L.bind(function (res) {
@@ -1334,13 +1353,6 @@ return view.extend({
 			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, chosen + ' ' + _('(not in the set)')));
 		else if (!groups.length)
 			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, _('No matches')));
-	},
-
-	onHopChange: function() {
-		this.markDirty();
-		this.updateHopButtons();
-		this.rebuildPoolWidget();
-		this.refreshServerList();
 	},
 
 	// ── credential banner ────────────────────────────────────────────────

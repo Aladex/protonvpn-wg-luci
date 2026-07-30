@@ -93,7 +93,7 @@ networks you name leave through the tunnel.
 
 ## Architecture
 
-The project is the third member of a family (after
+The project is the second member of a family (after
 [nordvpn-luci](https://github.com/Aladex/nordvpn-luci)) and clones its
 two-package layout, so the VPN service is useful without a web interface and
 the LuCI app stays a thin frontend:
