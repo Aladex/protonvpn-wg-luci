@@ -1,0 +1,15 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# One-time, idempotent config migrations for protonvpn-wireguard, gated on the
+# `config_version` stamp in /etc/config/protonvpn. Safe to run more than once.
+
+# TODO: implement migrations when a second config schema version exists.
+# Skeleton for the first release: ensure the config file and the 'main'
+# instance section exist, stamp config_version=1, and commit.
+#
+# [ -f /etc/config/protonvpn ] || touch /etc/config/protonvpn
+# [ -n "$(uci -q get protonvpn.main)" ] || uci set protonvpn.main=instance
+# uci set protonvpn.main.config_version=1
+# uci commit protonvpn
+
+exit 0

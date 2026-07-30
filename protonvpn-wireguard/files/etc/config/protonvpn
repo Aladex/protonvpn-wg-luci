@@ -1,0 +1,67 @@
+# One section per VPN instance. 'main' is the default instance; additional
+# `config instance '<name>'` sections run their own tunnel on their own
+# interface with their own WireGuard keypair (each instance registers its own
+# certificate, so instances never share a device key). The server-list cache
+# options (cache_dir, cache_refresh_interval) are shared and read from this
+# section.
+#
+# Secrets are NEVER stored here: the Proton session (UID/AccessToken/
+# RefreshToken) lives in a root-only state file (see protonvpn.api), and the
+# WireGuard private key lives on the managed interface in /etc/config/network.
+# The Proton password is never stored anywhere — it exists only in the
+# browser for the duration of the SRP login.
+config instance 'main'
+	# Master switch. A fresh install ships disabled so no tunnel starts and
+	# no routing changes happen before the user logs in.
+	option enabled '0'
+	# Managed WireGuard interface (UCI section name in /etc/config/network).
+	option interface 'protonvpn'
+	# Optional custom routing table (ip4table/ip6table). Empty = main table.
+	option routing_table ''
+	# Optional WireGuard interface MTU. Empty = netifd default (1420); the UI
+	# recommends WAN_MTU-80 (e.g. 1412 on 1492 PPPoE). Lower for LTE/5G.
+	option mtu ''
+	# 'standard', 'secure_core' (double hop via hardened entry servers) or
+	# 'tor' (VPN exit through the Tor network). Both are server-side features
+	# selected via the Features bitmask of the logical server.
+	option hop_mode 'standard'
+	# Two-letter country code and 'cc-cityslug' city code for server selection.
+	option country_code ''
+	option city_code ''
+	# When set, pin this specific server name and disable rotation.
+	option fixed_server ''
+	# Automatic rotation.
+	option rotation_enabled '0'
+	option rotation_mode 'interval'
+	option rotation_interval '360'
+	option rotation_time '04:30'
+	# Location set: countries ('ch') and/or cities ('nl-amsterdam') that BOTH
+	# the initial connect and the rotation pick from. Empty = the legacy
+	# country_code/city_code selection above is used.
+	# list locations 'ch'
+	# list locations 'nl-amsterdam'
+	# Seconds to wait for a WireGuard handshake when verifying a server, and
+	# how many candidate servers a rotation may try before giving up.
+	option verify_timeout '8'
+	option max_retries '10'
+	# Optional watchdog: when the tunnel stays connecting, degraded, or
+	# disconnected past a grace period, rotate to another server automatically.
+	# Detection is handshake-based only (no external egress probe); ignored
+	# when a fixed_server is pinned.
+	# option watchdog '0'
+	# Automatic traffic routing: create a firewall zone and route all LAN
+	# traffic through the tunnel. Enabled for fresh installs; ignored (never
+	# touches anything) when a custom routing table or own routes are detected.
+	option auto_routing '1'
+	# Only meaningful with auto_routing: block LAN->WAN when the VPN is down
+	# (kill switch) and block direct IPv6 so it cannot bypass the tunnel.
+	option killswitch '0'
+	option block_ipv6 '1'
+	# DNS resolver while the tunnel is up: 'off' (system/WAN) or 'standard'
+	# (ProtonVPN in-tunnel resolver 10.2.0.1 / 2a07:b944::2:1).
+	option vpn_dns 'off'
+	# Server-list cache directory (empty = /tmp) and background refresh period.
+	option cache_dir ''
+	option cache_refresh_interval '21600'
+	# Stamped by the migration/uci-defaults script; gates one-shot migrations.
+	# option config_version '1'

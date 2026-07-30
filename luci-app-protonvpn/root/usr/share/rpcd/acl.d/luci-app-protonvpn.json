@@ -1,0 +1,41 @@
+{
+	"luci-app-protonvpn": {
+		"description": "Grant access to ProtonVPN status, configuration and control",
+		"read": {
+			"ubus": {
+				"protonvpn": [
+					"status",
+					"instances",
+					"auth_info",
+					"session_state",
+					"locations",
+					"servers",
+					"external_ip",
+					"refresh_status",
+					"account"
+				]
+			},
+			"uci": [
+				"protonvpn"
+			]
+		},
+		"write": {
+			"ubus": {
+				"protonvpn": [
+					"auth_finish",
+					"set_totp",
+					"refresh_session",
+					"logout",
+					"certificate_renew",
+					"apply",
+					"disconnect",
+					"refresh_locations",
+					"rotate_now"
+				]
+			},
+			"uci": [
+				"protonvpn"
+			]
+		}
+	}
+}

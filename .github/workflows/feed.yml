@@ -1,0 +1,151 @@
+name: Package feed
+
+# Builds signed opkg (OpenWrt 24.10) and apk (snapshot) package feeds and
+# publishes them to GitHub Pages. Private keys live in repository secrets;
+# the matching public keys are committed under keys/.
+#
+# TODO before the first tag build:
+#   - generate the signing keypair for this repo (usign for opkg, PEM for
+#     apk) and commit the PUBLIC parts as keys/<usign-fingerprint> and
+#     keys/protonvpn-luci-apk.pem (nordvpn-luci keeps its own pair under its
+#     keys/; do not reuse it),
+#   - create the repository secrets OPKG_USIGN_SEC and APK_SEC_PEM,
+#   - update the two `cp keys/...` lines in "Install the signing keys" below.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.flavor }} feed
+    # Tag/dispatch only (no untrusted PRs) — build on the self-hosted NAS runner
+    # to skip the GitHub queue. The SDK stays in the (clean-checked-out)
+    # workspace, not the persistent cache, so the signing keys never linger.
+    # TODO: register a self-hosted runner with this label.
+    runs-on: [self-hosted, protonvpn-build]
+    strategy:
+      matrix:
+        include:
+          - flavor: opkg
+            release: "24.10"
+          - flavor: apk
+            release: "snapshots"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the x86/64 SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd build-essential clang flex bison g++ gawk \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget jq curl ca-certificates \
+            gcc-multilib g++-multilib
+          if [ "${{ matrix.release }}" = "snapshots" ]; then
+            BASE=https://downloads.openwrt.org/snapshots/targets/x86/64
+          else
+            VER=$(curl -sSL https://downloads.openwrt.org/releases/ \
+              | grep -o '${{ matrix.release }}\.[0-9]*' | sort -V | tail -1)
+            echo "release version: $VER"
+            BASE=https://downloads.openwrt.org/releases/$VER/targets/x86/64
+          fi
+          SDK=$(curl -sSL "$BASE/sha256sums" | grep -o 'openwrt-sdk-[^ ]*x86-64[^ ]*\.tar\.\(zst\|xz\)' | head -1)
+          echo "SDK=$SDK"
+          curl -fSL -o sdk.tar "$BASE/$SDK"
+          case "$SDK" in
+            *.zst) tar -I zstd -xf sdk.tar ;;
+            *) tar -xf sdk.tar ;;
+          esac
+          echo "SDKDIR=$(echo openwrt-sdk-*/)" >> "$GITHUB_ENV"
+
+      - name: Install the signing keys
+        env:
+          OPKG_USIGN_SEC: ${{ secrets.OPKG_USIGN_SEC }}
+          APK_SEC_PEM: ${{ secrets.APK_SEC_PEM }}
+        run: |
+          cd "$SDKDIR"
+          if [ "${{ matrix.flavor }}" = "opkg" ]; then
+            printf '%s\n' "$OPKG_USIGN_SEC" > key-build
+            # TODO: commit the public usign key under keys/ and reference it
+            # here (nordvpn-luci uses keys/<usign-fingerprint>).
+            cp "$GITHUB_WORKSPACE/keys/USIGN_PUBKEY_TODO" key-build.pub
+          else
+            printf '%s\n' "$APK_SEC_PEM" > private-key.pem
+            # TODO: commit keys/protonvpn-luci-apk.pem (public part).
+            cp "$GITHUB_WORKSPACE/keys/protonvpn-luci-apk.pem" public-key.pem
+          fi
+
+      - name: Build the packages
+        run: |
+          cp -r protonvpn-wireguard "$SDKDIR/package/protonvpn-wireguard"
+          cd "$SDKDIR"
+          ./scripts/feeds update -a
+          cp -r "$GITHUB_WORKSPACE/luci-app-protonvpn" feeds/luci/applications/luci-app-protonvpn
+          ./scripts/feeds update -i luci
+          ./scripts/feeds install -a
+          ./scripts/feeds install luci-app-protonvpn
+          make defconfig
+          make package/protonvpn-wireguard/compile
+          make package/luci-app-protonvpn/compile
+
+      - name: Collect and sign the feed
+        run: |
+          OUT="$GITHUB_WORKSPACE/feed-out/packages/${{ matrix.flavor }}"
+          mkdir -p "$OUT"
+          find "$SDKDIR/bin/packages" -name '*protonvpn*' -exec cp {} "$OUT/" \;
+          ls -la "$OUT"
+          cd "$OUT"
+          if [ "${{ matrix.flavor }}" = "opkg" ]; then
+            PATH="$GITHUB_WORKSPACE/$SDKDIR/staging_dir/host/bin:$PATH" MKHASH=mkhash \
+              "$GITHUB_WORKSPACE/$SDKDIR/scripts/ipkg-make-index.sh" . > Packages
+            gzip -fk Packages
+            "$GITHUB_WORKSPACE/$SDKDIR/staging_dir/host/bin/usign" -S -m Packages \
+              -s "$GITHUB_WORKSPACE/$SDKDIR/key-build" -x Packages.sig
+          else
+            "$GITHUB_WORKSPACE/$SDKDIR/staging_dir/host/bin/apk" mkndx \
+              --root "$GITHUB_WORKSPACE/$SDKDIR" \
+              --keys-dir "$GITHUB_WORKSPACE/$SDKDIR" \
+              --allow-untrusted \
+              --sign "$GITHUB_WORKSPACE/$SDKDIR/private-key.pem" \
+              --output packages.adb *.apk
+          fi
+          find "$GITHUB_WORKSPACE/feed-out" -type f
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feed-${{ matrix.flavor }}
+          path: feed-out/
+          if-no-files-found: error
+
+  deploy:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: feed-*
+          merge-multiple: true
+          path: site
+      - name: Add the public keys and a landing page
+        run: |
+          mkdir -p site/keys
+          cp keys/* site/keys/
+          cat > site/index.html <<'EOF'
+          <!doctype html><title>protonvpn-wg-luci package feed</title>
+          <h1>protonvpn-wg-luci package feed</h1>
+          <p>Signed OpenWrt package feeds for
+          <a href="https://github.com/Aladex/protonvpn-wg-luci">protonvpn-wg-luci</a>.
+          See the repository README for installation instructions.</p>
+          EOF
+      - name: Push to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: site
+          publish_branch: gh-pages
+          force_orphan: true

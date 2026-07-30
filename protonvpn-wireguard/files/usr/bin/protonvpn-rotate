@@ -1,0 +1,28 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: MIT
+// One-shot ProtonVPN rotation worker. Invoked by the protonvpn procd service
+// and safe to run manually. Reads the schedule/selection from
+// /etc/config/protonvpn.
+
+'use strict';
+
+const rotate = require('protonvpn.rotate').rotate;
+const _common = require('protonvpn.common');
+const log = _common.log,
+      validate_instance = _common.validate_instance;
+
+// Optional argument: the instance to rotate (default 'main').
+let instance = (length(ARGV) > 0 ? validate_instance(ARGV[0]) : null) || 'main';
+let res = rotate(null, instance);
+
+if (res.ok) {
+	printf('protonvpn-rotate: connected to %s\n', res.server);
+	exit(0);
+}
+if (res.skipped) {
+	printf('protonvpn-rotate: skipped (%s)\n', res.reason);
+	exit(0);
+}
+
+log('rotation failed: ' + (res.error || 'unknown error'));
+exit(1);

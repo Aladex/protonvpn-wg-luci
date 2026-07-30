@@ -1,0 +1,28 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: MIT
+// One-shot ProtonVPN server-list cache updater. Invoked by the protonvpn
+// procd service and safe to run manually. Requires a live session (the
+// /vpn/logicals endpoint is authenticated). Any CLI arguments are ignored.
+
+'use strict';
+
+import { cursor } from 'uci';
+const _common = require('protonvpn.common');
+const load_settings = _common.load_settings,
+      cache_file_path = _common.cache_file_path,
+      log = _common.log;
+const fetch_and_build = require('protonvpn.cache').fetch_and_build;
+
+let uci = cursor();
+let settings = load_settings(uci);
+let path = cache_file_path(settings);
+
+let res = fetch_and_build(path);
+if (!res || res.error) {
+	log('cache update failed: ' + (res ? res.error : 'unknown error'));
+	exit(1);
+}
+
+printf('protonvpn-cache-update: cached %d servers in %d cities across %d countries -> %s\n',
+	res.stats.gateways, res.stats.cities, res.stats.countries, path);
+exit(0);

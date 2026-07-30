@@ -1,0 +1,36 @@
+{
+  "_source": "Derived from ProtonMail/go-srp (MIT) reference implementation. Client secret is deterministic: 256 bytes p[i] = (i+1) mod 256, interpreted big-endian, matching crypto/rand.Int's first draw.",
+  "authVersion": 4,
+  "username": "jakubqa",
+  "password": "abc123",
+  "saltB64": "yKlc5/CvObfoiw==",
+  "clientSecretPattern": "p[i] = (i+1) mod 256, 256 bytes, big-endian",
+  "modulusB64": "W2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9rfvPLrfuqocxWPgWDH2R8neK7PkNvjxto9TStuY5z7jAzWRvFWN9cQhAKkdWgy0JY6ywVn22+HFpF4cYesHrqFIKUPDMSSIlWjBVmEJZ/MusD44ZT29xcPrOqeZvwtCffKtGAIjLYPZIEbZKnDM1Dm3q2K/xS5h+xdhjnndhsrkwm9U9oyA2wxzSXFL+pdfj2fOdRwuR5nW0J2NFrq3kJjkRmpO/Genq1UW+TEknIWAb6VzJJJA244K/H8cnSx2+nSNZO3bbo6Ys228ruV9A8m6DhxmS+bihN3ttQ==",
+  "serverEphemeralB64": "l13IQSVFBEV0ZZREuRQ4ZgP6OpGiIfIjbSDYQG3Yp39FkT2B/k3n1ZhwqrAdy+qvPPFq/le0b7UDtayoX4aOTJihoRvifas8Hr3icd9nAHqd0TUBbkZkT6Iy6UpzmirCXQtEhvGQIdOLuwvy+vZWh24G2ahBM75dAqwkP961EJMh67/I5PA5hJdQZjdPT5luCyVa7BS1d9ZdmuR0/VCjUOdJbYjgtIH7BQoZs+KacjhUN8gybu+fsycvTK3eC+9mCN2Y6GdsuCMuR3pFB0RF9eKae7cA6RbJfF1bjm0nNfWLXzgKguKBOeF3GEAsnCgK68q82/pq9etiUDizUlUBcA==",
+  "hashedPasswordB64": "UHwyXL718YTYWiTYh8/LPLSBa7DgezL5QJXZEgzEeeomD0Mf62Zu6qNkQj0z/sDxf3fIGTn0U8gk4jWCBLMnmY5jPwvTX63SyvmWpF6LiMhWvz6bUZh+5z/hGQiI/YdRE4DW+2PXAmnGQJZ1MgTouDnLLavGuvSrC0qzzI37QNUDyAtFWwrXwbNqhpWUa1PQDJ+gHpQjnCXa7dVlpj5TQbDvPEZ9JrA7c37TopINerrBmU/jhcPUFp8EHwsScuRxxDBXIkYBP1gIVTtJSTPLXWKJlrdqNzHuJXxOrpeOiDjuIDFhWK2v/gXbyfwp53ph80VPd3eRPQWpCkO3iqKWUg==",
+  "clientEphemeralB64": "niilHPIPkMgG497wc6srpsIZZGl+ufHUW5N+0gqSVP1i1MwgeTq4OO42QNe0pk1Scxt/zgle5UtBbR2vTyUIWaMBRC1US8IYtc6BpRTVAKL74K7ZNjAfFLioxZkwIOrNrTeOw/aENtUQY0fDO5d7AuSkeTwNYJTDg4cBT+YxaeHqVgvJodtEno9i60QuPP0I1oDNGhMMjjzLMgZVh75BFpMwtQmS32com9x1LiauPPM03Li5hQN5zyyQFwV8XenHhgsDALy9/JdO2wvuigKj5VXlvQ2jPeYW8RAjy65SbIjuBBo6UnC4JUwkILT31GWyj6xBhr9dwiyWEsViAhiXQw==",
+  "clientProofB64": "gx/VhH43XnP2GF1vnk4ppRwkGQNqIUTwBhyisXq/rqiFYs93KpUTHIGUryOq+yrswzmxHLQxamIls7VAIrSHjwL0XKPdN4dgqKKJvUgcIj4dDQf4AvasH2feEyicraqqZIYnLA6xXjjl02Y0uFBPnaxIqRpdgrpCu1L6cUL2m8hvihjqlFNZpDL88r4Xs3ad8PiEs2VFTh/WVx8E/XJhuAsUTfxFzombAI09JZogYX0lL9Lk6vgr0d/czxYA1Pr7uYHtyZA5YdOSpILjQfzzxaZj87BCJ1LrQtDHKOeuMDYd6yHb/5oFplXCCvbXRBQc2rTxsGkNEq+YQTatcN7y6A==",
+  "serverProofB64": "ZkN87Hu7Xd7crfabxHQIvsMlVoFdCcfVj7AU1QYutAatvKJOH3YCXNxTL0rqEtiUOB5Wu1xls+2eJ0aWt1zJpVrS0S0KSuxG646xTaDt4ipVrLD/tz9td92CE0SPYb1uDVVqED/VT1XeQJckZlL9Q00Tg68eX0FRDXHY8R5v0xvffWuVSE5/d99tffMsh85UYb1j7M2tPgsCm2Bf8IKnk14UrX80RmsdQW+goLtU5i+hoTSZfntszCytvEAOyYHHhbXVVFqK4wxULuJSov9axbppspogmPMs2/IvkduMS0hUqGr5QxSUC/VR8Qe1zesRrWzIEwsreKjBZ1hZ5eV0Cw==",
+  "expandHash": {
+    "empty": "uCRNAomB1pOve0Vq+O+kytY9KC4Z/xSULCRuUNk1HSJwSoAqccNYC2Nw3kzrKTwySoQjNCVX1OXDhDjw42kQ7ntUtmg2wfvdE9JEHZ4UNNxiymd/to9f5mpGS6rezb0AV2+Na1rDvMgIRLfVCxzGYDREu+fPz4/Aqh7jxjbZ4zn6uEjJtleoU+43wJy/3RSdCzgHsZHd6bYjzNlSgd0YcFtIyJsVA5A4RbuldTlFNR/mtFSFJ2D3NSnPAcqPadzK5Fv1gX3flKovekBwcfDu3GvrmPdotM0z0RdtRNFWOkWl1yEikOt2cMZ4axNZGu2shkeJk4leiyTmEgFKuqa6BA==",
+    "abc": "fOBe2iM+VFotXGJoYqXdqvsJudjsO+wIqkWLfJ59k52EpX1aINipACmDqrriRXsZxQujJr9bCB91tBNC9CwzgzGJaMo8q8aEtabt/aGThLUC+EFETnHXrrur7jY7bAyUD/b+TxwBdx1MHCmJScdp9zxNBy2BqWAWzrvYtmxygQjGl2gUhh9QZ/CtrClL6Dy6hTGDB9zp4Rb/43cYZChmq5OAwvZ3+WGgIHkMTlOtS6/A9nuTxUHfx4Kri9N+OItrSosaHa2UrBGYSZIax0iwo2oKUuMCSwBOFAutC1Jx3pM2K6o/Ek+kN4miraVAmMk7w23nVZowoWvgrQkPRMl+jg=="
+  },
+  "bcrypt": {
+    "password": "test!!!",
+    "cases": [
+      {
+        "encodedSalt": "PTTsDBs/mlLnSk6VmtFghe",
+        "hash": "$2y$10$PTTsDBs/mlLnSk6VmtFgheNSiK/lSwtJsrBLLDK3kZYI7193nInqy"
+      },
+      {
+        "encodedSalt": "4DZHd6WZX4fEaWKtCfYdde",
+        "hash": "$2y$10$4DZHd6WZX4fEaWKtCfYddeZfcryISo9eEMgbA90O.Wnnz1s1VKmKC"
+      },
+      {
+        "encodedSalt": "/.3KXCwRnsrxURMGxN7.R.",
+        "hash": "$2y$10$/.3KXCwRnsrxURMGxN7.R.GLpVq0zyBbI9wgS0wB2U/g2btx1RYoy"
+      }
+    ]
+  },
+  "modulusClearSigned": "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\nW2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9rfvPLrfuqocxWPgWDH2R8neK7PkNvjxto9TStuY5z7jAzWRvFWN9cQhAKkdWgy0JY6ywVn22+HFpF4cYesHrqFIKUPDMSSIlWjBVmEJZ/MusD44ZT29xcPrOqeZvwtCffKtGAIjLYPZIEbZKnDM1Dm3q2K/xS5h+xdhjnndhsrkwm9U9oyA2wxzSXFL+pdfj2fOdRwuR5nW0J2NFrq3kJjkRmpO/Genq1UW+TEknIWAb6VzJJJA244K/H8cnSx2+nSNZO3bbo6Ys228ruV9A8m6DhxmS+bihN3ttQ==\n-----BEGIN PGP SIGNATURE-----\nVersion: ProtonMail\nComment: https://protonmail.com\n\nwl4EARYIABAFAlwB1j0JEDUFhcTpUY8mAAD8CgEAnsFnF4cF0uSHKkXa1GIa\nGO86yMV4zDZEZcDSJo0fgr8A/AlupGN9EdHlsrZLmTA1vhIx+rOgxdEff28N\nkvNM7qIK\n=q6vu\n-----END PGP SIGNATURE-----"
+}

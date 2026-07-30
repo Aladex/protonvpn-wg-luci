@@ -1,0 +1,149 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: MIT
+// Foreground scheduler daemon supervised by procd. Refreshes the server-list
+// cache, renews the session/certificate ahead of expiry, and triggers
+// rotation on schedule, running each job in a short-lived child (uloop.task)
+// so a slow job never stalls the loop. Overlap is prevented by the workers'
+// own lock files. Timing decisions live in protonvpn.service.
+
+'use strict';
+
+import * as uloop from 'uloop';
+import { cursor } from 'uci';
+const _common = require('protonvpn.common');
+const load_settings = _common.load_settings,
+      list_instances = _common.list_instances,
+      cache_file_path = _common.cache_file_path,
+      log = _common.log;
+const _cache = require('protonvpn.cache');
+const fetch_and_build = _cache.fetch_and_build,
+      cache_is_stale = _cache.cache_is_stale;
+const _rotate = require('protonvpn.rotate');
+const rotate = _rotate.rotate,
+      last_attempt_ts = _rotate.last_attempt_ts,
+      mark_attempt = _rotate.mark_attempt,
+      read_state = _rotate.read_state,
+      record = _rotate.record;
+const _service = require('protonvpn.service');
+const should_refresh = _service.should_refresh,
+      should_rotate = _service.should_rotate,
+      should_recover = _service.should_recover,
+      should_refresh_session = _service.should_refresh_session,
+      should_renew_certificate = _service.should_renew_certificate,
+      watchdog_update = _service.watchdog_update,
+      watchdog_result_update = _service.watchdog_result_update;
+const status = require('protonvpn.status').status;
+const _api = require('protonvpn.api');
+const _apply = require('protonvpn.apply');
+
+uloop.init();
+
+let last_cache = 0;
+
+function tick() {
+	// Fresh cursor each tick so committed config changes are picked up.
+	let uci = cursor();
+	let now = time();
+	let lt = localtime();
+	let hm = sprintf('%02d:%02d', lt.hour, lt.min);
+
+	// PROTON-SPECIFIC: keep the session alive. The session lives 30 days;
+	// refresh it (token rotation) well before expiry so the user never has
+	// to re-run the SRP login while the router is online.
+	if (should_refresh_session(_api.session_load(), now)) {
+		uloop.task(function() {
+			let r = _api.auth_refresh();
+			if (r.error && r.expired)
+				// Only a definitive auth refusal clears the session; network
+				// trouble must never log the user out (api.auth_refresh
+				// enforces that distinction).
+				log('session expired; a new sign-in is required');
+			else if (r.error)
+				log('session refresh failed: ' + r.error);
+		});
+	}
+
+	// The server-list cache is shared by all instances; refresh it once.
+	// NOTE: /vpn/logicals requires a live session — without one the refresh
+	// fails and the previous good cache is kept.
+	let shared = load_settings(uci);
+	let path = cache_file_path(shared);
+	if (should_refresh(shared, last_cache, now, cache_is_stale(path))) {
+		last_cache = now;
+		uloop.task(function() { fetch_and_build(path); });
+	}
+
+	// Per-instance rotation + watchdog. The rotation clock and the watchdog
+	// timers are persisted (protonvpn.rotate state), not in memory: procd
+	// restarts this daemon on every config change.
+	for (let name in list_instances(uci)) {
+		let inst = name; // fresh binding for the task closure
+		let s = load_settings(uci, inst);
+		let last = last_attempt_ts(inst);
+
+		// PROTON-SPECIFIC: renew the certificate ahead of Proton's own
+		// RefreshTime. It needs a live session but no SRP, and it keeps the
+		// existing key so the tunnel is not disturbed.
+		let cert = _apply.read_cert_state(inst);
+		if (should_renew_certificate(cert, now)) {
+			uloop.task(function() {
+				let r = _apply.renew_certificate(cursor(), inst);
+				if (r.error)
+					log('certificate renewal failed for ' + inst + ': ' + r.error);
+			});
+		}
+
+		// The first time rotation is active we only start the clock, so
+		// enabling rotation waits a full interval instead of firing at once.
+		if (last == 0 && s.enabled && s.rotation_enabled &&
+		    !(s.fixed_server && s.fixed_server != '')) {
+			mark_attempt(now, inst);
+		} else if (should_rotate(s, last, now, hm)) {
+			mark_attempt(now, inst);
+			uloop.task(function() { rotate(null, inst); });
+		}
+
+		// Watchdog. Only instances that opted in pay for a status probe, and
+		// ineligible ones clear their timers so re-enabling starts with a
+		// fresh grace window.
+		let st = read_state(inst) || {};
+		let ds = (type(st.degraded_since) == 'int') ? st.degraded_since : 0;
+		let last_recover = (type(st.last_recover) == 'int') ? st.last_recover : 0;
+		let fails = (type(st.recover_fails) == 'int') ? st.recover_fails : 0;
+		let active = s.enabled && s.watchdog &&
+			!(s.fixed_server && s.fixed_server != '');
+		let state = active ? status(uci, inst).state : null;
+		let upd = watchdog_update(state, {
+			degraded_since: ds, last_recover: last_recover, recover_fails: fails
+		}, now, active);
+		if (upd.degraded_since != ds || upd.last_recover != last_recover ||
+		    upd.recover_fails != fails) {
+			record(upd, inst);
+			ds = upd.degraded_since;
+			last_recover = upd.last_recover;
+			fails = upd.recover_fails;
+		}
+		if (active && should_recover(s, state, ds, last_recover, fails, now)) {
+			// Claim the attempt before forking so overlapping ticks cannot
+			// double-fire. Recovery is rotate(), which takes the same
+			// per-instance lock as scheduled rotation, so they never race.
+			record({ last_recover: now }, inst);
+			uloop.task(
+				function() { return rotate(null, inst); },
+				function(result) {
+					let latest = read_state(inst) || {};
+					let current = (type(latest.recover_fails) == 'int')
+						? latest.recover_fails : 0;
+					let next = watchdog_result_update(result, current);
+					if (next != current)
+						record({ recover_fails: next }, inst);
+				}
+			);
+		}
+	}
+}
+
+// Re-check every 30s; run once immediately at startup.
+uloop.interval(30000, tick);
+tick();
+uloop.run();

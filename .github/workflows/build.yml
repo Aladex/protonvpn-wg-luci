@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch/tag; keep distinct tags independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static checks (shell / JSON / whitespace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: sh -n on shell scripts
+        run: |
+          for f in \
+            protonvpn-wireguard/files/etc/init.d/protonvpn \
+            protonvpn-wireguard/files/etc/uci-defaults/90-protonvpn-migrate \
+            protonvpn-wireguard/tests/run.sh; do
+            echo "sh -n $f"; sh -n "$f"
+          done
+      - name: Validate all JSON
+        run: |
+          fail=0
+          for f in $(find . -path ./node_modules -prune -o -name '*.json' -print); do
+            echo "jq $f"; jq -e . "$f" >/dev/null || fail=1
+          done
+          exit $fail
+      - name: Whitespace / conflict markers
+        run: git diff --check "$(git hash-object -t tree /dev/null)"
+
+  eslint:
+    name: ESLint (LuCI JS view)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - run: npm install --no-save --no-audit --no-fund --legacy-peer-deps eslint@9 @eslint/js@9 globals@15
+      - run: npx eslint luci-app-protonvpn
+
+  ucode:
+    name: ucode syntax + offline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build a minimal ucode (core + fs + math)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc build-essential libjson-c-dev git
+          git clone --depth 1 https://github.com/jow-/ucode.git /tmp/ucode
+          cd /tmp/ucode
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DFS_SUPPORT=ON -DMATH_SUPPORT=ON -DSTRUCT_SUPPORT=OFF \
+            -DUBUS_SUPPORT=OFF -DUCI_SUPPORT=OFF -DULOOP_SUPPORT=OFF \
+            -DRTNL_SUPPORT=OFF -DNL80211_SUPPORT=OFF -DRESOLV_SUPPORT=OFF \
+            -DDEBUG_SUPPORT=OFF -DLOG_SUPPORT=OFF
+          cmake --build build -j"$(nproc)"
+      - name: Compile-check standalone ucode programs
+        run: |
+          UC=/tmp/ucode/build/ucode
+          LIB="$PWD/protonvpn-wireguard/files/usr/share/ucode"
+          MOCKS="$PWD/protonvpn-wireguard/tests/mocks"
+          B=/tmp/ucode/build
+          for f in \
+            protonvpn-wireguard/files/usr/share/rpcd/ucode/protonvpn.uc \
+            protonvpn-wireguard/files/usr/bin/protonvpn-cache-update \
+            protonvpn-wireguard/files/usr/bin/protonvpn-rotate; do
+            echo "ucode -c $f"
+            "$UC" -L "$MOCKS/*.uc" -L "$LIB/*.uc" -L "$B/*.so" -c "$f"
+          done
+      - name: Run offline fixture/unit tests (modules compiled by import)
+        run: |
+          UCODE=/tmp/ucode/build/ucode \
+          UCODE_EXTRA_L="/tmp/ucode/build/*.so" \
+            sh protonvpn-wireguard/tests/run.sh
+
+  build-backend:
+    name: Build packages (snapshot SDK, apk)
+    # Owner pushes/tags build on the self-hosted NAS runner (warm on-disk SDK,
+    # no queue); untrusted fork PRs stay on GitHub-hosted runners.
+    # TODO: register a self-hosted runner with the label below (nordvpn-luci
+    # uses the "nordvpn-build" label on the same NAS).
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","protonvpn-build"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare host tools and the SDK working dir
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd build-essential clang flex bison g++ gawk \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget jq curl ca-certificates \
+            gcc-multilib g++-multilib
+          # Persistent cache dir on the self-hosted runner (mounted volume);
+          # the ephemeral workspace on GitHub-hosted runners.
+          if [ -d /sdkcache ] && [ -w /sdkcache ]; then ROOT=/sdkcache; else ROOT="$GITHUB_WORKSPACE/.sdk"; mkdir -p "$ROOT"; fi
+          BASE=https://downloads.openwrt.org/snapshots/targets/x86/64
+          SDK=$(curl -sSL "$BASE/sha256sums" | grep -o 'openwrt-sdk-[^ ]*x86-64[^ ]*\.tar\.zst' | head -1)
+          SDKDIR="$ROOT/${SDK%.tar.zst}"
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+          echo "SDKDIR=$SDKDIR" >> "$GITHUB_ENV"
+          if [ -x "$SDKDIR/scripts/feeds" ]; then
+            echo "Reusing warm SDK: $SDKDIR"
+          else
+            echo "Fetching SDK: $SDK"
+            curl -fSL -o "$ROOT/sdk.tar.zst" "$BASE/$SDK"
+            tar -I zstd -xf "$ROOT/sdk.tar.zst" -C "$ROOT"
+            rm -f "$ROOT/sdk.tar.zst"
+          fi
+
+      # GitHub-hosted (fork PRs) has no warm disk — fall back to the Actions
+      # cache. Skipped on the self-hosted runner, whose /sdkcache persists.
+      # dl/ is content-addressed (prefix restore-key survives snapshot bumps);
+      # toolchain state is exact-key only so a bump never mixes toolchains.
+      - name: Cache downloaded sources (dl)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDKDIR }}/dl
+          key: openwrt-dl-${{ env.SDK }}
+          restore-keys: |
+            openwrt-dl-
+      - name: Cache build state (feeds, staging_dir, build_dir)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SDKDIR }}/feeds
+            ${{ env.SDKDIR }}/staging_dir
+            ${{ env.SDKDIR }}/build_dir
+            ${{ env.SDKDIR }}/tmp
+          key: openwrt-build-${{ env.SDK }}
+
+      - name: Build both packages
+        run: |
+          cd "$SDKDIR"
+          # Drop any package built by a previous run so the artifact glob only
+          # picks up freshly built .apk files (warm SDK keeps old ones around).
+          rm -f bin/packages/*/*/*protonvpn*.apk 2>/dev/null || true
+          # Install every feed: luci-app-protonvpn pulls luci-base -> lucihttp,
+          # whose Lua binding needs headers a narrowed install does not provide.
+          ./scripts/feeds update -a
+          rm -rf package/protonvpn-wireguard
+          cp -r "$GITHUB_WORKSPACE/protonvpn-wireguard" package/protonvpn-wireguard
+          rm -rf feeds/luci/applications/luci-app-protonvpn
+          cp -r "$GITHUB_WORKSPACE/luci-app-protonvpn" feeds/luci/applications/luci-app-protonvpn
+          # Reindex the luci feed (-i, no fetch) so the just-copied app is
+          # registered; feeds install reads the index, so without this the
+          # compile target does not exist.
+          ./scripts/feeds update -i luci
+          ./scripts/feeds install -a
+          make defconfig
+          make package/protonvpn-wireguard/compile package/luci-app-protonvpn/compile V=s
+      - uses: actions/upload-artifact@v4
+        with:
+          name: protonvpn-packages
+          path: ${{ env.SDKDIR }}/bin/packages/*/*/*protonvpn*.apk
+          if-no-files-found: warn
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: [static, eslint, ucode, build-backend]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: protonvpn-packages
+          path: dist
+      - name: Create the release with package artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find dist -name '*.apk'
+          gh release create "$GITHUB_REF_NAME" $(find dist -name '*.apk') \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
