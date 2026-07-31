@@ -67,9 +67,13 @@ function next_rotation(settings, last_rotate, now) {
 function should_refresh_session(session, now) {
 	if (!session)
 		return false;                 // nothing to refresh; the user must log in
-	// The ACCESS token is the short-lived one (measured live: 1800s at login),
-	// and letting it lapse would make every API call fail even though the
-	// 30-day session is perfectly alive. Refresh ahead of its expiry.
+	// The ACCESS token can lapse well before the session does, and letting it
+	// would make every API call fail even though the 30-day session is
+	// perfectly alive. Refresh ahead of its expiry. How much this branch does
+	// depends on what the API reports: /auth/refresh was measured returning an
+	// ExpiresIn of 30 days, which leaves this check dormant and the horizon
+	// check below as the one that fires. It stays because a short ExpiresIn —
+	// including the ACCESS_TOKEN_TTL fallback — is exactly what it is for.
 	if (session.access_expires_at &&
 	    now >= session.access_expires_at - ACCESS_REFRESH_MARGIN)
 		return true;

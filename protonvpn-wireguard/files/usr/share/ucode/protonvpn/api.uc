@@ -65,8 +65,13 @@ const SESSION_FILE = SESSION_DIR + '/session.json';
 // token renewal and flash has no business wearing out for a lock.
 const SESSION_LOCK_FILE = '/tmp/protonvpn_session.lock';
 
-// Access token TTL fallback when the API omits ExpiresIn. Measured live: the
-// API returns 1800s. The session (refresh token) horizon is SESSION_MAX_AGE.
+// Access token TTL fallback for the case where the API omits ExpiresIn: a
+// deliberately short guess, not an observed lifetime. What ExpiresIn actually
+// carries is not the same everywhere — /auth/refresh was measured returning
+// 2592000s (30 days, numerically equal to SESSION_MAX_AGE), and the /auth
+// login response has not been measured. So never assume the access token is
+// short-lived: read access_expires_at. The session (refresh token) horizon is
+// SESSION_MAX_AGE and is tracked separately.
 const ACCESS_TOKEN_TTL = 1800;
 // Refresh this long before the access token expires, so a slow tick or a brief
 // WAN outage cannot leave us with a dead token.
@@ -351,9 +356,11 @@ function auth_finish(proof) {
 		twofa = true;
 
 	// Two horizons, and conflating them is a bug: ExpiresIn is the ACCESS token
-	// TTL — measured live at 1800s (30 minutes) — while the refresh token, and
-	// therefore the session, lasts ~30 days. Treating ExpiresIn as the session
-	// lifetime would tell the user to log in again every half hour.
+	// TTL — whatever the API reports for it on this call — while the refresh
+	// token, and therefore the session, lasts ~30 days. They are kept as two
+	// fields because ExpiresIn describes neither reliably: a short value read
+	// as the session lifetime would tell the user to log in again every half
+	// hour, and a long one would hide an access token that has already lapsed.
 	let now = time();
 	let session = {
 		uid: d.UID,
