@@ -1924,7 +1924,16 @@ return view.extend({
 					_('⚠ IPv6 is active on the WAN and bypasses the VPN unless your rules cover it.')) ]));
 		} else {
 			this.autoRouting = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
-			this.autoRouting.checked = (g('auto_routing', '1') === '1');
+			// Absent means off, exactly as the backend reads it. It used to
+			// default to on here, so a freshly created instance — where
+			// create_instance writes only the interface and enabled — showed
+			// "route all LAN traffic" ticked while the backend was doing
+			// nothing of the sort, and the claim only became true if the user
+			// happened to save. A fresh install still routes everything,
+			// because the shipped config sets the key explicitly on `main`;
+			// a second instance must not claim the whole LAN by default, or
+			// it would fight the first one for the default route and the zone.
+			this.autoRouting.checked = (g('auto_routing', '0') === '1');
 			this.ksBox = E('input', { type: 'checkbox', change: L.bind(this.markDirty, this) });
 			this.ksBox.checked = (g('killswitch', '0') === '1');
 			this.v6Box = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
