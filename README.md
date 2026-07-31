@@ -221,6 +221,8 @@ ubus call protonvpn locations           # cached country/city tree
 ubus call protonvpn servers '{"locations":["ch","nl-amsterdam"],"hop_mode":"standard"}'
 ubus call protonvpn certificate_renew   # re-register the WireGuard certificate
 ubus call protonvpn apply               # rebuild the peer, bring the tunnel up
+ubus call protonvpn apply_start         # the same apply, detached; returns at once
+ubus call protonvpn apply_status        # progress/outcome of that apply
 ubus call protonvpn rotate_now          # one-shot rotation
 ubus call protonvpn disconnect          # tunnel down, rotation paused
 ubus call protonvpn refresh_locations   # async server-list refresh
