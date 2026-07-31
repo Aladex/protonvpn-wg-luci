@@ -1235,11 +1235,11 @@ return view.extend({
 
 	// Proton publishes a Score per server and its own Quick Connect takes the
 	// lowest one, so the quick pick follows that rather than raw load.
-	srvBestScore: function() {
+	srvLowestLoad: function() {
 		var best = null;
 		((this._serverData && this._serverData.relays) || []).forEach(function(r) {
-			if (typeof r.score !== 'number') return;
-			if (!best || r.score < best.score) best = r;
+			if (typeof r.load !== 'number') return;
+			if (!best || r.load < best.load) best = r;
 		});
 		return best;
 	},
@@ -1337,13 +1337,13 @@ return view.extend({
 				E('span', { class: 'box' }, chosen ? '' : '☑'),
 				E('span', { class: 'grow' }, _('Automatic (rotation picks)'))
 			]));
-		var best = this.srvBestScore();
+		var best = this.srvLowestLoad();
 		if (best) {
 			var bn = this.countryLabel(best.country_code);
 			el.appendChild(E('div', { class: 'pv-pool-row pv-srv-quick',
 				click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(best.name || best.hostname); }, this) }, [
 					E('span', { class: 'box' }, '⚡'),
-					E('span', { class: 'grow' }, _('Best (Quick Connect)') + ' · ' + (best.city || bn) +
+					E('span', { class: 'grow' }, _('Lowest load') + ' · ' + (best.city || bn) +
 						(best.load != null ? ' (%d%%)'.format(best.load) : '')),
 					E('span', { class: 'pv-dot ' + this.srvLoadClass(best.load) })
 				]));
@@ -1365,13 +1365,25 @@ return view.extend({
 			g.rows.push(r);
 		}, this));
 		groups.forEach(L.bind(function(g) {
-			// Score first (Proton's own ordering), load only as a tiebreak.
+			// Sort by the number the row actually shows. Proton's own `score`
+			// ranks servers better — it appears to fold in distance, since a
+			// German server scores ~1.5 against ~2.9 for Slovenia from the same
+			// router — but it is invisible here, and ordering by an invisible
+			// field makes the visible percentages look shuffled. Within one
+			// country its resolution also collapses (all 64 Slovenian servers
+			// sit inside 0.15) so the order it produces there is close to
+			// arbitrary anyway.
+			//
+			// The tiebreak is numeric-aware on purpose: a plain string compare
+			// puts SI#27 before SI#5, which reads as broken when a whole page
+			// of servers shares the same load.
 			g.rows.sort(function(a, b) {
-				var as = typeof a.score === 'number' ? a.score : 1e9;
-				var bs = typeof b.score === 'number' ? b.score : 1e9;
-				if (as !== bs)
-					return as - bs;
-				return (a.load || 0) - (b.load || 0);
+				var al = typeof a.load === 'number' ? a.load : 999;
+				var bl = typeof b.load === 'number' ? b.load : 999;
+				if (al !== bl)
+					return al - bl;
+				return (a.name || a.hostname || '').localeCompare(
+					b.name || b.hostname || '', undefined, { numeric: true });
 			});
 			el.appendChild(E('div', { class: 'pv-srv-grp' }, (g.flag ? g.flag + ' ' : '') +
 				'%s (%d)'.format(g.name, g.rows.length)));

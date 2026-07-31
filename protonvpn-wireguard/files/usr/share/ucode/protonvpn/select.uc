@@ -108,20 +108,4 @@ function pick(list, exclude_hostname) {
 	return pool[rand() % length(pool)];
 }
 
-// Lowest-Score relay, i.e. what Proton's own Quick Connect would choose.
-// Kept separate from pick() so rotation stays random (predictable rotation
-// would defeat the point) while the UI can offer a deliberate best pick.
-function pick_best(list, exclude_hostname) {
-	if (type(list) != 'array' || length(list) == 0)
-		return null;
-	let best = null;
-	for (let r in list) {
-		if (exclude_hostname && (r.hostname == exclude_hostname || r.name == exclude_hostname))
-			continue;
-		if (!best || (+r.score || 0) < (+best.score || 0))
-			best = r;
-	}
-	return best;
-}
-
-return { candidates, location_candidates, selection_candidates, by_hostname, pick, pick_best };
+return { candidates, location_candidates, selection_candidates, by_hostname, pick };

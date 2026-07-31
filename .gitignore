@@ -6,3 +6,6 @@ uc.out
 # repository (they remain in the history before this commit).
 RECON.md
 PLAN_PROTONVPN_LUCI.md
+
+# Design notes: local working documents, not part of the public repository.
+docs/superpowers/

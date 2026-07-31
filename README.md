@@ -108,7 +108,9 @@ list, so switching mode clears the location set: pick again for the new mode.
 
 ![Choosing locations](docs/screenshots/location-picker.png)
 
-Servers are listed cheapest-load-first, with Quick Connect on top:
+Servers are listed least-loaded first, with a one-click lowest-load pick on
+top. Within an equal load they are ordered by name, numerically — so `NL#5`
+comes before `NL#27`, not after it:
 
 ![Choosing a server](docs/screenshots/server-picker.png)
 

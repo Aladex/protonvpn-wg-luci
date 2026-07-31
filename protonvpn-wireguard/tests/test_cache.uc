@@ -18,7 +18,7 @@ const normalize = _cache.normalize, locations_tree = _cache.locations_tree,
 const _select = require('protonvpn.select');
 const candidates = _select.candidates, location_candidates = _select.location_candidates,
       selection_candidates = _select.selection_candidates,
-      by_hostname = _select.by_hostname, pick = _select.pick, pick_best = _select.pick_best;
+      by_hostname = _select.by_hostname, pick = _select.pick;
 const relay_kind = require('protonvpn.common').relay_kind;
 
 let failures = 0;
@@ -269,13 +269,6 @@ const doc = normalize(raw.LogicalServers);
 	eq('excluding the only candidate falls back to it',
 		pick(single, list[0].hostname).hostname, list[0].hostname);
 
-	// pick_best is Proton's Quick Connect: the lowest Score.
-	let best = pick_best(list);
-	let minScore = best.score;
-	for (let x in list)
-		if (x.score < minScore)
-			minScore = x.score;
-	eq('pick_best takes the lowest score', best.score, minScore);
 }
 
 // 8. cache file: schema guard, staleness, atomic round-trip

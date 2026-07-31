@@ -117,7 +117,9 @@ Moduswechsel das Standort-Set: wähle für den neuen Modus neu aus.
 
 ![Standorte wählen](docs/screenshots/location-picker.png)
 
-Die Server sind nach geringster Last sortiert, mit Quick Connect ganz oben:
+Die Server sind nach geringster Last sortiert, mit der Auswahl des am wenigsten
+ausgelasteten Servers ganz oben. Bei gleicher Last wird nach Namen sortiert,
+numerisch — `NL#5` steht also vor `NL#27`, nicht dahinter:
 
 ![Server wählen](docs/screenshots/server-picker.png)
 
