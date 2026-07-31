@@ -96,6 +96,7 @@ define Package/protonvpn-wireguard/install
 	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/protonvpn.uc $(1)/usr/share/rpcd/ucode/protonvpn.uc
 
 	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) ./files/usr/bin/protonvpn-apply $(1)/usr/bin/protonvpn-apply
 	$(INSTALL_BIN) ./files/usr/bin/protonvpn-cache-update $(1)/usr/bin/protonvpn-cache-update
 	$(INSTALL_BIN) ./files/usr/bin/protonvpn-rotate $(1)/usr/bin/protonvpn-rotate
 	$(INSTALL_BIN) ./files/usr/bin/protonvpn-service $(1)/usr/bin/protonvpn-service

@@ -16,6 +16,16 @@ import { readfile, mkdir, unlink } from 'fs';
 const _common = require('protonvpn.common');
 const _cache = require('protonvpn.cache');
 const _api = require('protonvpn.api');
+const _apply_mod = require('protonvpn.apply');
+
+// Our own pid: the one process guaranteed to be alive when a 'running' apply
+// record has to look live to the liveness check.
+let self_pid = null;
+{
+	let raw = readfile('/proc/self/stat');
+	if (raw)
+		self_pid = int(split(trim(raw), ' ')[0]);
+}
 
 let fails = 0;
 function ok(l, c) { if (c) printf('ok   %s\n', l); else { fails++; printf('FAIL %s\n', l); } }
@@ -31,6 +41,8 @@ function eq(l, g, w) {
 // ones actually taken.
 unlink(_api.SESSION_FILE);
 unlink(_common.FETCH_STATUS_FILE);
+unlink(_common.APPLY_STATUS_FILE);
+unlink(_common.APPLY_LOCK_FILE);
 unlink('/tmp/protonvpn_rotate_state.json');
 
 // Load the rpcd program; its top-level return is { protonvpn: methods }.
@@ -45,7 +57,8 @@ ok('rpcd object present', m != null);
 		'status', 'instances', 'locations', 'servers', 'external_ip',
 		'refresh_status', 'session_state', 'account',
 		'auth_info', 'auth_finish', 'set_totp', 'refresh_session', 'logout',
-		'certificate_renew', 'apply', 'rotate_now', 'disconnect',
+		'certificate_renew', 'apply', 'apply_start', 'apply_status',
+		'rotate_now', 'disconnect',
 		'clear_credentials', 'create_instance', 'delete_instance', 'refresh_locations'
 	];
 	let missing = [];
@@ -83,7 +96,8 @@ ok('rpcd object present', m != null);
 	// method that takes arguments without declaring them gets them stripped.
 	let undeclared = [];
 	for (let name in [ 'status', 'servers', 'auth_info', 'auth_finish', 'set_totp',
-	                   'external_ip', 'certificate_renew', 'apply', 'rotate_now',
+	                   'external_ip', 'certificate_renew', 'apply', 'apply_start',
+	                   'rotate_now',
 	                   'disconnect', 'create_instance', 'delete_instance' ])
 		if (type(m[name].args) != 'object')
 			push(undeclared, name);
@@ -197,6 +211,44 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 	eq('refresh_status idle again', m.refresh_status.call().state, 'idle');
 }
 
+// 4b. apply_start / apply_status: the pair the UI uses instead of the blocking
+//     `apply`. The synchronous method stays, but the page must be able to
+//     start an apply and poll it, and a poll must never come back null.
+{
+	global.MOCK_UCI = { protonvpn: { main: { '.type': 'instance',
+		interface: 'protonvpn', cache_dir: cdir } }, network: {} };
+
+	eq('apply_status idle without a job file', m.apply_status.call({}).state, 'idle');
+	eq('apply_start rejects an unknown instance',
+		m.apply_start.call({ args: { instance: 'nope' } }).error, 'no such instance');
+
+	// A running apply is visible to the poller and blocks a second start —
+	// two applies would rewrite the same interface and commit the same config.
+	let now = time();
+	_apply_mod.write_apply_status({ instance: 'main', state: 'running',
+		pid: self_pid, started_at: _common.iso_ts(now), started_at_epoch: now,
+		finished_at: null, result: null, error: null });
+	eq('apply_status reports a running apply', m.apply_status.call({}).state, 'running');
+	let busy = m.apply_start.call({ args: { instance: 'main' } });
+	eq('apply_start refuses to stack applies', busy.already_running, true);
+	eq('apply_start names the instance holding it', busy.apply.instance, 'main');
+
+	// The finished record is what the UI turns into its result banner, so the
+	// full apply() result has to survive the round trip through the file.
+	_apply_mod.write_apply_status({ instance: 'main', state: 'failed',
+		started_at: _common.iso_ts(now), started_at_epoch: now,
+		finished_at: _common.iso_ts(now), pid: null,
+		result: { state: 'failure', error: 'not logged in' },
+		error: 'not logged in' });
+	let done = m.apply_status.call({});
+	eq('apply_status reports the terminal state', done.state, 'failed');
+	eq('apply_status carries the apply result', done.result.state, 'failure');
+	eq('apply_status carries the error', done.error, 'not logged in');
+
+	unlink(_common.APPLY_STATUS_FILE);
+	eq('apply_status idle again', m.apply_status.call({}).state, 'idle');
+}
+
 // 5. Credential-facing methods, all on their offline branch. None of these may
 //    reach the network, and none may echo a secret back to the browser.
 {
@@ -248,8 +300,8 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 // 6. Instance-scoped write methods reject an unknown instance before doing any
 //    work — this is the guard that keeps a typo from acting on 'main'.
 {
-	for (let name in [ 'apply', 'rotate_now', 'disconnect', 'certificate_renew',
-	                   'clear_credentials', 'external_ip' ])
+	for (let name in [ 'apply', 'apply_start', 'rotate_now', 'disconnect',
+	                   'certificate_renew', 'clear_credentials', 'external_ip' ])
 		eq(name + ' rejects an unknown instance',
 			m[name].call({ args: { instance: 'nope' } }).error, 'no such instance');
 }

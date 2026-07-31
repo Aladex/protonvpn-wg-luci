@@ -331,6 +331,29 @@ methods.apply = {
 	}
 };
 
+// Asynchronous apply for the UI. `apply` above stays synchronous for scripts
+// and the CLI, but a first connect can take tens of seconds and rpcd answers
+// one call at a time — long enough that the browser's own rollback
+// confirmation went unserved and the config was reverted underneath the user.
+// Same shape as refresh_locations/refresh_status: start, then poll.
+methods.apply_start = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return _apply.start_apply(name);
+	}
+};
+
+// Apply progress/outcome for the UI.
+methods.apply_status = {
+	call: function(request) {
+		return _apply.apply_status_report() || { state: 'idle' };
+	}
+};
+
 methods.rotate_now = {
 	args: { instance: '' },
 	call: function(request) {

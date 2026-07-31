@@ -12,6 +12,7 @@
 					"servers",
 					"external_ip",
 					"refresh_status",
+					"apply_status",
 					"account"
 				]
 			},
@@ -28,6 +29,7 @@
 					"logout",
 					"certificate_renew",
 					"apply",
+					"apply_start",
 					"disconnect",
 					"clear_credentials",
 					"refresh_locations",

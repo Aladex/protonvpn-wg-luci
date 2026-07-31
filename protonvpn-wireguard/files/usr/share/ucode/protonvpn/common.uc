@@ -33,6 +33,10 @@ const CACHE_FILENAME = 'protonvpn_servers_cache.json';
 const DEFAULT_CACHE_DIR = '/tmp';
 const FETCH_STATUS_FILE = '/tmp/protonvpn_fetch_status.json';
 const CACHE_LOCK_FILE = '/tmp/protonvpn_cache.lock';
+// Progress/outcome of the detached apply worker, polled by the UI — same
+// runtime-file convention as the cache fetch status above.
+const APPLY_STATUS_FILE = '/tmp/protonvpn_apply_status.json';
+const APPLY_LOCK_FILE = '/tmp/protonvpn_apply.lock';
 const CACHE_MAX_AGE = 86400;          // 24h staleness threshold
 const CACHE_SCHEMA_VERSION = 1;
 
@@ -42,6 +46,10 @@ const MIN_CACHE_REFRESH = 60;         // seconds
 const MAX_CACHE_REFRESH = 604800;     // 7 days
 const MIN_VERIFY_TIMEOUT = 2;         // seconds to wait for a handshake
 const MAX_VERIFY_TIMEOUT = 30;
+// Longest one apply may plausibly take: certificate registration over HTTPS,
+// a full cache read and up to four candidates at MAX_VERIFY_TIMEOUT each,
+// with slack. Past it a 'running' apply record is an abandoned one.
+const APPLY_MAX_RUNTIME = 300;
 
 const WATCHDOG_GRACE = 60;
 const WATCHDOG_COOLDOWN_BASE = 120;
@@ -430,6 +438,7 @@ return {
 	DEFAULT_INTERFACE, DEFAULT_PORT, DEFAULT_KEEPALIVE, FIXED_ADDRESS, FIXED_ADDRESS6,
 	VPN_DNS4, VPN_DNS6,
 	CACHE_FILENAME, DEFAULT_CACHE_DIR, FETCH_STATUS_FILE, CACHE_LOCK_FILE,
+	APPLY_STATUS_FILE, APPLY_LOCK_FILE, APPLY_MAX_RUNTIME,
 	CACHE_MAX_AGE, CACHE_SCHEMA_VERSION,
 	MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL, MIN_CACHE_REFRESH, MAX_CACHE_REFRESH,
 	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,

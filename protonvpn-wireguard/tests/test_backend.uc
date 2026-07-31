@@ -46,7 +46,9 @@ let modules = {
 	'protonvpn.apply': [
 		'ensure_keypair', 'current_peer', 'restore_peer', 'write_relay',
 		'bring_up', 'verify_handshake', 'connect_one', 'apply', 'disconnect',
-		'create_instance', 'delete_instance', 'restore_wan_default'
+		'create_instance', 'delete_instance', 'restore_wan_default',
+		'write_apply_status', 'read_apply_status', 'apply_running',
+		'apply_status_report', 'run_apply', 'start_apply'
 	],
 	'protonvpn.rotate': [
 		'shuffle', 'current_key', 'plan_candidates', 'read_state', 'record',
