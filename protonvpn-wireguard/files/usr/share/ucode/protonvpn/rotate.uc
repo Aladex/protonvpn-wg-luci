@@ -19,9 +19,11 @@ const load_settings = _common.load_settings,
       acquire_lock = _common.acquire_lock,
       release_lock = _common.release_lock,
       log = _common.log,
+      run = _common.run,
       validate_wg_key = _common.validate_wg_key,
       validate_instance = _common.validate_instance;
 const read_cache = require('protonvpn.cache').read_cache;
+const reconcile_ipv6 = require('protonvpn.routing').reconcile_ipv6;
 const selection_candidates = require('protonvpn.select').selection_candidates;
 const _apply = require('protonvpn.apply');
 const bring_up = _apply.bring_up,
@@ -31,26 +33,28 @@ const bring_up = _apply.bring_up,
       verify_handshake = _apply.verify_handshake,
       restore_wan_default = _apply.restore_wan_default;
 
-const ROTATE_LOCK = '/tmp/protonvpn_rotate.lock';
-const ROTATE_STATE = '/tmp/protonvpn_rotate_state.json';
-const ROTATE_STATE_LOCK = '/tmp/protonvpn_rotate_state.lock';
+const ROTATE_LOCK = _common.RUN_DIR + '/protonvpn_rotate.lock';
+const ROTATE_STATE = _common.RUN_DIR + '/protonvpn_rotate_state.json';
+const ROTATE_STATE_LOCK = _common.RUN_DIR + '/protonvpn_rotate_state.lock';
 
 // Per-instance state/lock paths. The 'main' instance keeps the historical
 // filenames so upgrades do not reset the persisted rotation clock.
 function state_path(instance) {
 	let n = validate_instance(instance) || 'main';
-	return (n == 'main') ? ROTATE_STATE : '/tmp/protonvpn_rotate_state_' + n + '.json';
+	return (n == 'main') ? ROTATE_STATE :
+		_common.RUN_DIR + '/protonvpn_rotate_state_' + n + '.json';
 }
 
 function lock_path(instance) {
 	let n = validate_instance(instance) || 'main';
-	return (n == 'main') ? ROTATE_LOCK : '/tmp/protonvpn_rotate_' + n + '.lock';
+	return (n == 'main') ? ROTATE_LOCK :
+		_common.RUN_DIR + '/protonvpn_rotate_' + n + '.lock';
 }
 
 function state_lock_path(instance) {
 	let n = validate_instance(instance) || 'main';
 	return (n == 'main') ? ROTATE_STATE_LOCK :
-		'/tmp/protonvpn_rotate_state_' + n + '.lock';
+		_common.RUN_DIR + '/protonvpn_rotate_state_' + n + '.lock';
 }
 
 // Fisher-Yates shuffle in a copy. Exported for testing.
@@ -197,6 +201,18 @@ function rotate_inner(uci, instance) {
 		// made rotation cycle servers.
 		if (verify_handshake(iface, s.verify_timeout)) {
 			let id = relay.name || relay.hostname;
+			// Whether IPv6 may go through the tunnel is a property of the
+			// gateway, and rotation has just changed it. Nothing else re-runs
+			// the routing enforcement on this path, so the v6 rules would keep
+			// describing the gateway we left: a lookup rule pointing at a
+			// server that drops IPv6 black-holes every steered client, and the
+			// other way round IPv6 stays blocked on a server that forwards it.
+			if (reconcile_ipv6(uci, s)) {
+				uci.commit('network');
+				// Plain netifd rules; a reload applies the delta and leaves
+				// the freshly connected interface alone.
+				run([ 'ubus', 'call', 'network', 'reload' ]);
+			}
 			record({ last_success: time(), server: id }, instance);
 			log('rotated ' + s.name + ' to ' + id);
 			return { ok: true, server: id };

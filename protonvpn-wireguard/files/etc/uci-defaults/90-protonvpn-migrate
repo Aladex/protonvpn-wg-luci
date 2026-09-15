@@ -5,11 +5,14 @@
 # it never touches secrets and never disconnects a working tunnel.
 
 pkg=protonvpn
+# PROTONVPN_CONFIG_DIR relocates the config file for the offline suite, which
+# must not touch the host's /etc (same convention as the state dir).
+confdir="${PROTONVPN_CONFIG_DIR:-/etc/config}"
 
 # Ensure the config file and the 'main' instance section exist. A config kept
 # across a sysupgrade may be truncated or predate the section, and this script
 # runs before the service ever reads it.
-[ -f "/etc/config/$pkg" ] || touch "/etc/config/$pkg"
+[ -f "$confdir/$pkg" ] || touch "$confdir/$pkg"
 [ "$(uci -q get "$pkg.main")" = 'instance' ] || uci set "$pkg.main=instance"
 
 # Current schema version; anything missing or non-numeric counts as pre-stamp.
@@ -24,6 +27,29 @@ esac
 # `[ "$cv" -lt N ]` block here, before bumping the stamp.
 if [ "$cv" -lt 1 ]; then
 	uci set "$pkg.main.config_version=1"
+fi
+
+# v2 replaces the boolean `block_ipv6` with the three-valued `ipv6_mode`, so
+# there is one source of truth for how an instance handles IPv6:
+#   block_ipv6=1 -> ipv6_mode=block  (prohibit IPv6, the old default)
+#   block_ipv6=0 -> ipv6_mode=off    (do not touch IPv6 at all)
+# The new 'auto' is never chosen for the user: routing IPv6 through the tunnel
+# is a deliberate change of behaviour, not something a migration should switch
+# on behind their back. An instance that never carried the boolean keeps the
+# load-time default ('block'), and an ipv6_mode already set wins over it.
+if [ "$cv" -lt 2 ]; then
+	for sec in $(uci -q show "$pkg" | sed -n "s/^$pkg\.\([^.=]*\)=instance\$/\1/p"); do
+		old="$(uci -q get "$pkg.$sec.block_ipv6")"
+		[ -n "$old" ] || continue
+		if [ -z "$(uci -q get "$pkg.$sec.ipv6_mode")" ]; then
+			case "$old" in
+				0) uci set "$pkg.$sec.ipv6_mode=off" ;;
+				*) uci set "$pkg.$sec.ipv6_mode=block" ;;
+			esac
+		fi
+		uci -q delete "$pkg.$sec.block_ipv6"
+	done
+	uci set "$pkg.main.config_version=2"
 fi
 
 [ -n "$(uci -q changes "$pkg")" ] && uci commit "$pkg"

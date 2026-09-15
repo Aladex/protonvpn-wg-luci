@@ -26,19 +26,19 @@ const _api = require('protonvpn.api');
 
 const MAX_RESPONSE = 24 * 1024 * 1024; // hard cap per API response
 // The raw logicals body is streamed here, parsed, then removed.
-const LOGICALS_TMP = '/tmp/protonvpn_logicals.tmp.json';
+const LOGICALS_TMP = _common.RUN_DIR + '/protonvpn_logicals.tmp.json';
 const CONNECT_TIMEOUT = 15;
 const TOTAL_TIMEOUT = 60;
 
-// Features bitmask of a logical server, decoded from a live /vpn/logicals
-// capture (2026-07-30): the paid parc showed 123 Secure Core and 7 Tor
-// logicals, and the bits combine freely (28 = IPv6|Streaming|P2P is the most
-// common value).
-const FEATURE_SECURE_CORE = 1;
-const FEATURE_TOR = 2;
-const FEATURE_P2P = 4;
-const FEATURE_STREAMING = 8;
-const FEATURE_IPV6 = 16;
+// Features bitmask bits of a logical server. Defined in protonvpn.common,
+// because the routing layer reads bit 16 back off the interface stamp without
+// ever loading the cache; re-exported here so the decoding stays visible where
+// the bitmask is actually parsed.
+const FEATURE_SECURE_CORE = _common.FEATURE_SECURE_CORE;
+const FEATURE_TOR = _common.FEATURE_TOR;
+const FEATURE_P2P = _common.FEATURE_P2P;
+const FEATURE_STREAMING = _common.FEATURE_STREAMING;
+const FEATURE_IPV6 = _common.FEATURE_IPV6;
 
 // Proton reports a city NAME ('Tokyo') plus a country CODE ('JP'), while the
 // location set and the UI speak 'cc-city' codes — so synthesize one the same

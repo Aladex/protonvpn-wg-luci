@@ -36,7 +36,9 @@ const selection_candidates = _select.selection_candidates,
       by_hostname = _select.by_hostname,
       pick = _select.pick;
 const _api = require('protonvpn.api');
-const enforce_routing = require('protonvpn.routing').enforce;
+const _routing = require('protonvpn.routing');
+const enforce_routing = _routing.enforce,
+      reconcile_ipv6 = _routing.reconcile_ipv6;
 
 // Certificate metadata lives next to the session state (same root-only
 // directory), NOT in UCI — it must survive a session loss, because the
@@ -54,7 +56,7 @@ const CERT_STATE_FILE = CERT_STATE_DIR + '/certificate.json';
 // Ed25519 identity, the certificate is registered against it, and it cannot be
 // regenerated — so a lost update costs the tunnel permanently. On tmpfs, since
 // it is taken on every renewal and flash should not wear out for a lock.
-const CERT_STATE_LOCK = '/tmp/protonvpn_cert_state.lock';
+const CERT_STATE_LOCK = _common.RUN_DIR + '/protonvpn_cert_state.lock';
 
 // Take the certificate-state lock. The critical section is a read, a merge and
 // an atomic write — milliseconds — so a holder that outlives the reclamation
@@ -400,7 +402,10 @@ function current_peer(uci, iface) {
 		public_key: uci.get('network', peer, 'public_key'),
 		endpoint_host: uci.get('network', peer, 'endpoint_host'),
 		endpoint_port: uci.get('network', peer, 'endpoint_port'),
-		gateway: uci.get('network', peer, 'protonvpn_gateway')
+		gateway: uci.get('network', peer, 'protonvpn_gateway'),
+		// Lives on the interface, but describes the peer's gateway — see
+		// restore_peer.
+		features: uci.get('network', iface, 'protonvpn_features')
 	};
 }
 
@@ -420,6 +425,15 @@ function restore_peer(uci, iface, saved) {
 		uci.set('network', peer, 'endpoint_port', saved.endpoint_port);
 	if (saved.gateway)
 		uci.set('network', peer, 'protonvpn_gateway', saved.gateway);
+	// The Features stamp has to travel back with the peer: it is what decides
+	// whether IPv6 may be routed into the tunnel, and leaving a failed
+	// candidate's bitmask behind would key that decision to a gateway this
+	// router is not connected to. No stamp means no IPv6, so clear it rather
+	// than keep a stale one.
+	if (saved.features != null)
+		uci.set('network', iface, 'protonvpn_features', saved.features);
+	else
+		uci.delete('network', iface, 'protonvpn_features');
 }
 
 // Write interface + peer UCI for the chosen relay (no commit): peer
@@ -455,6 +469,11 @@ function write_relay(uci, iface, relay, s) {
 	// the exit country, so country_code IS the exit one (Secure Core included).
 	uci.set('network', iface, 'protonvpn_country_code', relay.country_code || s.country_code);
 	uci.set('network', iface, 'protonvpn_city_code', relay.city_code || relay.location || s.city_code);
+	// Raw Features bitmask of the gateway. IPv6 forwarding is a per-gateway
+	// property (bit 16), so the routing layer has to be able to read it back
+	// from the interface long after the cache entry is gone; a relay without
+	// the field stamps 0, which reads as "no IPv6".
+	uci.set('network', iface, 'protonvpn_features', '' + (+relay.features || 0));
 	uci.set('network', iface, 'protonvpn_last_applied', iso_ts());
 
 	let peer = find_peer(uci, iface);
@@ -535,6 +554,26 @@ function connect_one(uci, iface, relay, s) {
 	write_relay(uci, iface, relay, s);
 	uci.commit('network');
 	return bring_up(iface);
+}
+
+// Reconcile the IPv6 rules with the gateway that is NOW on the interface, and
+// make netifd apply the delta.
+//
+// Load-bearing ordering: enforce_routing runs at the top of an apply, before
+// any peer is written, so it can only judge the gateway being left behind.
+// Whether IPv6 may be routed at all is a property of the gateway, so applying
+// from a bit-16 server onto one without the bit would otherwise return success
+// with the priority-20000 lookup still installed — v6 packets into a table
+// whose ::/0 route goes nowhere, which is the black hole the adaptive mode
+// exists to prevent. Called on every path that has written a peer, success and
+// rollback alike, because each of them changes the stamp.
+function settle_ipv6(uci, s) {
+	if (!reconcile_ipv6(uci, s))
+		return;
+	uci.commit('network');
+	// Plain netifd rules; a reload applies the delta and leaves the interface
+	// that was just brought up alone.
+	run([ 'ubus', 'call', 'network', 'reload' ]);
 }
 
 // A global netifd reload has been observed (OpenWrt 24.10) to remove the
@@ -623,6 +662,12 @@ function apply_inner(uci, instance) {
 		// netifd apply the delta (unchanged interfaces are left alone).
 		run([ 'ubus', 'call', 'network', 'reload' ]);
 	}
+	if (routing.changed_dhcp) {
+		uci.commit('dhcp');
+		// Only odhcpd's router-advertisement options are ever touched here, so
+		// reload that rather than restart dnsmasq and drop its DNS cache.
+		run([ '/etc/init.d/odhcpd', 'reload' ]);
+	}
 	if (routing.changed_network || routing.changed_firewall) {
 		// Committing deletions invalidates the cursor's section iteration
 		// state (find_peer silently missed sections) — start fresh.
@@ -643,6 +688,11 @@ function apply_inner(uci, instance) {
 			return { state: 'failure', error: 'configured server not found in cache' };
 		let up = connect_one(uci, iface, relay, s);
 		let ok = up && verify_handshake(iface, s.verify_timeout);
+		// Unconditional, unlike the candidate loop below: a pinned server is
+		// never rolled back — the user asked for that one and the next attempt
+		// retries it — so the peer on the interface is the pinned gateway
+		// whether or not it came up, and the rules have to describe it.
+		settle_ipv6(uci, s);
 		return {
 			state: ok ? 'success' : (up ? 'partial_failure' : 'failure'),
 			interface: iface, gateway: relay.hostname,
@@ -670,19 +720,32 @@ function apply_inner(uci, instance) {
 		let relay = list[i];
 		if (!connect_one(uci, iface, relay, s))
 			continue;
-		if (verify_handshake(iface, s.verify_timeout))
+		if (verify_handshake(iface, s.verify_timeout)) {
+			settle_ipv6(uci, s);
 			return {
 				state: 'success', interface: iface, gateway: relay.hostname,
 				endpoint: endpoint_of(relay),
 				restarted: true
 			};
+		}
 	}
 
 	if (saved) {
 		restore_peer(uci, iface, saved);
 		uci.commit('network');
 		bring_up(iface);
+	} else {
+		// Nothing to roll back to. connect_one writes the peer BEFORE it tries
+		// to bring the interface up, so the interface is left stamped with the
+		// last candidate it could not reach. Acting on that stamp later would
+		// install a lookup for a gateway this router never connected to, so
+		// drop it: no stamp means no IPv6, which is the safe side.
+		uci.delete('network', iface, 'protonvpn_features');
+		uci.commit('network');
 	}
+	// Either branch changed the stamp out from under the rules that were
+	// reconciled at the top of this apply.
+	settle_ipv6(uci, s);
 	return { state: 'failure', restored: saved != null,
 		error: 'could not reach any server for the current selection; restored the previous connection' };
 }
@@ -857,9 +920,11 @@ function start_apply(instance) {
 }
 
 // Take the tunnel down and pause rotation: tunnel kept down (auto '0'),
-// scheduled rotation stopped, and every managed routing/firewall object
-// released so the steered networks return to normal networking — IPv6
-// included. The next apply re-enables and recreates everything.
+// scheduled rotation stopped, and the managed routing/firewall objects that
+// send traffic through the tunnel released, so the steered networks return to
+// normal networking. IPv6 is the exception: its prohibit rule stays, because
+// a paused instance is not a decision to let IPv6 out to the provider — that
+// is what ipv6_mode 'off' is for. The next apply re-enables everything.
 function disconnect(uci, instance) {
 	let s = load_settings(uci, instance);
 	let iface = validate_interface(s.interface);
@@ -877,6 +942,12 @@ function disconnect(uci, instance) {
 	if (routing.changed_network) {
 		uci.commit('network');
 		run([ 'ubus', 'call', 'network', 'reload' ]);
+	}
+	if (routing.changed_dhcp) {
+		uci.commit('dhcp');
+		// Only odhcpd's router-advertisement options are ever touched here, so
+		// reload that rather than restart dnsmasq and drop its DNS cache.
+		run([ '/etc/init.d/odhcpd', 'reload' ]);
 	}
 	if (routing.changed_network || routing.changed_firewall)
 		uci = cursor();
@@ -971,7 +1042,7 @@ function delete_instance(uci, name) {
 	// Remove stamped artifacts by enforcing the all-off state.
 	s.auto_routing = false;
 	s.killswitch = false;
-	s.block_ipv6 = false;
+	s.ipv6_mode = 'off';
 	s.vpn_dns = 'off';
 	s.source_networks = [];
 	let routing = enforce_routing(uci, s);
@@ -982,6 +1053,12 @@ function delete_instance(uci, name) {
 	if (routing.changed_network) {
 		uci.commit('network');
 		run([ 'ubus', 'call', 'network', 'reload' ]);
+	}
+	if (routing.changed_dhcp) {
+		uci.commit('dhcp');
+		// Only odhcpd's router-advertisement options are ever touched here, so
+		// reload that rather than restart dnsmasq and drop its DNS cache.
+		run([ '/etc/init.d/odhcpd', 'reload' ]);
 	}
 	if (routing.changed_network || routing.changed_firewall)
 		uci = cursor(); // see apply(): committed deletions break iteration

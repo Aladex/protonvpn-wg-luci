@@ -13,6 +13,9 @@
 import { writefile, unlink } from 'fs';
 const _cmn = require('protonvpn.common');
 const _rotate = require('protonvpn.rotate');
+// Runtime scratch dir of THIS run (see tests/run.sh); never the shared /tmp.
+const RUN = getenv('PROTONVPN_RUN_DIR') || '/tmp';
+
 const _service = require('protonvpn.service');
 const should_refresh = _service.should_refresh,
       should_rotate = _service.should_rotate,
@@ -279,7 +282,7 @@ function eq(l, g, w) {
 //    clock — losing last_attempt would make the daemon rotate again on the very
 //    next tick.
 {
-	let state_path = '/tmp/protonvpn_rotate_state.json';
+	let state_path = RUN + '/protonvpn_rotate_state.json';
 	unlink(state_path);
 	_rotate.mark_attempt(1000);
 	_rotate.record({ degraded_since: 2000 });
@@ -297,9 +300,9 @@ function eq(l, g, w) {
 //    silently drops the other one's field. Proven with a REAL second ucode
 //    process, because an in-process test cannot exercise flock() at all.
 {
-	let state_path = '/tmp/protonvpn_rotate_state.json';
-	let state_lock_path = '/tmp/protonvpn_rotate_state.lock';
-	let child_script = '/tmp/protonvpn_record_child.uc';
+	let state_path = RUN + '/protonvpn_rotate_state.json';
+	let state_lock_path = RUN + '/protonvpn_rotate_state.lock';
+	let child_script = RUN + '/protonvpn_record_child.uc';
 	unlink(state_path);
 	unlink(state_lock_path);
 

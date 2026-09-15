@@ -24,19 +24,51 @@ const DEFAULT_KEEPALIVE = 25;
 // ProtonVPN assigns the same tunnel addresses to every WireGuard client
 // (like Nord's 10.5.0.2, unlike Mullvad's per-device addresses).
 const FIXED_ADDRESS = '10.2.0.2/32';
-const FIXED_ADDRESS6 = '2a07:b944::2:2/128';
-// In-tunnel DNS resolvers (pushed by the 'standard' vpn_dns mode).
+
+// The IPv6 address below is deliberately NOT the one ProtonVPN publishes, and
+// this looks wrong until you measure it. Their web client still writes
+// 2a07:b944::2:2/128 into every generated config (live bundle
+// VpnSettingsRouter.b1edbc00.chunk.js), and every third-party guide repeats
+// it — but that address is one-way. Measured on a live tunnel with no NAT of
+// any kind in the path: a request sourced from 2a07:b944::2:2 is forwarded and
+// answered — Cloudflare replies in ~25 ms — but the reply comes back addressed
+// to fd54:20a4:d33b:b10c:0:2:0:2, which the router does not hold, so nothing
+// ever arrives. Sourcing from the fd54 address instead gives a complete
+// round trip (0% loss, ~18 ms, TCP sessions reaching ESTABLISHED).
+//
+// The fd54 prefix is a Proton-side constant, not per-session and not
+// per-account: identical across three gateways in two countries here, and
+// independently reported by an unrelated user on a different account
+// (gist.github.com/mikaeldui/12127c91ccece42ea375c9f42d94aa8a, comments).
+//
+// So: do not "fix" this back to the documented address. Doing so silently
+// breaks IPv6 for every client behind the tunnel, in a way that looks fine in
+// the configuration and only shows up as replies that never arrive.
+const FIXED_ADDRESS6 = 'fd54:20a4:d33b:b10c:0:2:0:2/128';
+// In-tunnel DNS resolvers (pushed by the 'standard' vpn_dns mode). The v6 one
+// is the counterpart of the address above, and answers: verified live, it
+// resolves A and AAAA records through the tunnel.
 const VPN_DNS4 = '10.2.0.1';
-const VPN_DNS6 = '2a07:b944::2:1';
+const VPN_DNS6 = 'fd54:20a4:d33b:b10c:0:2:0:1';
+
+// Runtime scratch: the status files, the locks and the server-list cache all
+// live on tmpfs, under fixed names because separate processes (rpcd, the
+// daemon, the detached apply worker) have to find each other's.
+//
+// PROTONVPN_RUN_DIR relocates the lot, the same convention as
+// PROTONVPN_STATE_DIR: the offline suite gives each run its own directory so
+// two runs cannot overwrite each other's status files and invent failures.
+// Production never sets it.
+const RUN_DIR = getenv('PROTONVPN_RUN_DIR') || '/tmp';
 
 const CACHE_FILENAME = 'protonvpn_servers_cache.json';
-const DEFAULT_CACHE_DIR = '/tmp';
-const FETCH_STATUS_FILE = '/tmp/protonvpn_fetch_status.json';
-const CACHE_LOCK_FILE = '/tmp/protonvpn_cache.lock';
+const DEFAULT_CACHE_DIR = RUN_DIR;
+const FETCH_STATUS_FILE = RUN_DIR + '/protonvpn_fetch_status.json';
+const CACHE_LOCK_FILE = RUN_DIR + '/protonvpn_cache.lock';
 // Progress/outcome of the detached apply worker, polled by the UI — same
 // runtime-file convention as the cache fetch status above.
-const APPLY_STATUS_FILE = '/tmp/protonvpn_apply_status.json';
-const APPLY_LOCK_FILE = '/tmp/protonvpn_apply.lock';
+const APPLY_STATUS_FILE = RUN_DIR + '/protonvpn_apply_status.json';
+const APPLY_LOCK_FILE = RUN_DIR + '/protonvpn_apply.lock';
 const CACHE_MAX_AGE = 86400;          // 24h staleness threshold
 const CACHE_SCHEMA_VERSION = 1;
 
@@ -63,6 +95,18 @@ const SESSION_REFRESH_AGE = 25 * 86400;   // refresh at the latest after 25 days
 const CERT_MAX_DAYS = 365;                // persistent certificate max lifetime
 const CERT_RENEW_DAYS = 300;              // renew persistent certs after this
 const CERT_SESSION_DAYS = 7;              // session-only certificate max lifetime
+
+// Features bitmask of a logical server, decoded from a live /vpn/logicals
+// capture (2026-07-30): the paid parc showed 123 Secure Core and 7 Tor
+// logicals, and the bits combine freely (28 = IPv6|Streaming|P2P is the most
+// common value). They live here rather than in protonvpn.cache because the
+// routing and status layers read bit 16 back off the interface stamp, long
+// after the cache is out of the picture.
+const FEATURE_SECURE_CORE = 1;
+const FEATURE_TOR = 2;
+const FEATURE_P2P = 4;
+const FEATURE_STREAMING = 8;
+const FEATURE_IPV6 = 16;
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const DIR_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-';
@@ -131,6 +175,13 @@ function validate_hop_mode(m) {
 // DNS mode: 'off' or 'standard' (ProtonVPN in-tunnel resolver).
 function validate_dns_mode(m) {
 	return (m == 'off' || m == 'standard') ? m : null;
+}
+
+// IPv6 handling for an instance: 'block' (prohibit IPv6 on the steered
+// networks), 'auto' (route it through the tunnel when the gateway forwards
+// IPv6, prohibit it when it does not) or 'off' (do not touch IPv6 at all).
+function validate_ipv6_mode(m) {
+	return (m == 'block' || m == 'auto' || m == 'off') ? m : null;
 }
 
 // Rotation mode: 'interval' or 'time'.
@@ -202,6 +253,24 @@ function relay_kind(r) {
 	if (r.secure_core)
 		return 'secure_core';
 	return 'standard';
+}
+
+// True when the gateway currently written on `iface` advertises ProtonVPN's
+// IPv6 feature bit. apply.write_relay stamps the raw bitmask on the interface
+// so the routing layer can read it back without the cache.
+//
+// A missing or unparsable stamp deliberately reads as "no IPv6": an interface
+// written by an older version carries none, and guessing the other way would
+// point a v6 default route at a gateway that silently drops it — a black hole,
+// which is worse than no IPv6 at all.
+function iface_ipv6_capable(uci, iface) {
+	let raw = uci.get('network', iface, 'protonvpn_features');
+	if (raw == null)
+		return false;
+	let v = '' + raw;
+	if (!match(v, /^[0-9]+$/))
+		return false;
+	return (int(v) & FEATURE_IPV6) ? true : false;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────
@@ -311,7 +380,10 @@ function load_settings(uci, instance) {
 		// stays off so upgraded/migrated setups keep their manual scheme.
 		auto_routing: g('auto_routing', '0') == '1',
 		killswitch: g('killswitch', '0') == '1',
-		block_ipv6: g('block_ipv6', '1') == '1',
+		// IPv6 handling: 'block' (default), 'auto' or 'off'. The boolean
+		// block_ipv6 this replaced is converted once by the uci-defaults
+		// migration and then gone, so there is a single source of truth.
+		ipv6_mode: validate_ipv6_mode(g('ipv6_mode', 'block')) || 'block',
 		// DNS override mode: 'off' keeps the system/WAN resolver, 'standard'
 		// pushes the ProtonVPN in-tunnel resolver while the tunnel is up.
 		vpn_dns: validate_dns_mode(g('vpn_dns', '')) || 'off',
@@ -435,6 +507,7 @@ function run(argv) {
 // CommonJS export (ucode on OpenWrt 24.10 does not support ES `export`).
 return {
 	VERSION, API_BASE, LOGICALS_URL, CERT_URL,
+	RUN_DIR,
 	DEFAULT_INTERFACE, DEFAULT_PORT, DEFAULT_KEEPALIVE, FIXED_ADDRESS, FIXED_ADDRESS6,
 	VPN_DNS4, VPN_DNS6,
 	CACHE_FILENAME, DEFAULT_CACHE_DIR, FETCH_STATUS_FILE, CACHE_LOCK_FILE,
@@ -445,7 +518,9 @@ return {
 	WATCHDOG_GRACE, WATCHDOG_COOLDOWN_BASE, WATCHDOG_COOLDOWN_MAX,
 	SESSION_MAX_AGE, SESSION_REFRESH_AGE, CERT_MAX_DAYS, CERT_RENEW_DAYS, CERT_SESSION_DAYS,
 	bounded_int, validate_interface, validate_wg_key, validate_hostname,
-	validate_port, validate_hop_mode, validate_dns_mode, relay_kind, validate_rotation_mode, validate_interval, validate_time,
+	FEATURE_SECURE_CORE, FEATURE_TOR, FEATURE_P2P, FEATURE_STREAMING, FEATURE_IPV6,
+	validate_port, validate_hop_mode, validate_dns_mode, validate_ipv6_mode, relay_kind,
+	iface_ipv6_capable, validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,
 	load_settings, list_instances, globals_section, cache_file_path, iso_ts, redact, log,
 	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run

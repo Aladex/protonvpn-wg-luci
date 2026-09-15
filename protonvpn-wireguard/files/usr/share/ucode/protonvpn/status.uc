@@ -11,6 +11,9 @@ const load_settings = _common.load_settings,
       validate_wg_key = _common.validate_wg_key,
       run = _common.run;
 const _api = require('protonvpn.api');
+const _routing = require('protonvpn.routing');
+const ipv6_state = _routing.ipv6_state,
+      detect_routing = _routing.detect;
 
 // Newest WireGuard handshake age in seconds for device `dev`, or null.
 function handshake_age(dev) {
@@ -103,6 +106,7 @@ function required_action(session, cert) {
 
 // Runtime status of one instance. Return shape:
 //   { instance, configured, enabled, fixed, interface, hop_mode,
+//     ipv6: { mode, active, gateway_ipv6, reason },
 //     state: 'not_configured'|'disconnected'|'connecting'|'connected'|'degraded',
 //     location: { country, city }, gateway, endpoint ('host:port' or null),
 //     latest_handshake_seconds (null or int),
@@ -123,6 +127,10 @@ function status(uci, instance) {
 
 	let session = session_info(now);
 	let cert = certificate_info(s.name, now);
+	// Detected once and handed to both ipv6_state() calls below, so asking the
+	// same question twice costs nothing extra on a path the watchdog runs on
+	// every tick.
+	let routing_mode = detect_routing(uci, s, false).mode;
 
 	let result = {
 		instance: s.name,
@@ -140,6 +148,11 @@ function status(uci, instance) {
 			city: uci.get('network', iface, 'protonvpn_city_code')
 		},
 		gateway: peer ? uci.get('network', peer, 'protonvpn_gateway') : null,
+		// Whether IPv6 goes through the tunnel and, when it does not, why —
+		// the answer depends on the gateway, so it cannot be read off the
+		// configuration alone. Re-answered below once the state machine has
+		// run; nothing is connected yet at this point.
+		ipv6: ipv6_state(uci, s, routing_mode, false),
 		endpoint: endpoint_host ? (endpoint_host + ':' + (endpoint_port || '')) : null,
 		latest_handshake_seconds: null,
 		session: session,
@@ -186,6 +199,11 @@ function status(uci, instance) {
 		result.state = 'connected';
 	else
 		result.state = 'degraded';
+
+	// Now that the runtime state is known, ask again: the v6 rules can be
+	// installed and entirely correct while the tunnel is down, and the card
+	// must not report IPv6 as working on a tunnel that is not passing traffic.
+	result.ipv6 = ipv6_state(uci, s, routing_mode, result.state == 'connected');
 
 	return result;
 }

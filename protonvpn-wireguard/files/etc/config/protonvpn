@@ -59,15 +59,27 @@ config instance 'main'
 	# when both are set. Empty = no steering.
 	# list source_network 'guest'
 	# list source_network 'media'
-	# Only meaningful with auto_routing: block LAN->WAN when the VPN is down
-	# (kill switch) and block direct IPv6 so it cannot bypass the tunnel.
+	# Only meaningful with auto_routing or steering: block LAN->WAN when the
+	# VPN is down (kill switch).
 	option killswitch '0'
-	option block_ipv6 '1'
+	# How IPv6 is handled for the routed networks:
+	#   'block' — prohibit IPv6 so it cannot bypass the tunnel (default)
+	#   'auto'  — route it through the tunnel on the gateways that forward
+	#             IPv6 (Features bit 16), prohibit it on the ones that do not.
+	#             Steered routing only; with auto_routing it behaves as 'block'.
+	#   'off'   — do not touch IPv6 at all
+	# 'block' and 'auto' keep their prohibit rule in place while the instance
+	# is disabled or the tunnel is down — that is what stops IPv6 falling back
+	# to the provider. 'off' is the way to ask for IPv6 to be left alone.
+	# 'auto' also addresses the steered networks from the router's ULA and
+	# switches on their router advertisement (ra/ra_slaac/ra_default in
+	# /etc/config/dhcp), recording whatever was there and putting it back.
+	option ipv6_mode 'block'
 	# DNS resolver while the tunnel is up: 'off' (system/WAN) or 'standard'
-	# (ProtonVPN in-tunnel resolver 10.2.0.1 / 2a07:b944::2:1).
+	# (ProtonVPN in-tunnel resolver 10.2.0.1 / fd54:20a4:d33b:b10c:0:2:0:1).
 	option vpn_dns 'off'
 	# Server-list cache directory (empty = /tmp) and background refresh period.
 	option cache_dir ''
 	option cache_refresh_interval '21600'
 	# Stamped by the migration/uci-defaults script; gates one-shot migrations.
-	# option config_version '1'
+	# option config_version '2'

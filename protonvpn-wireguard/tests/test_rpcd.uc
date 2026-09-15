@@ -12,6 +12,10 @@
 
 'use strict';
 
+// Runtime scratch dir of THIS run (tests/run.sh gives each run its own, so
+// two suites can execute concurrently); never the shared /tmp.
+const RUN = getenv('PROTONVPN_RUN_DIR') || '/tmp';
+
 import { readfile, mkdir, unlink } from 'fs';
 const _common = require('protonvpn.common');
 const _cache = require('protonvpn.cache');
@@ -43,7 +47,7 @@ unlink(_api.SESSION_FILE);
 unlink(_common.FETCH_STATUS_FILE);
 unlink(_common.APPLY_STATUS_FILE);
 unlink(_common.APPLY_LOCK_FILE);
-unlink('/tmp/protonvpn_rotate_state.json');
+unlink(RUN + '/protonvpn_rotate_state.json');
 
 // Load the rpcd program; its top-level return is { protonvpn: methods }.
 let obj = loadfile(RPCD)();
@@ -107,7 +111,7 @@ ok('rpcd object present', m != null);
 
 // Build a cache on disk for the read methods.
 let cache = _cache.normalize(json(readfile(fixture)).LogicalServers);
-let cdir = '/tmp/pvrpcd_' + time();
+let cdir = RUN + '/pvrpcd_' + time();
 mkdir(cdir);
 ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers_cache.json') == true);
 
@@ -185,7 +189,7 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 		rel[0].country_code != null && rel[0].city_code != null && rel[0].name != null);
 
 	// With no cache on disk the UI must be told to fetch, not shown an empty list.
-	global.MOCK_UCI.protonvpn.main.cache_dir = '/tmp/pvrpcd_absent';
+	global.MOCK_UCI.protonvpn.main.cache_dir = RUN + '/pvrpcd_absent';
 	let none = m.locations.call();
 	eq('locations missing without a cache', none.state, 'missing');
 	eq('locations unavailable without a cache', none.available, false);
@@ -439,6 +443,6 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 	eq('rpcd status leaves no ubus connection open', global.MOCK_UBUS_OPEN, 0);
 }
 
-unlink('/tmp/protonvpn_rotate_state.json');
+unlink(RUN + '/protonvpn_rotate_state.json');
 printf('\n%s\n', fails ? ('FAILURES: ' + fails) : 'ALL RPCD TESTS PASSED');
 exit(fails ? 1 : 0);

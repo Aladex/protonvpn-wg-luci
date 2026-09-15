@@ -29,6 +29,9 @@ const _routing = require('protonvpn.routing');
 const detect_routing = _routing.detect,
       enforce_routing = _routing.enforce,
       recommend_mtu = _routing.recommend_mtu;
+// Runtime scratch dir of THIS run (see tests/run.sh); never the shared /tmp.
+const RUN = getenv('PROTONVPN_RUN_DIR') || '/tmp';
+
 
 let fails = 0;
 function ok(l, c) { if (c) printf('ok   %s\n', l); else { fails++; printf('FAIL %s\n', l); } }
@@ -78,7 +81,7 @@ let cache = {
 
 // A cache file on disk for the rotate() flow, in the envelope
 // protonvpn.cache writes (schema_version + cached_at + cache_info).
-let cdir = '/tmp/pvtest_' + time();
+let cdir = RUN + '/pvtest_' + time();
 mkdir(cdir);
 let cpath = cdir + '/protonvpn_servers_cache.json';
 _cmn.atomic_write(cpath, sprintf('%J', {
@@ -146,7 +149,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 // ── 4. rotation state persistence: the daemon's attempt clock survives a
 //       restart, record() merges without clobbering, per-instance isolation ─
 {
-	unlink('/tmp/protonvpn_rotate_state.json');
+	unlink(RUN + '/protonvpn_rotate_state.json');
 	eq('last_attempt 0 when no state', _rotate.last_attempt_ts(), 0);
 	_rotate.mark_attempt(1000);
 	eq('last_attempt persisted', _rotate.last_attempt_ts(), 1000);
@@ -155,15 +158,15 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 	eq('record merged last_success', _rotate.read_state().last_success, 2000);
 	_rotate.mark_attempt(3000);
 	eq('mark_attempt keeps last_success', _rotate.read_state().last_success, 2000);
-	unlink('/tmp/protonvpn_rotate_state.json');
+	unlink(RUN + '/protonvpn_rotate_state.json');
 
-	unlink('/tmp/protonvpn_rotate_state_media.json');
+	unlink(RUN + '/protonvpn_rotate_state_media.json');
 	_rotate.mark_attempt(1000);
 	_rotate.mark_attempt(2000, 'media');
 	eq('main rotate state isolated', _rotate.last_attempt_ts(), 1000);
 	eq('media rotate state isolated', _rotate.last_attempt_ts('media'), 2000);
-	unlink('/tmp/protonvpn_rotate_state.json');
-	unlink('/tmp/protonvpn_rotate_state_media.json');
+	unlink(RUN + '/protonvpn_rotate_state.json');
+	unlink(RUN + '/protonvpn_rotate_state_media.json');
 }
 
 // ── 5. write_relay: Proton peer/address/stamp values ─────────────────────
@@ -194,7 +197,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 	// domain, so status and the picker speak the same identity.
 	eq('peer stamped with the logical server name', peer.protonvpn_gateway, 'NL#85');
 	eq('iface addresses are the fixed Proton pair',
-		net.protonvpn.addresses, [ '10.2.0.2/32', '2a07:b944::2:2/128' ]);
+		net.protonvpn.addresses, [ '10.2.0.2/32', 'fd54:20a4:d33b:b10c:0:2:0:2/128' ]);
 	eq('iface vpn_type', net.protonvpn.vpn_type, 'protonvpn');
 	eq('iface city stamp', net.protonvpn.protonvpn_city_code, 'nl-amsterdam');
 	eq('iface country stamp', net.protonvpn.protonvpn_country_code, 'nl');
@@ -327,7 +330,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 // ── 8. rotate(): every candidate fails off-device (ifup fails), so the
 //       previous peer must be restored untouched ───────────────────────────
 {
-	unlink('/tmp/protonvpn_rotate.lock');
+	unlink(RUN + '/protonvpn_rotate.lock');
 	global.MOCK_UCI = {
 		protonvpn: { main: { '.type': 'instance', interface: 'protonvpn',
 			country_code: 'nl', city_code: '', cache_dir: cdir, enabled: '1' } },
@@ -353,14 +356,14 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 	global.MOCK_UCI.protonvpn.main.fixed_server = 'NL#2';
 	eq('rotate skips a pinned server', rotate(cursor()).reason, 'fixed server configured');
 	delete global.MOCK_UCI.protonvpn.main.fixed_server;
-	unlink('/tmp/protonvpn_rotate.lock');
+	unlink(RUN + '/protonvpn_rotate.lock');
 }
 
 // ── 9. routing detection: none vs manual vs steered vs auto ──────────────
 {
 	let mks = function(over) {
 		let base = { interface: 'protonvpn', routing_table: '', auto_routing: false,
-			killswitch: false, block_ipv6: true, vpn_dns: 'off' };
+			killswitch: false, ipv6_mode: 'block', vpn_dns: 'off' };
 		for (let k in over)
 			base[k] = over[k];
 		return base;
@@ -427,7 +430,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 	res = enforce_routing(uci, mks({ auto_routing: true, killswitch: false }));
 	ok('routing: kill switch removed', !detect_routing(uci, mks({ auto_routing: true }), false).killswitch);
 	ok('routing: ipv6 block survives the ks toggle', detect_routing(uci, mks({ auto_routing: true }), false).ipv6_block);
-	res = enforce_routing(uci, mks({ auto_routing: true, block_ipv6: false }));
+	res = enforce_routing(uci, mks({ auto_routing: true, ipv6_mode: 'off' }));
 	ok('routing: ipv6 block removed', !detect_routing(uci, mks({ auto_routing: true }), false).ipv6_block);
 	res = enforce_routing(uci, mks({ auto_routing: true }));
 
@@ -440,7 +443,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
 	uci = cursor();
 	enforce_routing(uci, mks({ auto_routing: true, vpn_dns: 'standard' }));
-	eq('dns: standard pair applied', global.MOCK_UCI.network.protonvpn.dns, [ '10.2.0.1', '2a07:b944::2:1' ]);
+	eq('dns: standard pair applied', global.MOCK_UCI.network.protonvpn.dns, [ '10.2.0.1', 'fd54:20a4:d33b:b10c:0:2:0:1' ]);
 	eq('dns: stamp records the mode', global.MOCK_UCI.network.protonvpn.protonvpn_managed_dns, 'standard');
 	enforce_routing(uci, mks({ auto_routing: true, vpn_dns: 'off' }));
 	eq('dns: off removes the override', global.MOCK_UCI.network.protonvpn.dns, null);
@@ -460,7 +463,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 {
 	let ssteer = function(over) {
 		let base = { interface: 'pv_media', routing_table: '101', auto_routing: false,
-			killswitch: false, block_ipv6: true, vpn_dns: 'off', source_networks: [ 'media' ] };
+			killswitch: false, ipv6_mode: 'block', vpn_dns: 'off', source_networks: [ 'media' ] };
 		for (let k in over)
 			base[k] = over[k];
 		return base;
@@ -575,7 +578,7 @@ _cmn.atomic_write(cpath, sprintf('%J', {
 	} };
 	let uci = cursor();
 	let det = detect_routing(uci, { interface: 'protonvpn', routing_table: '',
-		auto_routing: false, killswitch: false, block_ipv6: true, vpn_dns: 'off' }, true);
+		auto_routing: false, killswitch: false, ipv6_mode: 'block', vpn_dns: 'off' }, true);
 	eq('mtu: wireguard iface not steerable', index(det.networks, 'protonvpn') >= 0, false);
 	ok('mtu: runtime detection survives off-device', det.mode == 'none');
 	eq('mtu: no WAN MTU off-device', det.wan_mtu, null);

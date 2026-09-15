@@ -63,7 +63,7 @@ const SESSION_FILE = SESSION_DIR + '/session.json';
 // Serializes the read-modify-write of the session file in auth_refresh().
 // Kept on tmpfs rather than next to the state file: it is taken on every
 // token renewal and flash has no business wearing out for a lock.
-const SESSION_LOCK_FILE = '/tmp/protonvpn_session.lock';
+const SESSION_LOCK_FILE = _common.RUN_DIR + '/protonvpn_session.lock';
 
 // Access token TTL fallback for the case where the API omits ExpiresIn: a
 // deliberately short guess, not an observed lifetime. What ExpiresIn actually

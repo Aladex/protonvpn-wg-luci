@@ -9,6 +9,10 @@
 
 'use strict';
 
+// Runtime scratch dir of THIS run (tests/run.sh gives each run its own, so
+// two suites can execute concurrently); never the shared /tmp.
+const RUN = getenv('PROTONVPN_RUN_DIR') || '/tmp';
+
 import { readfile, unlink } from 'fs';
 const _cache = require('protonvpn.cache');
 const normalize = _cache.normalize, locations_tree = _cache.locations_tree,
@@ -273,7 +277,7 @@ const doc = normalize(raw.LogicalServers);
 
 // 8. cache file: schema guard, staleness, atomic round-trip
 {
-	let path = '/tmp/protonvpn_test_cache.json';
+	let path = RUN + '/protonvpn_test_cache.json';
 	unlink(path);
 	eq('missing cache is stale', cache_is_stale(path), true);
 	ok('write_cache succeeds', write_cache(doc, path) == true);
