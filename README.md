@@ -7,7 +7,7 @@ with TOTP support, locally generated WireGuard keys registered as Proton
 certificates, an authenticated server list with load and score, a location set
 to connect and rotate across (Standard, Secure Core, Tor), automatic rotation,
 a watchdog, multiple parallel VPN instances, per-network traffic steering with
-kill switch and IPv6 leak protection, and a native LuCI page.
+kill switch and adaptive IPv6, and a native LuCI page.
 
 > **Unofficial.** This project is not affiliated with, endorsed by, or
 > supported by Proton AG. "Proton" and "ProtonVPN" are trademarks of their
@@ -140,18 +140,67 @@ custom routing table or routes you added yourself.
 Instead of routing everything, name **source networks**: only those leave
 through the tunnel, via policy rules into the instance's own routing table.
 The **kill switch** then blocks those networks from reaching the WAN while the
-tunnel is down, and **IPv6 leak protection** stops direct IPv6 bypassing it.
+tunnel is down, and **`ipv6_mode`** decides what happens to IPv6.
 
-IPv6 is blocked rather than routed, and that is deliberate. Proton assigns the
-tunnel an IPv6 address and accepts `::/0`, so the interface looks dual-stack —
-but the servers do not forward IPv6. Measured on servers in two countries: v6
-packets raise the WireGuard transmit counter and nothing ever comes back, while
-IPv4 on the same tunnel is a clean one-for-one; even Proton's own in-tunnel
-resolver stays silent. Proton's own guidance for manual WireGuard configurations
-is to disable IPv6. Routing it anyway would not enable IPv6, it would swallow
-it, and a black hole is worse than a block: clients would wait out Happy
-Eyeballs on every connection and anything that is not a browser would simply
-hang. Blocking keeps them on IPv4, which works.
+IPv6 is a per-server matter on ProtonVPN: only some gateways forward it, and
+Proton marks them with bit 16 of the logical server's `Features` bitmask.
+Measured on 12 gateways across 11 countries by probing `2606:4700:4700::1111`
+through the tunnel — all six with the bit answered in 0.02–1.07 s, all six
+without it timed out at 8–12 s every single time while the WireGuard transmit
+counter kept climbing. On such a server the packets leave and nothing comes
+back, which is not "IPv6 off", it is a black hole — and a black hole is worse
+than a block: clients wait out Happy Eyeballs on every connection and anything
+that is not a browser simply hangs.
+
+So the three modes are:
+
+* `block` (default) — a `prohibit` rule stops IPv6 on the steered networks, as
+  before.
+* `auto` — on a gateway with the bit, IPv6 goes through the tunnel; on one
+  without it, the same `prohibit` as in `block`. The prohibit rule is always
+  installed and sits below the lookup but above the main table, so a down
+  tunnel, a disabled instance or a server without IPv6 stops there and never
+  reaches your provider's default route. That ordering is the IPv6 kill switch.
+* `off` — the app does not touch IPv6 at all.
+
+`auto` applies to steered routing only; with `auto_routing` there are no
+per-network rules to attach it to, so it behaves as `block`. The tunnel's own
+address is a fixed `/128` that every Proton client shares, so there is no
+prefix to delegate: under `auto` the steered networks are addressed from the
+router's own ULA (`ip6assign 64`, `ip6class local`, `delegate 0`) and NAT6'd
+behind the instance's firewall zone. The client then sees a ULA and no ISP
+address at all, which is exactly what keeps Happy Eyeballs from preferring the
+WAN. Allocating a prefix is not the same as announcing one, though: on a
+network where IPv6 was never used — `ra 'disabled'`, which is what the old
+blocking policy encouraged — the client would end up with no address at all. So
+`auto` also switches the router advertisement on for those networks
+(`ra 'server'`, `ra_slaac 1`) and sets `ra_default 1`, without which odhcpd
+advertises a router lifetime of zero on a ULA-only interface and the client
+gets an address it cannot route with. DHCPv6 is left alone. It also opens
+neighbour discovery for the steered networks — router solicitation and
+neighbour solicitation/advertisement, IPv6 only, nothing else, and bound to
+that network's own interface so nothing else sharing its firewall zone is
+covered. A guest-style zone rejects what it does not name, and nothing names
+neighbour discovery, so without that the router cannot resolve a client's
+address and every reply coming back through the tunnel is dropped on the last
+hop. Both the network
+and the `dhcp` settings belong to you, so the previous values are recorded and
+put back when `auto` is switched off. If the router has no ULA prefix of its
+own there is nothing to hand out, and the log says so rather than failing
+quietly.
+
+Which networks this applies to is decided before anything is written, and the
+three parts — addressing, announcement, opening — are granted or refused
+together: a client handed a ULA and told this router is its default gateway, on
+a network whose neighbour discovery was then refused, has an address it cannot
+use and no way to tell. A network qualifies when it is one the router serves
+clients on: a protocol it does not dial out with, no default route of its own,
+a firewall zone to attach the rule to, and a single device to bind it to. That
+last question is asked of the device and not of the network, because an alias
+or a second subnet can sit on the same bridge and carry a gateway of its own,
+and a rule matching the device would cover it too. A network that does not
+qualify is left exactly as you had it, and the log names the network and the
+reason.
 
 ![Traffic routing](docs/screenshots/routing.png)
 
@@ -196,7 +245,7 @@ WireGuard private key on the managed network interface.
 | `source_network` | — | Steer only these networks instead of everything |
 | `routing_table` | — | Custom routing table (empty = main) |
 | `killswitch` | `0` | Block the steered networks from the WAN while down |
-| `block_ipv6` | `1` | Block direct IPv6 so it cannot bypass the tunnel |
+| `ipv6_mode` | `block` | IPv6 handling: `block` (prohibit it), `auto` (through the tunnel on gateways that forward IPv6, prohibit on the rest; steered routing only) or `off` (leave IPv6 alone) |
 | `vpn_dns` | `off` | `off` (system resolver) or `standard` (in-tunnel 10.2.0.1) |
 | `mtu` | — | Interface MTU (the UI recommends WAN MTU − 80) |
 | `cache_dir` | — | Server-list cache directory, shared by all instances |

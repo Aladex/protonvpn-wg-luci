@@ -7,8 +7,8 @@ im Browser samt TOTP-Unterstützung, lokal erzeugte WireGuard-Schlüssel, die al
 Proton-Zertifikate registriert werden, eine authentifizierte Serverliste mit
 Last und Score, ein Standort-Set zum Verbinden und Rotieren (Standard, Secure
 Core, Tor), automatische Rotation, ein Watchdog, mehrere parallele
-VPN-Instanzen, netzweise Traffic-Steuerung mit Kill Switch und
-IPv6-Leck-Schutz sowie eine native LuCI-Seite.
+VPN-Instanzen, netzweise Traffic-Steuerung mit Kill Switch und adaptivem
+IPv6 sowie eine native LuCI-Seite.
 
 > **Inoffiziell.** Dieses Projekt ist weder mit Proton AG verbunden noch von
 > ihnen unterstützt oder befürwortet. „Proton“ und „ProtonVPN“ sind Marken
@@ -151,21 +151,74 @@ es eine eigene Routing-Tabelle oder von dir hinzugefügte Routen erkennt.
 Statt alles zu leiten, benenne **Quellnetzwerke**: nur diese verlassen den
 Router durch den Tunnel, per Policy-Regeln in die eigene Routing-Tabelle der
 Instanz. Der **Kill Switch** verhindert dann, dass diese Netzwerke das WAN
-erreichen, während der Tunnel unten ist, und der **IPv6-Leck-Schutz** hindert
-direktes IPv6 daran, ihn zu umgehen.
+erreichen, während der Tunnel unten ist, und **`ipv6_mode`** entscheidet, was
+mit IPv6 geschieht.
 
-IPv6 wird blockiert statt geleitet, und das ist Absicht. Proton weist dem Tunnel
-eine IPv6-Adresse zu und akzeptiert `::/0`, das Interface sieht also
-dual-stack-fähig aus — die Server leiten IPv6 aber nicht weiter. Auf Servern in
-zwei Ländern nachgemessen: v6-Pakete lassen den Sendezähler von WireGuard
-steigen, und zurück kommt nie etwas, während IPv4 über denselben Tunnel sauber
-eins zu eins läuft; selbst Protons eigener Resolver im Tunnel bleibt stumm.
-Protons eigene Empfehlung für manuelle WireGuard-Konfigurationen lautet, IPv6
-abzuschalten. Es trotzdem in den Tunnel zu leiten würde IPv6 nicht aktivieren,
-sondern verschlucken, und ein schwarzes Loch ist schlimmer als eine Blockade:
-Clients würden bei jeder Verbindung Happy Eyeballs abwarten, und alles, was kein
-Browser ist, würde schlicht hängen. Die Blockade hält sie bei IPv4, und das
-funktioniert.
+IPv6 ist bei ProtonVPN Sache des einzelnen Servers: nur ein Teil der Gateways
+leitet es weiter, und Proton markiert diese mit Bit 16 der `Features`-Bitmaske
+des logischen Servers. Auf 12 Gateways in 11 Ländern nachgemessen, jeweils mit
+einer Anfrage an `2606:4700:4700::1111` durch den Tunnel: alle sechs mit dem Bit
+antworteten in 0,02–1,07 s, alle sechs ohne das Bit liefen jedes Mal in einen
+Timeout von 8–12 s, während der Sendezähler von WireGuard weiter stieg. Auf
+einem solchen Server gehen die Pakete hinaus und nichts kommt zurück — das ist
+kein „IPv6 aus“, sondern ein schwarzes Loch, und ein schwarzes Loch ist
+schlimmer als eine Blockade: Clients warten bei jeder Verbindung Happy Eyeballs
+ab, und alles, was kein Browser ist, hängt schlicht.
+
+Daraus ergeben sich drei Modi:
+
+* `block` (Vorgabe) — eine `prohibit`-Regel stoppt IPv6 auf den geleiteten
+  Netzwerken, wie bisher.
+* `auto` — auf einem Gateway mit dem Bit geht IPv6 durch den Tunnel, auf einem
+  ohne das Bit greift dasselbe `prohibit` wie im Modus `block`. Die
+  `prohibit`-Regel steht immer: sie liegt unter der Lookup-Regel, aber über der
+  Tabelle `main`, sodass ein liegender Tunnel, eine deaktivierte Instanz oder
+  ein Server ohne IPv6 dort endet und die Default-Route des Providers nie
+  erreicht. Genau diese Reihenfolge ist der IPv6-Kill-Switch.
+* `off` — die App fasst IPv6 überhaupt nicht an.
+
+`auto` gilt nur für geleitete Netzwerke; bei `auto_routing` gibt es keine
+Regeln pro Netzwerk, an die es sich hängen ließe, also verhält es sich wie
+`block`. Die Tunnel-Adresse selbst ist ein festes `/128`, das sich alle
+Proton-Clients teilen — es gibt kein Präfix zu delegieren. Unter `auto` werden
+die geleiteten Netzwerke deshalb aus der ULA des Routers adressiert
+(`ip6assign 64`, `ip6class local`, `delegate 0`) und hinter der Firewall-Zone
+der Instanz per NAT6 übersetzt. Der Client sieht dann nur eine ULA und keine
+Provider-Adresse, und genau das hindert Happy Eyeballs daran, das WAN
+vorzuziehen. Ein Präfix zuzuteilen heißt aber nicht, es anzukündigen: in einem
+Netzwerk, in dem IPv6 nie benutzt wurde — `ra 'disabled'`, wozu die frühere
+Blockade-Politik geradezu einlud — bekäme der Client überhaupt keine Adresse.
+Deshalb schaltet `auto` für diese Netzwerke auch das Router Advertisement ein
+(`ra 'server'`, `ra_slaac 1`) und setzt `ra_default 1`; ohne das kündigt odhcpd
+auf einem Interface mit ausschließlich ULA eine Router-Lifetime von 0 an, und
+der Client erhält eine Adresse, mit der er nicht routen kann. DHCPv6 bleibt
+unangetastet. Zusätzlich wird Neighbour Discovery für die geleiteten
+Netzwerke geöffnet — Router Solicitation sowie Neighbour
+Solicitation/Advertisement, ausschließlich IPv6 und sonst nichts, gebunden an
+das Interface des Netzwerks selbst, sodass nichts anderes aus seiner
+Firewall-Zone erfasst wird. Eine
+Gast-Zone weist ab, was sie nicht ausdrücklich nennt, und Neighbour Discovery
+nennt dort niemand; ohne das kann der Router die Adresse eines Clients nicht
+auflösen, und jede Antwort aus dem Tunnel geht auf dem letzten Stück
+verloren. Sowohl die Netzwerk- als auch die `dhcp`-Einstellungen gehören
+dir, also werden die vorigen Werte gemerkt und zurückgeschrieben, sobald `auto`
+abgeschaltet wird. Hat der Router kein eigenes ULA-Präfix, gibt es nichts zu
+verteilen — das steht dann im Log, statt still zu scheitern.
+
+Für welche Netzwerke das gilt, wird entschieden, bevor irgendetwas geschrieben
+wird, und die drei Teile — Adressierung, Ankündigung, Öffnung — werden
+gemeinsam gewährt oder gemeinsam verweigert: Ein Client, der eine ULA bekommt
+und diesen Router als Standard-Gateway genannt bekommt, dessen Netzwerk
+Neighbour Discovery dann aber verweigert wurde, hat eine Adresse, die er nicht
+benutzen kann, und erfährt es nicht. Ein Netzwerk qualifiziert sich, wenn es
+eines ist, in dem der Router Clients bedient: ein Protokoll, mit dem er nicht
+nach außen wählt, keine eigene Standardroute, eine Firewall-Zone, an die sich
+die Regel hängen lässt, und genau ein Gerät, an das sie gebunden werden kann.
+Die letzte Frage wird dem Gerät gestellt und nicht dem Netzwerk, denn ein Alias
+oder ein zweites Subnetz kann auf derselben Bridge liegen und ein eigenes
+Gateway führen, und eine Regel, die auf das Gerät passt, würde es mit erfassen.
+Ein Netzwerk, das sich nicht qualifiziert, bleibt genau so, wie du es hattest,
+und das Log nennt das Netzwerk und den Grund.
 
 ![Traffic-Routing](docs/screenshots/routing.png)
 
@@ -213,7 +266,7 @@ Netzwerk-Interface.
 | `source_network` | — | Nur diese Netzwerke steuern statt alles |
 | `routing_table` | — | Eigene Routing-Tabelle (leer = main) |
 | `killswitch` | `0` | Den gesteuerten Netzwerken das WAN sperren, solange der Tunnel unten ist |
-| `block_ipv6` | `1` | Direktes IPv6 blockieren, damit es den Tunnel nicht umgehen kann |
+| `ipv6_mode` | `block` | Umgang mit IPv6: `block` (verbieten), `auto` (durch den Tunnel auf Gateways, die IPv6 weiterleiten, sonst verbieten; nur bei geleiteten Netzwerken) oder `off` (nicht anfassen) |
 | `vpn_dns` | `off` | `off` (System-Resolver) oder `standard` (im Tunnel, 10.2.0.1) |
 | `mtu` | — | Interface-MTU (die UI empfiehlt WAN-MTU − 80) |
 | `cache_dir` | — | Verzeichnis für den Serverlisten-Cache, von allen Instanzen gemeinsam genutzt |
