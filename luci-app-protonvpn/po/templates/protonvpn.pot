@@ -5,3 +5,58 @@ msgstr "Content-Type: text/plain; charset=UTF-8\n"
 #   ./build/i18n-scan.pl applications/luci-app-protonvpn \
 #       > applications/luci-app-protonvpn/po/templates/protonvpn.pot
 # Do not hand-edit translated .po files; upstream translations use Weblate.
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1613
+msgid "IPv6 through the tunnel"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1615
+msgid "IPv6 blocked — this server does not forward it"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2068
+msgid "Block — no IPv6 past the router"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2069
+msgid "Automatic — through the tunnel where the server supports it"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2070
+msgid "Off — leave IPv6 alone"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2101
+msgid ""
+"ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through "
+"the tunnel on those and keeps blocking it on the rest, so it can never fall "
+"back to your provider."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2143
+msgid ""
+"Automatic IPv6 needs steered networks; while all LAN traffic goes through "
+"the VPN, IPv6 is blocked."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2145
+msgid ""
+"This server does not forward IPv6, so it stays blocked until the next one "
+"that does."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2147
+msgid "IPv6 is going through the tunnel on this server."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2100
+msgid "(steered by %s)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1443
+msgid "IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1442
+msgid "This server forwards IPv6 through the tunnel"
+msgstr ""

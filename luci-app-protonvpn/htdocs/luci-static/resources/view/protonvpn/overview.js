@@ -128,6 +128,12 @@ var STYLE = '' +
 	'.pv-dot-hi{background:#c0392b}' +
 	'.pv-srv-load{color:var(--text-color-medium,#888);font-variant-numeric:tabular-nums;flex:none}' +
 	'.pv-srv-cur{color:#3c8c3c;font-weight:600;flex:none}' +
+	// Deliberately muted and theme-driven, unlike pv-srv-cur's hardcoded
+	// green: it marks a capability, not a state, and it shares a narrow row
+	// with the load figure — which must never be pushed off.
+	'.pv-srv-v6{flex:none;font-size:78%;font-weight:600;line-height:1.5;' +
+		'padding:0 .3em;border:1px solid var(--border-color-medium,#ccc);' +
+		'border-radius:3px;color:var(--text-color-medium,#888);white-space:nowrap}' +
 	'.pv-srv-grp{font-weight:600;padding:.35em .5em .15em;color:var(--text-color-medium,#888)}' +
 	'.pv-pool-row.pv-srv-quick{font-weight:600}' +
 	// Plain flex rows (no LuCI .table classes), so the theme's own responsive
@@ -1382,6 +1388,13 @@ return view.extend({
 		}
 		el.appendChild(E('div', { class: 'pv-pool-sep' }));
 
+		// The badge only means something under ipv6_mode 'auto': that is the
+		// one mode where the bit changes what happens to a client's traffic.
+		// In 'block'/'off' IPv6 is not routed whichever server is picked, so
+		// labelling servers would be noise — and an invitation to ask why the
+		// label lies.
+		var showV6 = (uci.get('protonvpn', this.instance, 'ipv6_mode') || 'block') === 'auto';
+
 		var groups = [], byCode = {};
 		((this._serverData && this._serverData.relays) || []).forEach(L.bind(function(r) {
 			var cname = this.countryLabel(r.country_code);
@@ -1429,6 +1442,11 @@ return view.extend({
 						r.secure_core ? E('span', { class: 'pv-tagline' },
 							this.countryLabel(r.entry_country) + ' → ') : '',
 						r.tier === 0 ? E('span', { class: 'pv-tagline' }, _('free')) : '',
+						// Bit 16 of the logical server's Features bitmask is
+						// ProtonVPN's IPv6 flag (protonvpn.common FEATURE_IPV6);
+						// cache.uc keeps the raw mask on every relay.
+						(showV6 && (r.features & 16)) ? E('span', { class: 'pv-srv-v6',
+							title: _('This server forwards IPv6 through the tunnel') }, _('IPv6')) : '',
 						isCur ? E('span', { class: 'pv-srv-cur' }, '● ' + _('current')) : '',
 						E('span', { class: 'pv-srv-load' }, r.load != null ? '%d%%'.format(r.load) : '')
 					]));
@@ -1604,6 +1622,16 @@ return view.extend({
 		// the extra latency and the sites that reject Tor need explaining.
 		if (st.hop_mode === 'tor')
 			sub.push(_('🧅 Tor over VPN'));
+		// IPv6 is the one routing decision that changes from server to server,
+		// so the card has to say what it is doing right now — and, when it is
+		// doing nothing, that the server is the reason rather than a setting.
+		var v6 = st.ipv6 || {};
+		if (v6.mode === 'auto') {
+			if (v6.active)
+				sub.push(_('IPv6 through the tunnel'));
+			else if (v6.reason === 'gateway_no_ipv6')
+				sub.push(_('IPv6 blocked — this server does not forward it'));
+		}
 		// From the LAN a working kill switch looks exactly like a broken
 		// internet connection, so name it whenever it is the reason.
 		if (disp !== 'connected' && st.routing && st.routing.killswitch)
@@ -2047,20 +2075,48 @@ return view.extend({
 			this.autoRouting.checked = (g('auto_routing', '0') === '1');
 			this.ksBox = E('input', { type: 'checkbox', change: L.bind(this.markDirty, this) });
 			this.ksBox.checked = (g('killswitch', '0') === '1');
-			this.v6Box = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
-			this.v6Box.checked = (g('block_ipv6', '1') === '1');
+			// Three-valued on purpose: 'auto' is not "block off", it routes
+			// IPv6 into the tunnel on the gateways that forward it and keeps
+			// prohibiting it on the ones that do not, so there is no single
+			// checkbox state that describes it.
+			var v6mode = g('ipv6_mode', 'block');
+			if ([ 'block', 'auto', 'off' ].indexOf(v6mode) < 0)
+				v6mode = 'block';
+			this.v6Sel = E('select', { class: 'cbi-input-select', change: L.bind(this.onRoutingToggle, this) }, [
+				E('option', { value: 'block' }, _('Block — no IPv6 past the router')),
+				E('option', { value: 'auto' }, _('Automatic — through the tunnel where the server supports it')),
+				E('option', { value: 'off' }, _('Off — leave IPv6 alone'))
+			]);
+			this.v6Sel.value = v6mode;
 			this.v6Warn = E('div', { class: 'cbi-value-description pv-inline-note hidden' },
 				_('⚠ IPv6 stays outside the tunnel and can leak your address.'));
+			// Filled in by onRoutingToggle: why 'auto' is unavailable, or what
+			// it is doing on the gateway the tunnel is on right now.
+			this.v6Note = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, '');
 
 			this.steerBoxes = {};
 			var current = uci.get('protonvpn', this.instance, 'source_network');
 			var currentList = Array.isArray(current) ? current : (current ? [ current ] : []);
+			// Two instances steering one network give it two policy rules at
+			// the same priority and one shared IPv6 addressing record, so
+			// whichever is torn down first re-addresses the other's clients.
+			// Nothing in the backend can reject that — the page writes uci
+			// directly — so refuse it here, where the choice is made.
+			var takenBy = this.networkOwners();
 			var nets = rt.networks || [];
 			this.steerWrap = E('div', { class: 'pv-inline', style: 'gap:1em' }, nets.map(L.bind(function (n) {
+				var owner = takenBy[n];
 				var cb = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
 				cb.checked = currentList.indexOf(n) >= 0;
+				// Never lock a box this instance already owns, or the network
+				// could not be handed back.
+				cb.disabled = !!owner && !cb.checked;
 				this.steerBoxes[n] = cb;
-				return E('label', { class: 'pv-check' }, [ cb, n ]);
+				var label = E('label', { class: 'pv-check' }, [ cb, n ]);
+				if (cb.disabled)
+					label.appendChild(E('span', { class: 'pv-inline-note' },
+						_('(steered by %s)').format(owner)));
+				return label;
 			}, this)));
 
 			body.appendChild(this.row(_('Traffic routing'), [
@@ -2073,10 +2129,8 @@ return view.extend({
 			this.ksRow = this.row(_('Kill switch'), [
 				E('label', { class: 'pv-check' }, [ this.ksBox, _('Block LAN internet access while the VPN is down') ])
 			]);
-			this.v6Row = this.row(_('IPv6'), [
-				E('label', { class: 'pv-check' }, [ this.v6Box, _('Block direct IPv6 to prevent leaks') ]),
-				this.v6Warn
-			]);
+			this.v6Row = this.row(_('IPv6'), [ this.v6Sel, this.v6Note, this.v6Warn ],
+				_('ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through the tunnel on those and keeps blocking it on the rest, so it can never fall back to your provider.'));
 			body.appendChild(this.ksRow);
 			body.appendChild(this.v6Row);
 			this.onRoutingToggle(true);
@@ -2086,6 +2140,20 @@ return view.extend({
 			E('legend', {}, _('Traffic routing')),
 			body
 		]);
+	},
+
+	// Logical networks another instance already steers, mapped to its name.
+	networkOwners: function () {
+		var out = {};
+		(this.instances || []).forEach(L.bind(function (st) {
+			var name = st.instance;
+			if (!name || name === this.instance)
+				return;
+			var sn = uci.get('protonvpn', name, 'source_network');
+			var list = Array.isArray(sn) ? sn : (sn ? [ sn ] : []);
+			list.forEach(function (n) { out[n] = name; });
+		}, this));
+		return out;
 	},
 
 	steeredNetworks: function () {
@@ -2105,8 +2173,33 @@ return view.extend({
 		if (this.ksRow) this.ksRow.classList.toggle('hidden', !on);
 		if (this.v6Row) this.v6Row.classList.toggle('hidden', !on);
 		var rt = (this.status || {}).routing || {};
+		var mode = this.v6Sel ? this.v6Sel.value : 'block';
+		// 'auto' hangs off the per-network policy rules that only steered
+		// routing creates, so routing everything through the tunnel leaves
+		// nothing to attach it to — say so instead of offering a dead option.
+		var autoOpt = this.v6Sel ? this.v6Sel.querySelector('option[value="auto"]') : null;
+		if (autoOpt)
+			autoOpt.disabled = !!auto;
+		if (auto && mode === 'auto' && this.v6Sel) {
+			this.v6Sel.value = 'block';
+			mode = 'block';
+		}
+		var note = '';
+		if (auto)
+			note = _('Automatic IPv6 needs steered networks; while all LAN traffic goes through the VPN, IPv6 is blocked.');
+		else if (mode === 'auto' && rt.ipv6_gateway === false)
+			note = _('This server does not forward IPv6, so it stays blocked until the next one that does.');
+		// st.ipv6.active, not rt.ipv6_tunnel: the rule can be installed and
+		// perfectly correct while the tunnel is down, and nothing is going
+		// through it then.
+		else if (mode === 'auto' && ((this.status || {}).ipv6 || {}).active)
+			note = _('IPv6 is going through the tunnel on this server.');
+		if (this.v6Note) {
+			this.v6Note.textContent = note;
+			this.v6Note.classList.toggle('hidden', !(on && note));
+		}
 		if (this.v6Warn)
-			this.v6Warn.classList.toggle('hidden', !(on && this.v6Box && !this.v6Box.checked && rt.ipv6_wan));
+			this.v6Warn.classList.toggle('hidden', !(on && mode === 'off' && rt.ipv6_wan));
 	},
 
 	buildRotation: function () {
@@ -2396,7 +2489,10 @@ return view.extend({
 			var steered = autoOn ? [] : this.steeredNetworks();
 			uci.set('protonvpn', inst, 'auto_routing', autoOn ? '1' : '0');
 			uci.set('protonvpn', inst, 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
-			uci.set('protonvpn', inst, 'block_ipv6', (this.v6Box && this.v6Box.checked) ? '1' : '0');
+			// auto_routing has no steered networks to attach the IPv6 lookup
+			// rules to, so 'auto' is stored as the 'block' it behaves as.
+			var v6 = (this.v6Sel && this.v6Sel.value) || 'block';
+			uci.set('protonvpn', inst, 'ipv6_mode', (autoOn && v6 === 'auto') ? 'block' : v6);
 			uci.set('protonvpn', inst, 'vpn_dns', (this.dnsSel && this.dnsSel.value) || 'off');
 			if (steered.length) {
 				uci.set('protonvpn', inst, 'source_network', steered);
