@@ -63,8 +63,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake gcc build-essential libjson-c-dev git
-          git clone --depth 1 https://github.com/jow-/ucode.git /tmp/ucode
+          # Pinned to a commit, not master. Upstream f2d62f8 (2026-08-08)
+          # started caching sources by resolved path and reuses an already-open
+          # file without rewinding it, so a second loadfile() of the same path
+          # reads from EOF. tests/test_instances.uc loads the rpcd module twice,
+          # which is a legitimate thing to do, and since that commit it dies
+          # with "Syntax error: Unexpected character" one line past the end of
+          # protonvpn.uc. The regression is upstream's, not this repository's —
+          # before unpinning, check that a repeated loadfile() works again.
+          UCODE_COMMIT=5b4cfe154b07b77eed84435ce5e62c6f5606b589  # last good, 2026-08-08
+          mkdir -p /tmp/ucode
           cd /tmp/ucode
+          git init -q .
+          git remote add origin https://github.com/jow-/ucode.git
+          # Fetch the SHA itself: a shallow clone of a branch head would drift.
+          git fetch -q --depth 1 origin "$UCODE_COMMIT"
+          git checkout -q FETCH_HEAD
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DFS_SUPPORT=ON -DMATH_SUPPORT=ON -DSTRUCT_SUPPORT=OFF \
             -DUBUS_SUPPORT=OFF -DUCI_SUPPORT=OFF -DULOOP_SUPPORT=OFF \
