@@ -273,6 +273,83 @@ function iface_ipv6_capable(uci, iface) {
 	return (int(v) & FEATURE_IPV6) ? true : false;
 }
 
+// True when a normalized relay carries ProtonVPN's IPv6 feature bit. The
+// counterpart of iface_ipv6_capable() on the cache side, and it errs the same
+// way: a relay from a cache written before `features` was kept has none, and
+// reading that as "IPv6 capable" would hand the user a gateway that drops it.
+function relay_ipv6_capable(r) {
+	if (type(r) != 'object')
+		return false;
+	let f = r.features;
+	if (type(f) == 'string' && match(f, /^[0-9]+$/))
+		f = int(f);
+	if (type(f) != 'int')
+		return false;
+	return (f & FEATURE_IPV6) ? true : false;
+}
+
+// Whether the "only gateways that forward IPv6" requirement actually applies
+// to this instance's server selection.
+//
+// The option is only meaningful under ipv6_mode 'auto': that is the one mode
+// where the bit changes what happens to a client's traffic, so narrowing the
+// fleet in 'block'/'off' would cost servers and buy nothing. And it is only
+// satisfiable under hop_mode 'standard': measured on the full fleet cache,
+// bit 16 appears on 0 of 122 Secure Core and 0 of 7 Tor logicals, so those
+// combinations can only ever yield an empty candidate list.
+//
+// It also has to be routing IPv6 at all. 'auto' hands clients IPv6 only
+// through the per-network policy rules that steered routing creates, so with
+// auto_routing, with no steered network, or with no routing table to steer
+// into, the mode is inert whatever gateway is picked. Requiring IPv6 there
+// could only refuse an otherwise usable VPN over an option that changes
+// nothing — the same bad trade the ipv6_mode guard above avoids. The three
+// conditions mirror protonvpn.routing steering_configured(), read off the
+// settings so this stays pure and the selection layer needs no uci cursor.
+//
+// The raw option stays in UCI whatever any of this says, so flipping hop mode
+// or routing out and back does not silently forget what the user asked for;
+// this function is the single place that decides whether it bites.
+function require_ipv6_active(s) {
+	if (!s || !s.require_ipv6)
+		return false;
+	if (s.ipv6_mode != 'auto' || s.hop_mode != 'standard')
+		return false;
+	if (s.auto_routing)
+		return false;
+	return length(s.source_networks || []) > 0 &&
+		s.routing_table != null && s.routing_table != '';
+}
+
+// Why this instance's IPv6 requirement could not be met, as recorded on the
+// managed interface by the apply/rotation paths, or null.
+//
+// It has to be persisted rather than recomputed because the distinction is
+// only knowable at the moment of the refusal: afterwards there is no peer to
+// inspect, and telling "the selected locations hold no IPv6 gateway" apart
+// from "the IPv6 gateways here could not be reached" would mean re-reading the
+// 7.5 MB server cache on a path the UI polls every five seconds.
+//
+// The distinction matters because the advice differs and the wrong advice is
+// worse than none: the first case wants wider locations, while the second
+// wants another attempt — the gateways do forward IPv6, they were merely
+// unreachable, so widening the locations or dropping the requirement would
+// undo a setting that was never the problem.
+const IPV6_UNMET_CAUSES = [ 'no_gateway', 'unreachable', 'pinned' ];
+
+function iface_ipv6_unmet(uci, iface) {
+	let raw = uci.get('network', iface, 'protonvpn_ipv6_unmet');
+	if (raw == null)
+		return null;
+	let v = '' + raw;
+	for (let c in IPV6_UNMET_CAUSES)
+		if (v == c)
+			return v;
+	// An unknown value is treated as "no idea why", which still lets the UI
+	// say the requirement is the reason without inventing a cause.
+	return null;
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────
 
 // All `config instance` section names, 'main' first.
@@ -384,6 +461,9 @@ function load_settings(uci, instance) {
 		// block_ipv6 this replaced is converted once by the uci-defaults
 		// migration and then gone, so there is a single source of truth.
 		ipv6_mode: validate_ipv6_mode(g('ipv6_mode', 'block')) || 'block',
+		// Narrow server selection to gateways that forward IPv6 (bit 16).
+		// Stored raw; require_ipv6_active() decides whether it applies.
+		require_ipv6: g('require_ipv6', '0') == '1',
 		// DNS override mode: 'off' keeps the system/WAN resolver, 'standard'
 		// pushes the ProtonVPN in-tunnel resolver while the tunnel is up.
 		vpn_dns: validate_dns_mode(g('vpn_dns', '')) || 'off',
@@ -520,7 +600,9 @@ return {
 	bounded_int, validate_interface, validate_wg_key, validate_hostname,
 	FEATURE_SECURE_CORE, FEATURE_TOR, FEATURE_P2P, FEATURE_STREAMING, FEATURE_IPV6,
 	validate_port, validate_hop_mode, validate_dns_mode, validate_ipv6_mode, relay_kind,
-	iface_ipv6_capable, validate_rotation_mode, validate_interval, validate_time,
+	iface_ipv6_capable, relay_ipv6_capable, require_ipv6_active,
+	iface_ipv6_unmet, IPV6_UNMET_CAUSES,
+	validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,
 	load_settings, list_instances, globals_section, cache_file_path, iso_ts, redact, log,
 	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run

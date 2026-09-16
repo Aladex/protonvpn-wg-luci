@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Test stub for netifd's `ifdown`, which does not exist off-device. On a real
+# router the command succeeds, so this one does too — production code never
+# checks its exit status anyway.
+#
+# What it adds is a record. Taking a tunnel down has two halves: the peer
+# disappears from the configuration, which the uci mock shows, and the
+# interface is actually brought down, which leaves no uci trace at all. Without
+# this log a test can only assert the first half, and an implementation that
+# removed the peer but never ran ifdown would pass — that exact mutation
+# survived until this stub existed.
+#
+# One line per call, appended, so a test can assert both that it happened and
+# how many times. run.sh gives every run its own state directory, so the log
+# cannot leak between runs.
+printf '%s\n' "$1" >> "${PROTONVPN_STATE_DIR:-/tmp/protonvpn-test-state}/ifdown.log"
+exit 0

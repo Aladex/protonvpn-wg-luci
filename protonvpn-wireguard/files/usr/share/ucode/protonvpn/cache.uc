@@ -17,6 +17,7 @@ const LOGICALS_URL = _common.LOGICALS_URL,
       CACHE_LOCK_FILE = _common.CACHE_LOCK_FILE,
       DEFAULT_PORT = _common.DEFAULT_PORT,
       relay_kind = _common.relay_kind,
+      relay_ipv6_capable = _common.relay_ipv6_capable,
       atomic_write = _common.atomic_write,
       acquire_lock = _common.acquire_lock,
       release_lock = _common.release_lock,
@@ -231,19 +232,31 @@ function locations_tree(cache) {
 	if (!cache || type(cache.countries) != 'array')
 		return out;
 	for (let c in cache.countries) {
-		let cities = [], totals = { standard: 0, secure_core: 0, tor: 0 };
+		let cities = [], totals = { standard: 0, secure_core: 0, tor: 0, ipv6: 0 };
 		for (let city in c.cities) {
-			let n = { standard: 0, secure_core: 0, tor: 0 };
-			for (let r in city.relays)
-				n[relay_kind(r)]++;
-			for (let k in [ 'standard', 'secure_core', 'tor' ])
+			let n = { standard: 0, secure_core: 0, tor: 0, ipv6: 0 };
+			for (let r in city.relays) {
+				let kind = relay_kind(r);
+				n[kind]++;
+				// Counted against the standard kind only, which is the one the
+				// IPv6 requirement can apply to. It is also the only place the
+				// bit occurs: across the full fleet it is set on 0 of 122
+				// Secure Core and 0 of 7 Tor logicals.
+				if (kind == 'standard' && relay_ipv6_capable(r))
+					n.ipv6++;
+			}
+			for (let k in [ 'standard', 'secure_core', 'tor', 'ipv6' ])
 				totals[k] += n[k];
 			push(cities, {
 				code: city.code, name: city.name,
 				gateway_count: length(city.relays),
 				standard_count: n.standard,
 				secure_core_count: n.secure_core,
-				tor_count: n.tor
+				tor_count: n.tor,
+				// "N of M", not a yes/no: a city where 3 of 40 gateways carry
+				// the bit is not the same offer as one where 38 do, and a
+				// boolean would have to call both of them "yes".
+				ipv6_count: n.ipv6
 			});
 		}
 		push(out, {
@@ -252,19 +265,23 @@ function locations_tree(cache) {
 			standard_count: totals.standard,
 			secure_core_count: totals.secure_core,
 			tor_count: totals.tor,
+			ipv6_count: totals.ipv6,
 			cities: cities
 		});
 	}
 	return out;
 }
 
-// Relay fields the UI needs; the public key and raw bitmask stay in the cache.
+// Relay fields the UI needs; the public key stays in the cache. The raw
+// Features bitmask is included because the page decides two things from bit
+// 16 — the per-server IPv6 badge and, when the instance requires IPv6, which
+// gateways it may offer at all — and it has no other way to see it.
 function trim_relay(r) {
 	return {
 		hostname: r.hostname, name: r.name, city: r.city,
 		country_code: r.country_code, city_code: r.city_code,
 		load: r.load, score: r.score, tier: r.tier,
-		secure_core: r.secure_core, tor: r.tor,
+		features: r.features, secure_core: r.secure_core, tor: r.tor,
 		entry_country: r.entry_country
 	};
 }

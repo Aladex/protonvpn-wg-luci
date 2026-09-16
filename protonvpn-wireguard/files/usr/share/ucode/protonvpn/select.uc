@@ -5,7 +5,10 @@
 'use strict';
 
 import { rand } from 'math';
-const relay_kind = require('protonvpn.common').relay_kind;
+const _common = require('protonvpn.common');
+const relay_kind = _common.relay_kind,
+      relay_ipv6_capable = _common.relay_ipv6_capable,
+      require_ipv6_active = _common.require_ipv6_active;
 
 // All relays matching country/city/hop_mode. city_code '' = any city;
 // 'secure_core'/'tor' select exactly that kind, anything else selects
@@ -64,15 +67,41 @@ function location_candidates(cache, locations, hop_mode) {
 	return out;
 }
 
-// The location set wins when non-empty; otherwise the legacy
+// Everything geography and hop mode allow, before the IPv6 requirement gets a
+// say. The location set wins when non-empty; otherwise the legacy
 // country_code/city_code selection applies.
-function selection_candidates(cache, settings) {
+function geographic_candidates(cache, settings) {
 	if (!settings)
 		return [];
 	let loc = settings.locations;
 	if (loc && length(loc) > 0)
 		return location_candidates(cache, loc, settings.hop_mode);
 	return candidates(cache, settings.country_code, settings.city_code, settings.hop_mode);
+}
+
+// The candidate list plus enough context to explain an empty one.
+//
+// `matched` counts what the location set and hop mode alone select, so a
+// caller can tell "you picked nowhere" apart from "you picked somewhere with
+// no IPv6 gateway in it" — two very different things to tell a user, and the
+// second one must never be answered by connecting anyway. `ipv6_filtered`
+// says whether the requirement was applied at all, so the message is only
+// ever blamed on IPv6 when IPv6 is what narrowed the list.
+function selection_report(cache, settings) {
+	let all = geographic_candidates(cache, settings);
+	if (!require_ipv6_active(settings))
+		return { list: all, matched: length(all), ipv6_filtered: false };
+	return { list: filter(all, relay_ipv6_capable), matched: length(all),
+		ipv6_filtered: true };
+}
+
+// The servers this instance may connect to, narrowed to gateways that forward
+// IPv6 when the instance requires it. Every selection path — the initial
+// apply, scheduled rotation and the watchdog's recovery rotation — goes
+// through here, so the requirement cannot be honoured on one and forgotten on
+// another.
+function selection_candidates(cache, settings) {
+	return selection_report(cache, settings).list;
 }
 
 // One relay by hostname (logical server name) or null.
@@ -108,4 +137,5 @@ function pick(list, exclude_hostname) {
 	return pool[rand() % length(pool)];
 }
 
-return { candidates, location_candidates, selection_candidates, by_hostname, pick };
+return { candidates, location_candidates, geographic_candidates,
+	selection_report, selection_candidates, by_hostname, pick };

@@ -32,9 +32,8 @@ const FIXED_ADDRESS = _common.FIXED_ADDRESS,
       run = _common.run;
 const read_cache = require('protonvpn.cache').read_cache;
 const _select = require('protonvpn.select');
-const selection_candidates = _select.selection_candidates,
-      by_hostname = _select.by_hostname,
-      pick = _select.pick;
+const selection_report = _select.selection_report,
+      by_hostname = _select.by_hostname;
 const _api = require('protonvpn.api');
 const _routing = require('protonvpn.routing');
 const enforce_routing = _routing.enforce,
@@ -445,6 +444,12 @@ function write_relay(uci, iface, relay, s) {
 	uci.set('network', iface, 'proto', 'wireguard');
 	uci.set('network', iface, 'vpn_type', 'protonvpn');
 	uci.set('network', iface, 'auto', '1');
+	// Writing a peer at all means we are no longer refusing, so whatever
+	// reason was recorded for a previous refusal is now stale. Cleared here
+	// rather than on success because every write is an attempt to connect,
+	// and a stale cause outliving one would make the status band explain a
+	// refusal that is no longer happening.
+	uci.delete('network', iface, 'protonvpn_ipv6_unmet');
 	// ProtonVPN assigns the same tunnel addresses to every client (like
 	// Nord's 10.5.0.2, unlike Mullvad's per-device addresses).
 	uci.set('network', iface, 'addresses', [ FIXED_ADDRESS, FIXED_ADDRESS6 ]);
@@ -576,6 +581,108 @@ function settle_ipv6(uci, s) {
 	run([ 'ubus', 'call', 'network', 'reload' ]);
 }
 
+// The half of the teardown the user does not expect. Taking the tunnel down
+// leaves the steered networks' IPv4 on the provider unless the kill switch is
+// on: the same posture as any other connection failure, but someone who just
+// turned ON a privacy option will not assume they now have less cover, so the
+// message says so instead of leaving it to the documentation.
+function teardown_note(s) {
+	return s.killswitch
+		? '. The tunnel was taken down rather than left on a gateway without IPv6; ' +
+			'the kill switch is blocking its networks meanwhile'
+		: '. The tunnel was taken down rather than left on a gateway without IPv6; ' +
+			'its networks now reach the internet through your provider — turn the ' +
+			'kill switch on to block them instead';
+}
+
+// A note on the `ipv6_required` / `tunnel_down` flags the refusals below
+// return: they are the machine-readable outcome for ubus callers (the CLI, a
+// script), not the page's source of truth. The page derives what it shows from
+// protonvpn.status, because the reply to an action only reaches whoever was
+// watching at that moment while a reload or a background rotation has nothing
+// but status — see mark_ipv6_unmet just below.
+
+// Record WHY this instance's IPv6 requirement could not be met, on the managed
+// interface so protonvpn.status can read it back.
+//
+// This is what makes the refusal survive the click that caused it. The reply
+// to an apply is seen only by whoever was watching the page at that moment;
+// a reload, the status poll and a background rotation all rebuild the page
+// from status alone, and those are the normal case. Without this the user
+// comes back to a dead tunnel and a message about a server that is not there.
+function mark_ipv6_unmet(uci, s, cause) {
+	let iface = validate_interface(s.interface);
+	// No interface section means nothing to stamp and nothing to explain.
+	if (!iface || uci.get('network', iface) == null)
+		return false;
+	uci.set('network', iface, 'protonvpn_ipv6_unmet', cause);
+	uci.commit('network');
+	return true;
+}
+
+// Remove the peer, drop the feature stamp and take the interface down.
+//
+// Used where the IPv6 requirement cannot be met. It is deliberately more than
+// an `ifdown`: leaving the peer section behind means the next netifd reload —
+// or a hand-run ifup — silently reconnects to the very gateway the refusal was
+// about. The stamp goes with it, so nothing downstream can read a capability
+// the interface no longer has.
+//
+// `auto` is left alone on purpose. disconnect() clears it because a paused
+// instance must stay down until the user says otherwise; this is not that. The
+// instance stays enabled so the next apply, the rotation clock and the
+// watchdog all keep retrying — the fleet and the location set change, and a
+// requirement that cannot be met now may be met later.
+function tear_down_peer(uci, iface) {
+	let peer = find_peer(uci, iface);
+	if (peer)
+		uci.delete('network', peer);
+	uci.delete('network', iface, 'protonvpn_features');
+	uci.commit('network');
+	run([ 'ifdown', iface ]);
+	return peer != null;
+}
+
+// Whether a current_peer() snapshot describes a gateway that forwards IPv6.
+// Read off the snapshot rather than the live interface because a rollback
+// decides about the peer it is about to restore, not the one that failed —
+// and fail-closed the same way, so a snapshot taken before the stamp existed
+// counts as "no IPv6".
+function saved_ipv6_capable(saved) {
+	return _common.relay_ipv6_capable({ features: saved ? saved.features : null });
+}
+
+// The requirement's postcondition: an instance that requires IPv6 is never
+// left RUNNING on a gateway that does not forward it.
+//
+// Refusing to choose such a gateway while continuing to run one is the worst
+// of both worlds — the user is told the requirement failed and is carried by a
+// gateway that violates it anyway. So when a refusal is reported, the tunnel
+// goes with it.
+//
+// Nothing leaks as a consequence. Under ipv6_mode 'auto' the priority-21000
+// prohibit is installed whether the tunnel is up or down, so IPv6 on the
+// steered networks still stops at the router. IPv4 falls back to the main
+// table unless the kill switch is on — the same posture every other tunnel
+// failure already leaves, and the kill switch is the control for it.
+//
+// A tunnel that DOES satisfy the requirement is left alone: the apply failed,
+// but the running state is compliant and tearing it down would be gratuitous.
+// Returns true when a peer was actually taken down.
+function drop_noncompliant_peer(uci, s) {
+	if (!_common.require_ipv6_active(s))
+		return false;
+	if (!find_peer(uci, s.interface))
+		return false;                 // nothing running to take down
+	if (_common.iface_ipv6_capable(uci, s.interface))
+		return false;                 // the gateway it is on does forward IPv6
+	let down = tear_down_peer(uci, s.interface);
+	if (down)
+		_common.log(s.name + ': took the tunnel down rather than leave it on a ' +
+			'gateway that does not forward IPv6');
+	return down;
+}
+
 // A global netifd reload has been observed (OpenWrt 24.10) to remove the
 // kernel's main IPv4 default route while netifd still reports it as
 // installed, cutting WAN connectivity. Self-heal: when the kernel lost the
@@ -686,6 +793,22 @@ function apply_inner(uci, instance) {
 		let relay = by_hostname(cache, s.fixed_server);
 		if (!relay)
 			return { state: 'failure', error: 'configured server not found in cache' };
+		// Refused, not warned about: an instance that requires IPv6 asked for
+		// it explicitly, and a pin is still a connect. Connecting anyway is
+		// precisely the silent downgrade the requirement exists to prevent,
+		// and a warning that scrolls past is not a choice. The UI never lets
+		// this pair be assembled — the picker only offers eligible gateways —
+		// so this is the backstop for a hand-edited config or the CLI.
+		if (_common.require_ipv6_active(s) && !_common.relay_ipv6_capable(relay)) {
+			// Including a tunnel that is already up on such a gateway: the pin
+			// is refused and the instance is not left running the violation.
+			let down = drop_noncompliant_peer(uci, s);
+			mark_ipv6_unmet(uci, s, 'pinned');
+			settle_ipv6(uci, s);
+			return { state: 'failure', ipv6_required: true, tunnel_down: down || null,
+				error: 'the pinned server does not forward IPv6; unpin it or turn off the IPv6 requirement' +
+					(down ? teardown_note(s) : '') };
+		}
 		let up = connect_one(uci, iface, relay, s);
 		let ok = up && verify_handshake(iface, s.verify_timeout);
 		// Unconditional, unlike the candidate loop below: a pinned server is
@@ -702,9 +825,24 @@ function apply_inner(uci, instance) {
 		};
 	}
 
-	let list = selection_candidates(cache, s);
-	if (length(list) == 0)
+	let sel = selection_report(cache, s);
+	let list = sel.list;
+	if (length(list) == 0) {
+		// Never fall back to a gateway without IPv6: the user asked for it
+		// explicitly, and connecting anyway would look like success while
+		// quietly delivering the opposite. Say which of the two empty results
+		// this is, because the fix differs — widen the locations, or drop the
+		// requirement.
+		if (sel.ipv6_filtered && sel.matched > 0) {
+			let down = drop_noncompliant_peer(uci, s);
+			mark_ipv6_unmet(uci, s, 'no_gateway');
+			settle_ipv6(uci, s);
+			return { state: 'failure', ipv6_required: true, tunnel_down: down || null,
+				error: 'no IPv6 gateways in the selected locations' +
+					(down ? teardown_note(s) : '') };
+		}
 		return { state: 'failure', error: 'no matching server found for the current selection' };
+	}
 	list = shuffle(list);
 
 	// Honour max_retries like rotation does, but keep a hard ceiling: apply is
@@ -730,6 +868,25 @@ function apply_inner(uci, instance) {
 		}
 	}
 
+	// A rollback restores a peer that predates the requirement, so it is not
+	// necessarily eligible even though every candidate just tried was. Putting
+	// it back — and explicitly bringing it up — would reinstate exactly the
+	// violation the refusals above prevent, by a different door.
+	let keep_saved = saved != null &&
+		(!_common.require_ipv6_active(s) || saved_ipv6_capable(saved));
+	if (saved && !keep_saved) {
+		tear_down_peer(uci, iface);
+		// Every candidate tried here WAS eligible — the list was filtered — so
+		// the locations are not the problem and telling the user to widen them
+		// would be wrong. They were unreachable, and the next attempt may work.
+		mark_ipv6_unmet(uci, s, 'unreachable');
+		_common.log(s.name + ': took the tunnel down rather than roll back to a ' +
+			'gateway that does not forward IPv6');
+		settle_ipv6(uci, s);
+		return { state: 'failure', ipv6_required: true, tunnel_down: true,
+			error: 'could not reach an IPv6 gateway for the current selection' +
+				teardown_note(s) };
+	}
 	if (saved) {
 		restore_peer(uci, iface, saved);
 		uci.commit('network');
@@ -1095,6 +1252,8 @@ function delete_instance(uci, name) {
 return {
 	ensure_keypair, current_peer, restore_peer, write_relay, bring_up,
 	verify_handshake, connect_one, apply, disconnect, clear_credentials,
+	tear_down_peer, saved_ipv6_capable, drop_noncompliant_peer, teardown_note,
+	mark_ipv6_unmet,
 	write_apply_status, read_apply_status, apply_running, apply_status_report,
 	run_apply, start_apply,
 	create_instance, delete_instance, restore_wan_default,

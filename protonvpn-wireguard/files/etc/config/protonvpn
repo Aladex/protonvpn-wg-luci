@@ -75,6 +75,27 @@ config instance 'main'
 	# switches on their router advertisement (ra/ra_slaac/ra_default in
 	# /etc/config/dhcp), recording whatever was there and putting it back.
 	option ipv6_mode 'block'
+	# Only consider gateways that forward IPv6 (Features bit 16) when picking
+	# a server — for the initial connect, for rotation and for the watchdog's
+	# recovery alike, not just in the list the UI shows. Where 'auto' follows
+	# whichever gateway the selection lands on, this narrows the selection
+	# itself.
+	#
+	# Applies only where ipv6_mode 'auto' can actually deliver IPv6: with
+	# ipv6_mode 'auto', hop_mode 'standard' and steered routing (a
+	# source_network and a routing_table). Outside 'auto' nothing is routed
+	# through the tunnel whichever gateway is picked; outside Standard it
+	# cannot be satisfied — measured on the full fleet cache, bit 16 is set on
+	# 0 of 122 Secure Core and 0 of 7 Tor logicals; and with auto_routing (or
+	# no steered network) 'auto' behaves as 'block', so requiring IPv6 would
+	# only refuse an otherwise usable VPN over an option that changes nothing.
+	# The stored value is kept but inert in those combinations.
+	#
+	# When the selected locations hold no such gateway the instance does NOT
+	# connect, and neither does a pinned fixed_server without the bit. There
+	# is deliberately no fallback: asking for IPv6 and silently getting a
+	# gateway that drops it is the failure this option exists to prevent.
+	option require_ipv6 '0'
 	# DNS resolver while the tunnel is up: 'off' (system/WAN) or 'standard'
 	# (ProtonVPN in-tunnel resolver 10.2.0.1 / fd54:20a4:d33b:b10c:0:2:0:1).
 	option vpn_dns 'off'

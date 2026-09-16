@@ -21,14 +21,22 @@ const load_settings = _common.load_settings,
       log = _common.log,
       run = _common.run,
       validate_wg_key = _common.validate_wg_key,
+      require_ipv6_active = _common.require_ipv6_active,
       validate_instance = _common.validate_instance;
 const read_cache = require('protonvpn.cache').read_cache;
 const reconcile_ipv6 = require('protonvpn.routing').reconcile_ipv6;
-const selection_candidates = require('protonvpn.select').selection_candidates;
+const _select = require('protonvpn.select');
+const selection_candidates = _select.selection_candidates,
+      selection_report = _select.selection_report;
 const _apply = require('protonvpn.apply');
 const bring_up = _apply.bring_up,
       current_peer = _apply.current_peer,
       restore_peer = _apply.restore_peer,
+      tear_down_peer = _apply.tear_down_peer,
+      saved_ipv6_capable = _apply.saved_ipv6_capable,
+      drop_noncompliant_peer = _apply.drop_noncompliant_peer,
+      mark_ipv6_unmet = _apply.mark_ipv6_unmet,
+      teardown_note = _apply.teardown_note,
       connect_one = _apply.connect_one,
       verify_handshake = _apply.verify_handshake,
       restore_wan_default = _apply.restore_wan_default;
@@ -179,6 +187,29 @@ function rotate_inner(uci, instance) {
 	if (!cache)
 		return { error: 'server list not available; refresh the cache first' };
 
+	// Checked before the plan is built, so the reason survives: once the
+	// current gateway is excluded an empty plan is indistinguishable from
+	// "nothing else to move to", and rotation would report a routine no-op
+	// while the instance is in fact pinned to a configuration that can never
+	// satisfy the IPv6 requirement. The watchdog rotates through here too, so
+	// this is also what stops it recovering onto a gateway without IPv6.
+	let sel = selection_report(cache, s);
+	if (length(sel.list) == 0 && sel.ipv6_filtered && sel.matched > 0) {
+		// And if the tunnel is currently on a gateway without the bit, it goes
+		// too: reporting the requirement as failed while continuing to carry
+		// the user on a gateway that violates it is the worst of both worlds.
+		// A compliant tunnel is left alone — see apply.drop_noncompliant_peer.
+		let down = drop_noncompliant_peer(uci, s);
+		mark_ipv6_unmet(uci, s, 'no_gateway');
+		if (down && reconcile_ipv6(uci, s)) {
+			uci.commit('network');
+			run([ 'ubus', 'call', 'network', 'reload' ]);
+		}
+		return { error: 'no IPv6 gateways in the selected locations' +
+				(down ? teardown_note(s) : ''),
+			ipv6_required: true, tunnel_down: down || null };
+	}
+
 	srand(time());
 	let saved = current_peer(uci, iface);
 	let current_gw = current_key(saved);
@@ -220,7 +251,25 @@ function rotate_inner(uci, instance) {
 	}
 
 	// Every different candidate failed to handshake — keep a working tunnel by
-	// rolling back to the last working peer.
+	// rolling back to the last working peer. Unless the requirement is on and
+	// that peer is one it excludes: the candidates were filtered, but the peer
+	// being rolled back to predates the requirement, and restoring it would
+	// put the instance straight back on the gateway the refusal is about.
+	if (saved && require_ipv6_active(s) && !saved_ipv6_capable(saved)) {
+		tear_down_peer(uci, iface);
+		// As in apply: the candidates were filtered, so these gateways do
+		// forward IPv6 and were only unreachable.
+		mark_ipv6_unmet(uci, s, 'unreachable');
+		log(s.name + ': took the tunnel down rather than roll back to a ' +
+			'gateway that does not forward IPv6');
+		if (reconcile_ipv6(uci, s)) {
+			uci.commit('network');
+			run([ 'ubus', 'call', 'network', 'reload' ]);
+		}
+		return { error: 'could not reach an IPv6 gateway for the current selection' +
+				teardown_note(s),
+			ipv6_required: true, tunnel_down: true, restored: false };
+	}
 	if (saved) {
 		restore_peer(uci, iface, saved);
 		uci.commit('network');

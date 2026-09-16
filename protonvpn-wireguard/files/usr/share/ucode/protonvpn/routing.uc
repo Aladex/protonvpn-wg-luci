@@ -1445,7 +1445,17 @@ function ipv6_state(uci, s, mode, connected) {
 	let m = (mode != null) ? mode : detect(uci, s, false).mode;
 	let capable = iface_ipv6_capable(uci, s.interface);
 	let out = { mode: s.ipv6_mode || 'block', gateway_ipv6: capable,
-		active: false, reason: null };
+		active: false, reason: null,
+		// What the instance asked for, and whether that ask currently binds
+		// server selection. They differ under secure_core/tor or a non-'auto'
+		// mode, where the option is kept but cannot apply — reporting only one
+		// of the two would either hide the setting or overstate it.
+		require_ipv6: (s.require_ipv6 ? true : false),
+		require_ipv6_active: _common.require_ipv6_active(s),
+		// Which of the ways the requirement can go unmet this was, so the page
+		// can word it for what actually happened instead of guessing. Only
+		// meaningful with the reason below; null when nothing was recorded.
+		required_cause: null };
 	if (out.mode == 'off')
 		out.reason = 'mode_off';
 	else if (out.mode == 'block')
@@ -1457,7 +1467,19 @@ function ipv6_state(uci, s, mode, connected) {
 	else if (!is_steering(uci, s, m))
 		out.reason = 'not_steered';
 	else if (!capable)
-		out.reason = 'gateway_no_ipv6';
+		// Under an active requirement the backend never connects to a gateway
+		// without the bit, so "this gateway does not forward IPv6" cannot be
+		// the explanation — it would describe a server that is not there. The
+		// true one is that no eligible gateway was reachable and the tunnel
+		// was taken down for it. The click path says this in the apply error;
+		// this is what a page RELOAD has to say, which is the only thing the
+		// user sees if they come back later.
+		if (_common.require_ipv6_active(s)) {
+			out.reason = 'ipv6_required_unavailable';
+			out.required_cause = _common.iface_ipv6_unmet(uci, s.interface);
+		} else {
+			out.reason = 'gateway_no_ipv6';
+		}
 	else if (connected === false)
 		out.reason = 'tunnel_down';
 	else
