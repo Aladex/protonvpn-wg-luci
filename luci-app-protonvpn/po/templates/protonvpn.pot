@@ -6,57 +6,159 @@ msgstr "Content-Type: text/plain; charset=UTF-8\n"
 #       > applications/luci-app-protonvpn/po/templates/protonvpn.pot
 # Do not hand-edit translated .po files; upstream translations use Weblate.
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1613
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1784
 msgid "IPv6 through the tunnel"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1615
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1795
 msgid "IPv6 blocked — this server does not forward it"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2068
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2256
 msgid "Block — no IPv6 past the router"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2069
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2257
 msgid "Automatic — through the tunnel where the server supports it"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2070
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2258
 msgid "Off — leave IPv6 alone"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2101
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2310
 msgid ""
 "ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through "
 "the tunnel on those and keeps blocking it on the rest, so it can never fall "
 "back to your provider."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2143
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2372
 msgid ""
 "Automatic IPv6 needs steered networks; while all LAN traffic goes through "
 "the VPN, IPv6 is blocked."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2145
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2376
 msgid ""
 "This server does not forward IPv6, so it stays blocked until the next one "
 "that does."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2147
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2381
 msgid "IPv6 is going through the tunnel on this server."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2100
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2295
 msgid "(steered by %s)"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1443
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1594
 msgid "IPv6"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1442
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1594
 msgid "This server forwards IPv6 through the tunnel"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:559
+msgid "%d/%d IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:559
+msgid "no IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1611
+msgid "No gateways in these locations forward IPv6."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1603
+msgid "(does not forward IPv6)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2313
+msgid "Only use gateways that forward IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2315
+msgid ""
+"Narrows the server list, rotation and the watchdog to gateways with "
+"IPv6. About two thirds of the fleet qualifies, and some countries "
+"have none — if your locations have none, the VPN will not connect "
+"rather than quietly give you a gateway without IPv6."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2412
+msgid ""
+"No Secure Core gateway forwards IPv6, so this cannot be applied in "
+"this mode."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2413
+msgid ""
+"No Tor gateway forwards IPv6, so this cannot be applied in this "
+"mode."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2415
+msgid ""
+"Needs the Automatic IPv6 mode — in Block and Off, IPv6 is not routed "
+"whichever gateway is picked."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2430
+msgid "%s does not forward IPv6 and is no longer pinned."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2024
+msgid "the IPv6 requirement could not be met"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:585
+msgid "IPv6 required — none of the gateways in these locations support it"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:586
+msgid ""
+"None of the gateways in the selected locations forward IPv6, and "
+"this instance requires it. Add a location that has IPv6 gateways, or "
+"turn the requirement off."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:589
+msgid "IPv6 required — the IPv6 gateways here could not be reached"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:590
+msgid ""
+"The IPv6 gateways in the selected locations could not be reached. "
+"They do forward IPv6, so this may simply work on the next attempt — "
+"reconnect rather than changing the locations."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:593
+msgid "IPv6 required — the pinned server does not support it"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:594
+msgid ""
+"The pinned server does not forward IPv6 and this instance requires "
+"it. Pick a different server, or turn the requirement off."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:598
+msgid "IPv6 required — no IPv6 gateway is available"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:599
+msgid ""
+"This instance requires IPv6 and no gateway providing it is "
+"available, so the tunnel stays down."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:614
+msgid ""
+"steered traffic is leaving through your provider — turn the kill "
+"switch on to block it instead"
 msgstr ""

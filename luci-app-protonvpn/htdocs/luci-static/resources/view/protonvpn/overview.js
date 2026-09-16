@@ -501,6 +501,121 @@ return view.extend({
 		return this.hopValue || 'standard';
 	},
 
+	// Bit 16 of the logical server's Features bitmask is ProtonVPN's IPv6
+	// flag (protonvpn.common FEATURE_IPV6); cache.uc keeps the raw mask on
+	// every trimmed relay. A relay out of a cache written before the mask was
+	// carried has none, and must read as "no IPv6" rather than be guessed at.
+	relayHasV6: function (r) {
+		return !!r && (Number(r.features) & 16) !== 0;
+	},
+
+	// Whether "only gateways that forward IPv6" is currently narrowing server
+	// selection. Mirrors protonvpn.common require_ipv6_active() exactly: the
+	// backend refuses to connect on anything this predicate excludes, so a
+	// page that disagreed would offer servers the router then rejects.
+	//
+	// Read from the live widgets when they exist, so the picker follows the
+	// IPv6 mode and hop mode the user is editing rather than what was last
+	// saved; falls back to UCI on the paths that run before the form is built.
+	requireV6Active: function () {
+		var want = this.v6Only ? this.v6Only.checked
+			: (uci.get('protonvpn', this.instance, 'require_ipv6') === '1');
+		if (!want)
+			return false;
+		var mode = this.v6Sel ? this.v6Sel.value
+			: (uci.get('protonvpn', this.instance, 'ipv6_mode') || 'block');
+		if (mode !== 'auto' || this.hopMode() !== 'standard')
+			return false;
+		// And it must be steering, because that is the only shape in which
+		// 'auto' hands clients IPv6 at all. The routing table the backend also
+		// requires is not checked here: collectIntoUci fills it in from the
+		// interface name whenever steering is saved without one, so demanding
+		// it now would show the control as inert right up until save.
+		if (this.autoRouting)
+			return !this.autoRouting.checked && this.steeredNetworks().length > 0;
+		var sn = uci.get('protonvpn', this.instance, 'source_network');
+		return (uci.get('protonvpn', this.instance, 'auto_routing') !== '1') &&
+			(Array.isArray(sn) ? sn.length > 0 : !!sn);
+	},
+
+	// " · N/M IPv6" for a country or city row in the location picker, or ''
+	// when the requirement is not on.
+	//
+	// A count rather than a yes/no on purpose. The bit is per gateway while a
+	// location set is per country or city, so a city can hold both kinds: a
+	// "yes" on a city where 3 of 40 gateways qualify promises something it
+	// barely delivers, and the only honest boolean — "zero or not" — makes a
+	// country that mostly works look identical to one that mostly does not.
+	//
+	// Unlike the server picker, a zero row is shown rather than hidden. This
+	// is where the set is chosen, and a country that silently disappeared
+	// would make the backend's later "no IPv6 gateways in the selected
+	// locations" impossible to act on.
+	v6CountLabel: function (row) {
+		if (!this.requireV6Active() || !row)
+			return '';
+		var n = row.ipv6_count || 0;
+		var m = row.standard_count || 0;
+		return ' · ' + (n ? _('%d/%d IPv6').format(n, m) : _('no IPv6'));
+	},
+
+	// What to tell the user about an IPv6 requirement that could not be met,
+	// derived from STATUS alone — one short line for the band, one sentence for
+	// the routing note, and whether the steered networks are exposed.
+	//
+	// Status-only is the whole point. The reply to a Save/Connect/Rotate is
+	// seen only by whoever was watching the page at that moment, while a
+	// reload, the five-second poll and a background rotation all rebuild from
+	// status; those are the normal case, not the exception. Anything the user
+	// must see therefore has to be derivable from here.
+	//
+	// The cause drives the wording because the advice differs, and the wrong
+	// advice is worse than none: 'unreachable' means these gateways DO forward
+	// IPv6 and were merely out of reach, so telling the user to widen their
+	// locations or drop the requirement would have them undo a setting that
+	// was never the problem.
+	ipv6Unmet: function (st) {
+		st = st || this.status || {};
+		var v6 = st.ipv6 || {};
+		if (v6.reason !== 'ipv6_required_unavailable')
+			return null;
+		var rt = st.routing || {};
+		var by = {
+			no_gateway: {
+				line: _('IPv6 required — none of the gateways in these locations support it'),
+				note: _('None of the gateways in the selected locations forward IPv6, and this instance requires it. Add a location that has IPv6 gateways, or turn the requirement off.')
+			},
+			unreachable: {
+				line: _('IPv6 required — the IPv6 gateways here could not be reached'),
+				note: _('The IPv6 gateways in the selected locations could not be reached. They do forward IPv6, so this may simply work on the next attempt — reconnect rather than changing the locations.')
+			},
+			pinned: {
+				line: _('IPv6 required — the pinned server does not support it'),
+				note: _('The pinned server does not forward IPv6 and this instance requires it. Pick a different server, or turn the requirement off.')
+			}
+		};
+		var pick = by[v6.required_cause] || {
+			line: _('IPv6 required — no IPv6 gateway is available'),
+			note: _('This instance requires IPv6 and no gateway providing it is available, so the tunnel stays down.')
+		};
+		// The second half of the same situation. Only for steered routing:
+		// with auto_routing the requirement is inactive and there are no
+		// steered networks to expose, so the sentence would be false.
+		var steered = (rt.mode === 'steered') || (rt.mode == null && v6.require_ipv6_active);
+		var exposed = steered && !rt.killswitch;
+		return {
+			line: pick.line,
+			note: pick.note,
+			exposed: exposed,
+			// Said on the band, because someone told only that IPv6 is
+			// unavailable will not realise their networks stopped being
+			// protected at the same moment.
+			exposure: exposed
+				? _('steered traffic is leaving through your provider — turn the kill switch on to block it instead')
+				: null
+		};
+	},
+
 	// Key of the per-kind gateway counters in the locations tree.
 	hopCountKey: function () {
 		var m = this.hopMode();
@@ -532,6 +647,10 @@ return view.extend({
 		this._serverChosen = '';
 		this.rebuildPoolWidget();
 		this.refreshServerList();
+		// Whether the IPv6 requirement may apply turns on the hop mode, so the
+		// control's availability and its explanation are stale until this
+		// runs. Nothing else on this path repaints them.
+		this.onRoutingToggle();
 	},
 
 	updateHopButtons: function () {
@@ -598,9 +717,17 @@ return view.extend({
 			this._serverData = { relays: ((res && res.relays) || []).slice() };
 			// Restoring the persisted pin is not a user edit.
 			var pinned = uci.get('protonvpn', this.instance, 'fixed_server') || '';
-			var reachable = !pinned || this._serverData.relays.some(function (r) {
-				return r.name === pinned || r.hostname === pinned;
-			});
+			// A pin the requirement excludes is as unreachable as one in a
+			// region the user just left: the backend refuses to connect to it,
+			// so carrying it forward would save a configuration that cannot
+			// come up. Dropped on the same terms — only when the user is
+			// editing, never when the persisted value is merely being restored.
+			var onlyV6 = this.requireV6Active();
+			var reachable = !pinned || this._serverData.relays.some(L.bind(function (r) {
+				if (r.name !== pinned && r.hostname !== pinned)
+					return false;
+				return !onlyV6 || this.relayHasV6(r);
+			}, this));
 			if (userEdit && !reachable) {
 				// The user moved to another region; a server from the old one
 				// would keep the tunnel where it was.
@@ -1179,7 +1306,8 @@ return view.extend({
 			panel.appendChild(E('div', { class: 'pv-pool-row',
 				click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, [
 					E('span', { class: 'box' }, st.whole ? '☑' : '☐'),
-					E('span', { class: 'grow' }, _('Whole country (%d)').format(c.gateway_count || 0))
+					E('span', { class: 'grow' }, _('Whole country (%d)').format(c.gateway_count || 0) +
+						this.v6CountLabel(c))
 				]));
 			panel.appendChild(E('div', { class: 'pv-pool-sep' }));
 			var key = this.hopCountKey();
@@ -1188,7 +1316,8 @@ return view.extend({
 				panel.appendChild(E('div', { class: 'pv-pool-row',
 					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, [
 						E('span', { class: 'box' }, on ? '☑' : '☐'),
-						E('span', { class: 'grow' }, '%s (%d)'.format(city.name, city[key] || 0))
+						E('span', { class: 'grow' }, '%s (%d)'.format(city.name, city[key] || 0) +
+							this.v6CountLabel(city))
 					]));
 			}, this));
 			if (this._poolEdit) {
@@ -1245,7 +1374,8 @@ return view.extend({
 				click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(c.code); }, this) }, [
 					E('span', { class: 'box' }, mark),
 					E('span', { class: 'grow' }, (flag ? flag + ' ' : '') +
-						'%s (%d)'.format(c.name, c.gateway_count || 0)),
+						'%s (%d)'.format(c.name, c.gateway_count || 0) +
+						this.v6CountLabel(c)),
 					E('span', { class: 'chev' }, '›')
 				]));
 		}, this));
@@ -1275,10 +1405,15 @@ return view.extend({
 	// lowest one, so the quick pick follows that rather than raw load.
 	srvLowestLoad: function() {
 		var best = null;
-		((this._serverData && this._serverData.relays) || []).forEach(function(r) {
+		var v6 = this.requireV6Active();
+		((this._serverData && this._serverData.relays) || []).forEach(L.bind(function(r) {
 			if (typeof r.load !== 'number') return;
+			// The quick action is a pin like any other, so it has to draw from
+			// the same pool the list shows — otherwise one click hands the
+			// backend a server it will refuse to connect to.
+			if (v6 && !this.relayHasV6(r)) return;
 			if (!best || r.load < best.load) best = r;
-		});
+		}, this));
 		return best;
 	},
 
@@ -1393,10 +1528,20 @@ return view.extend({
 		// In 'block'/'off' IPv6 is not routed whichever server is picked, so
 		// labelling servers would be noise — and an invitation to ask why the
 		// label lies.
-		var showV6 = (uci.get('protonvpn', this.instance, 'ipv6_mode') || 'block') === 'auto';
+		var showV6 = (this.v6Sel ? this.v6Sel.value
+			: (uci.get('protonvpn', this.instance, 'ipv6_mode') || 'block')) === 'auto';
+		// With the requirement on, an ineligible gateway is not merely
+		// unlabelled — it is not on offer, because the backend would refuse
+		// it. Groups are built from the surviving rows, so a country with
+		// nothing left simply does not appear: an empty group header would
+		// promise servers that are not there, and its count — computed from
+		// the whole fleet — would be a number the list cannot justify.
+		var onlyV6 = this.requireV6Active();
 
 		var groups = [], byCode = {};
 		((this._serverData && this._serverData.relays) || []).forEach(L.bind(function(r) {
+			if (onlyV6 && !this.relayHasV6(r))
+				return;
 			var cname = this.countryLabel(r.country_code);
 			var hay = (cname + ' / ' + (r.city || '') + ' / ' + (r.name || r.hostname)).toLowerCase();
 			if (f && r.hostname !== chosen && hay.indexOf(f) < 0)
@@ -1445,7 +1590,7 @@ return view.extend({
 						// Bit 16 of the logical server's Features bitmask is
 						// ProtonVPN's IPv6 flag (protonvpn.common FEATURE_IPV6);
 						// cache.uc keeps the raw mask on every relay.
-						(showV6 && (r.features & 16)) ? E('span', { class: 'pv-srv-v6',
+						(showV6 && this.relayHasV6(r)) ? E('span', { class: 'pv-srv-v6',
 							title: _('This server forwards IPv6 through the tunnel') }, _('IPv6')) : '',
 						isCur ? E('span', { class: 'pv-srv-cur' }, '● ' + _('current')) : '',
 						E('span', { class: 'pv-srv-load' }, r.load != null ? '%d%%'.format(r.load) : '')
@@ -1453,10 +1598,18 @@ return view.extend({
 			}, this));
 		}, this));
 
-		if (chosen && !this.srvRelayByHost(chosen))
-			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, chosen + ' ' + _('(not in the set)')));
+		if (chosen && !this.srvChosenOfferable())
+			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, chosen + ' ' +
+				(this.srvRelayByHost(chosen) ? _('(does not forward IPv6)')
+					: _('(not in the set)'))));
 		else if (!groups.length)
-			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, _('No matches')));
+			// Say which emptiness this is. "No matches" under an active
+			// requirement sends the user to widen a filter that is not the
+			// problem, and the connection is about to be refused for a reason
+			// they were never shown.
+			el.appendChild(E('div', { class: 'pv-pool-row is-in' },
+				(onlyV6 && !f) ? _('No gateways in these locations forward IPv6.')
+					: _('No matches')));
 	},
 
 	// ── credential banner ────────────────────────────────────────────────
@@ -1629,6 +1782,15 @@ return view.extend({
 		if (v6.mode === 'auto') {
 			if (v6.active)
 				sub.push(_('IPv6 through the tunnel'));
+			// Distinct from the line below on purpose: with the requirement on
+			// there is no connected server to blame, and saying there is sends
+			// the user looking for a rotation that will never come.
+			else if (v6.reason === 'ipv6_required_unavailable') {
+				var unmet = this.ipv6Unmet(st);
+				sub.push(unmet.line);
+				if (unmet.exposure)
+					sub.push(unmet.exposure);
+			}
 			else if (v6.reason === 'gateway_no_ipv6')
 				sub.push(_('IPv6 blocked — this server does not forward it'));
 		}
@@ -1852,7 +2014,15 @@ return view.extend({
 		this.forgetExternalIp();
 		return this.applyAsync(this.instance).then(function (res) {
 			self.dismiss(n);
-			if (!res || res.error)
+			// An IPv6 refusal is not an ordinary "it did not come up": the user
+			// asked for something the fleet could not give, the tunnel is down
+			// because of that, and (with the kill switch off) their networks
+			// moved to the provider. res.error carries all of it in words; the
+			// flag is what makes it an error rather than a passing warning, so
+			// it does not scroll away like a transient hiccup.
+			if (res && res.ipv6_required)
+				self.notice(res.error || _('the IPv6 requirement could not be met'), 'error');
+			else if (!res || res.error)
 				self.notice((res && res.error) || _('apply failed'), 'warning');
 			else if (res.state === 'success')
 				self.notice(_('Connected via %s.').format(res.gateway || '?'), 'info', 4000);
@@ -2090,6 +2260,13 @@ return view.extend({
 			this.v6Sel.value = v6mode;
 			this.v6Warn = E('div', { class: 'cbi-value-description pv-inline-note hidden' },
 				_('⚠ IPv6 stays outside the tunnel and can leak your address.'));
+			// "Automatic" follows whatever gateway you land on; this narrows
+			// the fleet so you only ever land on one that forwards IPv6. Off
+			// by default: it costs a third of the servers, which is only worth
+			// paying when the user says IPv6 is what they came for.
+			this.v6Only = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
+			this.v6Only.checked = (g('require_ipv6', '0') === '1');
+			this.v6OnlyNote = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, '');
 			// Filled in by onRoutingToggle: why 'auto' is unavailable, or what
 			// it is doing on the gateway the tunnel is on right now.
 			this.v6Note = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, '');
@@ -2131,8 +2308,14 @@ return view.extend({
 			]);
 			this.v6Row = this.row(_('IPv6'), [ this.v6Sel, this.v6Note, this.v6Warn ],
 				_('ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through the tunnel on those and keeps blocking it on the rest, so it can never fall back to your provider.'));
+			this.v6OnlyRow = this.row('', [
+				E('label', { class: 'pv-check' }, [ this.v6Only,
+					_('Only use gateways that forward IPv6') ]),
+				this.v6OnlyNote
+			], _('Narrows the server list, rotation and the watchdog to gateways with IPv6. About two thirds of the fleet qualifies, and some countries have none — if your locations have none, the VPN will not connect rather than quietly give you a gateway without IPv6.'));
 			body.appendChild(this.ksRow);
 			body.appendChild(this.v6Row);
+			body.appendChild(this.v6OnlyRow);
 			this.onRoutingToggle(true);
 		}
 
@@ -2187,6 +2370,8 @@ return view.extend({
 		var note = '';
 		if (auto)
 			note = _('Automatic IPv6 needs steered networks; while all LAN traffic goes through the VPN, IPv6 is blocked.');
+		else if (mode === 'auto' && this.ipv6Unmet())
+			note = this.ipv6Unmet().note;
 		else if (mode === 'auto' && rt.ipv6_gateway === false)
 			note = _('This server does not forward IPv6, so it stays blocked until the next one that does.');
 		// st.ipv6.active, not rt.ipv6_tunnel: the rule can be installed and
@@ -2200,6 +2385,67 @@ return view.extend({
 		}
 		if (this.v6Warn)
 			this.v6Warn.classList.toggle('hidden', !(on && mode === 'off' && rt.ipv6_wan));
+		this.updateV6Only(mode, on, init === true);
+	},
+
+	// The "only IPv6 gateways" control: when it may be used, and why not.
+	//
+	// Availability mirrors protonvpn.common require_ipv6_active(). Outside
+	// 'auto' the bit changes nothing about a client's traffic, so narrowing
+	// the fleet would cost servers and buy nothing; outside Standard it is
+	// unsatisfiable — measured on the full fleet cache, bit 16 is set on 0 of
+	// 122 Secure Core and 0 of 7 Tor logicals, so every location set would
+	// come back empty. Disabled with the reason shown rather than hidden: a
+	// control that vanishes teaches nothing, and a user who ticked it in
+	// Standard needs to know why it stopped applying in Secure Core.
+	//
+	// The stored value is deliberately left alone while it is unavailable, so
+	// a round trip through another mode does not silently forget it — the
+	// backend applies the same rule and ignores it meanwhile.
+	updateV6Only: function (mode, on, init) {
+		if (!this.v6Only || !this.v6OnlyRow)
+			return;
+		var hop = this.hopMode();
+		var why = '';
+		if (hop !== 'standard')
+			why = (hop === 'secure_core')
+				? _('No Secure Core gateway forwards IPv6, so this cannot be applied in this mode.')
+				: _('No Tor gateway forwards IPv6, so this cannot be applied in this mode.');
+		else if (mode !== 'auto')
+			why = _('Needs the Automatic IPv6 mode — in Block and Off, IPv6 is not routed whichever gateway is picked.');
+		this.v6Only.disabled = (why !== '');
+		this.v6OnlyRow.classList.toggle('hidden', !on);
+		this.v6OnlyNote.textContent = why;
+		this.v6OnlyNote.classList.toggle('hidden', !(on && why));
+		// Turning the requirement on can strand an already-pinned gateway that
+		// does not carry the bit: the list stops offering it, but the pin is
+		// still what would be saved, and the backend would refuse to connect.
+		// Drop it on the same terms as a pin left behind by a region change —
+		// only on a real edit, never while the saved configuration is merely
+		// being loaded, where silently rewriting what the user stored would be
+		// its own surprise. On load the panel marks it unusable instead.
+		if (!init && this._serverChosen && !this.srvChosenOfferable()) {
+			var lost = this._serverChosen;
+			this.srvSetChosen('');
+			this.notice(_('%s does not forward IPv6 and is no longer pinned.').format(lost),
+				'warning', 8000);
+		}
+		// The picker draws from this, and the quick "Lowest load" pick with
+		// it, so both have to be repainted when the answer changes.
+		if (this._srvOpen)
+			this.srvRenderPanel();
+		this.srvRenderTrigger();
+	},
+
+	// Whether the pinned server is one the picker may still offer. A pin the
+	// requirement excludes is present in the relay list but not selectable,
+	// so "is it in the list" is no longer the same question as "can it be
+	// used" — the panel and the strand check both need the second one.
+	srvChosenOfferable: function () {
+		var r = this.srvRelayByHost(this._serverChosen);
+		if (!r)
+			return false;
+		return !this.requireV6Active() || this.relayHasV6(r);
 	},
 
 	buildRotation: function () {
@@ -2493,6 +2739,12 @@ return view.extend({
 			// rules to, so 'auto' is stored as the 'block' it behaves as.
 			var v6 = (this.v6Sel && this.v6Sel.value) || 'block';
 			uci.set('protonvpn', inst, 'ipv6_mode', (autoOn && v6 === 'auto') ? 'block' : v6);
+			// Stored as ticked even where it cannot currently apply; the
+			// backend runs the same availability rule, so an inapplicable
+			// value is inert rather than wrong, and the setting survives a
+			// trip through Secure Core.
+			uci.set('protonvpn', inst, 'require_ipv6',
+				(this.v6Only && this.v6Only.checked) ? '1' : '0');
 			uci.set('protonvpn', inst, 'vpn_dns', (this.dnsSel && this.dnsSel.value) || 'off');
 			if (steered.length) {
 				uci.set('protonvpn', inst, 'source_network', steered);
