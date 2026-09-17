@@ -13,12 +13,16 @@ Stelle dann ein **Standort-Set** (location set) zusammen. Die Auswahl ist ein
 Akkordeon: Ein Klick auf ein Land wählt es komplett aus, und der Pfeil am
 rechten Ende der Zeile klappt die Städte dieses Landes direkt in der Liste
 auf — so lässt sich das Set auf einzelne Städte eingrenzen, ohne die Liste
-je zu verlassen. Jede Zeile zeigt außerdem die durchschnittliche Last ihrer
-Gateways im aktuellen Hop-Modus und wie viele davon IPv6 weiterleiten.
+je zu verlassen. Jede Zeile zeigt die durchschnittliche Last ihrer
+Gateways im aktuellen Hop-Modus. Verlangt die Instanz IPv6-Gateways (die
+Option *Only use gateways that forward IPv6*, wirksam bei Automatic-IPv6 im
+Standard-Modus mit geleitetem Routing), zeigt die Zeile zusätzlich, wie viele
+ihrer Gateways IPv6 weiterleiten.
 Klicke auf **Save and reconnect** (Speichern und
 neu verbinden). Sowohl die erste Verbindung als auch jede spätere Rotation
-wählt aus diesem Set. Lass **Server** auf *Automatic*, damit das Backend nach
-Last auswählt, oder pinne einen fest; das Anpinnen deaktiviert die Rotation für
+wählt aus diesem Set. Lass **Server** auf *Automatic*, damit das Backend
+zufällig einen Server aus dem Set wählt, oder pinne einen fest; das Anpinnen
+deaktiviert die Rotation für
 diese Instanz.
 
 Der **Hop-Modus** (Hop mode) schaltet zwischen Standard, Secure Core (Eintritt

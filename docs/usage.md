@@ -11,11 +11,15 @@ thousands of servers), so the first refresh takes a few seconds.
 Then pick a **location set**. The picker is an accordion: clicking a country
 selects it whole, and the arrow at the right end of its row expands that
 country's cities in place, so you can narrow the set to individual cities
-without ever leaving the list. Each row also shows the average load of its
-gateways in the current hop mode and how many of them forward IPv6. Press
+without ever leaving the list. Each row shows the average load of its
+gateways in the current hop mode. When the instance requires IPv6 gateways
+(the *Only use gateways that forward IPv6* option, which applies to Automatic
+IPv6 in Standard mode with steered routing), the row also counts how many of
+its gateways qualify. Press
 **Save and reconnect**. The initial connect and every later
 rotation pick from that set. Leave **Server** on *Automatic* to let the backend
-choose by load, or pin one; pinning disables rotation for that instance.
+pick a server from the set at random, or pin one; pinning disables rotation
+for that instance.
 
 **Hop mode** switches between Standard, Secure Core (entry through a hardened
 Proton-owned server in a privacy-friendly country) and Tor (exit through the
