@@ -66,6 +66,16 @@ if ! command -v "$UCODE" >/dev/null 2>&1; then
 	exit 2
 fi
 
+# The peak-RSS guard in test_cache.uc spawns a fresh child process so the
+# number is the child's own VmHWM; it needs the interpreter and the same
+# module search path this suite runs with.
+export UCODE
+PVT_UCODE_L="-L '$mocks/*.uc' -L '$lib/*.uc'"
+[ -n "$UCODE_EXTRA_L" ] && PVT_UCODE_L="$PVT_UCODE_L -L '$UCODE_EXTRA_L'"
+export PVT_UCODE_L
+PVT_MEASURE="$here/measure_peak.uc"
+export PVT_MEASURE
+
 status=0
 for t in "$here"/test_*.uc; do
 	echo "== ${t##*/} =="

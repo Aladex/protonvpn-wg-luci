@@ -3,7 +3,12 @@
 // a trimmed copy of a REAL authenticated /vpn/logicals response (captured
 // 2026-07-30), keeping one logical per Features variant plus both tiers, so the
 // feature decoding and the Secure Core / Tor split are checked against Proton's
-// actual wire format rather than something invented here.
+// actual wire format rather than something invented here. Its ROOT shape also
+// matches the real wire format: LogicalServers FIRST, then ResponseMetadata
+// and Code trailing the array — and JP-FREE#3's city carries a \uXXXX escape
+// (São Paulo, written as Proton sends it), so every test runs over the two
+// byte classes that once made the raw-body walk give up on live data (the
+// issue #1 blocker).
 //
 // Globals `fixture` and `KEY` come from run.sh.
 
@@ -13,7 +18,7 @@
 // two suites can execute concurrently); never the shared /tmp.
 const RUN = getenv('PROTONVPN_RUN_DIR') || '/tmp';
 
-import { readfile, unlink } from 'fs';
+import { readfile, writefile, unlink, popen } from 'fs';
 const _cache = require('protonvpn.cache');
 const normalize = _cache.normalize, locations_tree = _cache.locations_tree,
       pool_relays = _cache.pool_relays, city_relays = _cache.city_relays,
@@ -343,6 +348,341 @@ const doc = normalize(raw.LogicalServers);
 	eq('malformed cache is rejected', read_cache(path), null);
 	eq('write_cache rejects a non-document', write_cache({ nope: true }, path), false);
 	unlink(path);
+}
+
+// 9. issue #1 — the OOM: the whole parsed fleet must never exist at once
+// beside the normalized document. normalize_body() walks the raw body one
+// logical at a time; normalize() releases each logical it consumes.
+{
+	let body = readfile(fixture);
+	let want = normalize(json(body).LogicalServers);
+	delete want.generated_at;
+	// Excerpt of the real 2026-09-17 response: accented cities as raw
+	// <U+XXXX> escapes and root fields trailing the array.
+	let esc_fixture = replace(fixture, /[^\/]+$/, 'logicals_escapes.json');
+
+	if (type(_cache.normalize_body) != 'function') {
+		ok('normalize_body is exported by protonvpn.cache', false);
+	} else {
+	// body_parse_mode() reports which parse the LAST normalize_body() call
+	// took: the fallback must be rare and visible, so every test below pins
+	// the mode, not just the result (byte-identity passes either way).
+	let have_mode = type(_cache.body_parse_mode) == 'function';
+	ok('body_parse_mode is exported by protonvpn.cache', have_mode);
+	let mode = function() { return have_mode ? _cache.body_parse_mode() : null; };
+	// Parsing straight from the raw body must be byte-identical to the
+	// monolithic parse — on the pretty-printed fixture shape AND on a
+	// compact %J serialization (Proton's own responses are compact).
+	let pretty = _cache.normalize_body(body);
+	delete pretty.generated_at;
+	eq('raw-body parse is byte-identical to the monolith (pretty body)', pretty, want);
+	eq('and the walk was used', mode(), 'walk');
+	let compact = sprintf('%J', json(body));
+	let comp = _cache.normalize_body(compact);
+	delete comp.generated_at;
+	eq('raw-body parse is byte-identical on a compact body', comp, want);
+	eq('and the walk was used', mode(), 'walk');
+
+	// A body with root fields AFTER the LogicalServers array is exactly what
+	// Proton sends — real responses trail the array with ResponseMetadata
+	// and Code. The walk must consume the array and validate the tail, NOT
+	// fall back (falling back here is what made the fix useless on live
+	// data — the issue #1 blocker).
+	let wrapped = '{"Code":1000,"LogicalServers":' +
+		sprintf('%J', json(body).LogicalServers) + ',"Trailing":1}';
+	let fall = _cache.normalize_body(wrapped);
+	ok('a body with trailing root fields parses', fall != null);
+	if (fall) {
+		delete fall.generated_at;
+		eq('and it is byte-identical too', fall, want);
+		eq('and the walk handled the trailing fields', mode(), 'walk');
+	}
+
+	// The walk must also give up cleanly when the logicals do not START with
+	// their Name key: the split pieces then fail the boundary check, and the
+	// monolithic fallback parses the reordered keys without noticing.
+	let reordered = map(json(body).LogicalServers, function(l) {
+		let re = {};
+		for (let k in keys(l))
+			if (k != 'Name')
+				re[k] = l[k];
+		re.Name = l.Name;
+		return re;
+	});
+	let rb = _cache.normalize_body(sprintf('%J',
+		{ Code: 1000, LogicalServers: reordered }));
+	ok('Name-not-first falls back to the monolith', rb != null);
+	if (rb) {
+		delete rb.generated_at;
+		eq('and is byte-identical too', rb, want);
+		eq('and the fallback was used', mode(), 'monolith');
+	}
+
+	// Key order inside a JSON object is free, so moving one field of ONLY the
+	// first logical ahead of its Name key must not change the cache. The walk
+	// reconstructs the first logical starting at its Name key, so it must
+	// refuse this shape and let the monolith keep the field.
+	let first_moved = function(key) {
+		let ls = json(body).LogicalServers;
+		let re = {};
+		re[key] = ls[0][key];
+		for (let k in keys(ls[0]))
+			if (k != key)
+				re[k] = ls[0][k];
+		ls[0] = re;
+		return sprintf('%J', { Code: 1000, LogicalServers: ls });
+	};
+	let fc = _cache.normalize_body(first_moved('City'));
+	ok('City before Name in the FIRST logical only still parses', fc != null);
+	if (fc) {
+		delete fc.generated_at;
+		eq('and the city is not lost to Unknown', fc, want);
+	}
+	let fst = _cache.normalize_body(first_moved('Status'));
+	ok('Status before Name in the FIRST logical only still parses', fst != null);
+	if (fst) {
+		delete fst.generated_at;
+		eq('and its gateways survive', fst, want);
+	}
+
+	// The walk must consume the ROOT LogicalServers array: logicals living
+	// under any other key, or a "LogicalServers" key nested inside something
+	// else, are not the fleet. The first two variants fall back and yield
+	// the real (empty) array's empty document; the last two have no root
+	// array at all, so the monolithic parse itself yields null.
+	let fleet_j = sprintf('%J', json(body).LogicalServers);
+	let want_empty = normalize([]);
+	delete want_empty.generated_at;
+	let wrong = [
+		{ body: '{"LogicalServers":[],"Other":' + fleet_j + '}', want: want_empty },
+		{ body: '{"Code":1000,"LogicalServers":[],"Other":' + fleet_j + '}', want: want_empty },
+		{ body: '{"Code":1000,"Other":' + fleet_j + '}', want: null },
+		{ body: '{"Code":1000,"A":[1,2,{"LogicalServers":' +
+			substr(fleet_j, 0, length(fleet_j) - 2) + ',"B":0}]}]}', want: null }
+	];
+	for (let i = 0; i < length(wrong); i++) {
+		let rw = _cache.normalize_body(wrong[i].body);
+		if (wrong[i].want == null) {
+			eq(sprintf('non-root logicals are rejected, not walked (%d)', i), rw, null);
+		} else {
+			ok(sprintf('logicals under a non-root key are not walked (%d)', i), rw != null);
+			if (rw) {
+				delete rw.generated_at;
+				eq(sprintf('and only the real LogicalServers counts (%d)', i), rw, want_empty);
+			}
+		}
+		eq(sprintf('and the fallback reported itself (%d)', i), mode(), 'monolith');
+	}
+
+	eq('garbage yields null, not a crash', _cache.normalize_body('{ not json'), null);
+	eq('a response without the array yields null',
+		_cache.normalize_body('{"Code":1000}'), null);
+	// A head that merely CONTAINS "LogicalServers" and '[' is not enough: the
+	// monolithic parser rejects these bodies, so the walk must not accept them.
+	eq('garbage between the array open and the first logical is rejected',
+		_cache.normalize_body('{"LogicalServers":[ GARBAGE ' +
+			substr(sprintf('%J', json(body).LogicalServers), 1) + '}'), null);
+	eq('a syntactically invalid root prefix is rejected',
+		_cache.normalize_body('{"Code":,"LogicalServers":' +
+			sprintf('%J', json(body).LogicalServers) + '}'), null);
+
+	// The shape that actually broke on live data (issue #1 blocker): real
+	// responses carry \uXXXX escapes in city names (São Paulo, San José,
+	// Bogotá, Lomé — see the fixture, an excerpt of the 2026-09-17 capture)
+	// AND root fields trailing the array. The walk used to give up on the
+	// trailing fields and silently fell back to the monolithic parse — peak
+	// and all. Byte-identity alone cannot catch that (the fallback produces
+	// the same document), so the mode is pinned too.
+	let esc_body = readfile(esc_fixture);
+	let esc_want = normalize(json(esc_body).LogicalServers);
+	delete esc_want.generated_at;
+	let esc = _cache.normalize_body(esc_body);
+	ok('a body with escapes and trailing root fields parses', esc != null);
+	if (esc) {
+		delete esc.generated_at;
+		eq('and it is byte-identical to the monolith', esc, esc_want);
+		eq('and the fast path was taken', mode(), 'walk');
+	}
+
+	// Duplicate root keys: ucode's monolithic parser keeps the LAST
+	// occurrence, the walk would keep the FIRST array — so a trailing
+	// LogicalServers field must force the fallback, or the two paths
+	// disagree (the equivalence promise). Case 1: the later empty array must
+	// win, like the monolith; case 2: a later null must reject the body.
+	let esc_ls = sprintf('%J', json(esc_body).LogicalServers);
+	let dup1 = _cache.normalize_body('{"LogicalServers":' + esc_ls +
+		',"LogicalServers":[],"Code":1000}');
+	ok('a trailing duplicate LogicalServers still parses', dup1 != null);
+	if (dup1) {
+		delete dup1.generated_at;
+		eq('and the LAST array wins, like the monolith', dup1, want_empty);
+		eq('and the fallback reported itself', mode(), 'monolith');
+	}
+	eq('a trailing LogicalServers:null rejects the body',
+		_cache.normalize_body('{"LogicalServers":' + esc_ls +
+			',"LogicalServers":null,"Code":1000}'), null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+
+	// The same hole through the DECODED side: an escaped key spelling is
+	// invisible to raw-text checks but decodes to a real duplicate for the
+	// monolithic parser. \\u0053 stays a raw six-character escape in the
+	// body — a single-backslash \u0053 in a ucode literal would decode to
+	// the letter S before the body is even built.
+	let dup2 = _cache.normalize_body('{"LogicalServers":' + esc_ls +
+		',"Logical\\u0053ervers":[],"Code":1000}');
+	ok('an escaped trailing duplicate still parses', dup2 != null);
+	if (dup2) {
+		delete dup2.generated_at;
+		eq('and the LAST array wins, like the monolith', dup2, want_empty);
+		eq('and the fallback reported itself', mode(), 'monolith');
+	}
+	eq('an escaped trailing LogicalServers:null rejects the body',
+		_cache.normalize_body('{"LogicalServers":' + esc_ls +
+			',"Logical\\u0053ervers":null,"Code":1000}'), null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+
+	// body_parse_mode() must never go stale: it describes the LAST call, and
+	// a call that rejects its input before parsing is not a parse at all.
+	_cache.normalize_body(compact);
+	eq('mode after a walk', mode(), 'walk');
+	eq('an empty body is rejected', _cache.normalize_body(''), null);
+	eq('mode is cleared when nothing was parsed', mode(), null);
+	eq('a null body is rejected', _cache.normalize_body(null), null);
+	eq('mode stays cleared', mode(), null);
+	eq('a non-string body is rejected', _cache.normalize_body(23), null);
+	eq('mode stays cleared', mode(), null);
+
+	// The decoder's nesting limit applies to the WHOLE document on the old
+	// path: the root object and the LogicalServers array add two levels
+	// around every logical, so json(raw) throws 'nesting too deep' for a
+	// logical whose fields nest 29-30 levels while the same logical still
+	// parses on its own (boundary measured on this ucode build: 28 walks,
+	// 29-30 fall back and reject, 31 fails even standalone — kept as a
+	// guard). The walk must not accept what the monolith rejects: deep
+	// pieces fall back, and the monolith then rejects the body too.
+	let nest = function(n) {
+		let d = 0;
+		for (let i = 0; i < n; i++)
+			d = [ d ];
+		return d;
+	};
+	let deep_body = function(n, deep_last) {
+		let plain = { Name: 'DE#1', Status: 1, ExitCountry: 'DE',
+			City: 'Berlin', Servers: [ { Status: 1, EntryIP: '1.2.3.4',
+			X25519PublicKey: 'k' } ] };
+		let extra = { Name: 'DE#2', Status: 1, ExitCountry: 'DE',
+			City: 'Berlin', Servers: [ { Status: 1, EntryIP: '1.2.3.5',
+			X25519PublicKey: 'k' } ], Extra: nest(n) };
+		return sprintf('%J', { LogicalServers:
+			deep_last ? [ plain, extra ] : [ extra, plain ],
+			ResponseMetadata: {}, Code: 1000 });
+	};
+	let d28 = _cache.normalize_body(deep_body(28, true));
+	ok('28 nested levels as the last logical still walks', d28 != null);
+	if (d28)
+		eq('and both gateways survive', d28.stats.gateways, 2);
+	eq('28 nested levels report walk', mode(), 'walk');
+	let d28f = _cache.normalize_body(deep_body(28, false));
+	ok('28 nested levels as a middle logical still walks', d28f != null);
+	if (d28f)
+		eq('and both gateways survive', d28f.stats.gateways, 2);
+	eq('28 nested middle levels report walk', mode(), 'walk');
+	eq('29 nested levels in the last logical reject like the monolith',
+		_cache.normalize_body(deep_body(29, true)), null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+	eq('29 nested levels in a middle logical reject like the monolith',
+		_cache.normalize_body(deep_body(29, false)), null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+	eq('30 nested levels reject like the monolith',
+		_cache.normalize_body(deep_body(30, true)), null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+	eq('31 nested levels fail even standalone (old boundary)',
+		_cache.normalize_body(deep_body(31, true)), null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+
+	// A forged array boundary inside a logical's text ('}],[{') is a syntax
+	// error for the monolith; the walk must not parse around it either.
+	eq('a forged array boundary inside a logical rejects the body',
+		_cache.normalize_body('{"LogicalServers":[{"Name":"A","Status":1,' +
+			'"ExitCountry":"DE","City":"Berlin","Servers":[{"Status":1,' +
+			'"EntryIP":"1.2.3.4","X25519PublicKey":"k"}]}],[{"Z":1},{' +
+			'"Name":"B","Status":1,"ExitCountry":"DE","City":"Berlin",' +
+			'"Servers":[{"Status":1,"EntryIP":"1.2.3.5",' +
+			'"X25519PublicKey":"k"}]}],"ResponseMetadata":{},"Code":1000}'),
+		null);
+	eq('and the fallback reported itself', mode(), 'monolith');
+	}
+
+	// normalize() consumes its input: each parsed logical is released as it
+	// is normalized, so the parsed fleet and the growing document never
+	// coexist in full.
+	let fleet = [ { Name: 'T#1', Status: 1, ExitCountry: 'DE', City: 'Berlin',
+		Features: 0, Servers: [ { Status: 1, EntryIP: '1.2.3.4',
+		X25519PublicKey: 'k' } ] } ];
+	normalize(fleet);
+	eq('normalize releases each logical as it consumes it', fleet[0], null);
+}
+
+// 9b. peak guard: the whole path (read, parse, normalize, serialize) over a
+// realistic 18k-logical fleet must stay far below the monolithic parse peak.
+// Measured before the fix: ~14x the body size (200-213 MB peak for a 14.5 MB
+// body, dev build and router alike). 6x catches a regression to the monolith
+// with room for allocator differences. Runs in a CHILD process so the number
+// is the child's own VmHWM, not this suite's. The generated fleet carries
+// the REAL response shape (\uXXXX city escapes, root fields trailing the
+// array), so the guard also fails if the walk ever gives up on live-shaped
+// data and silently falls back again (the issue #1 blocker).
+{
+	let ucode = getenv('UCODE') || 'ucode';
+	let measure = getenv('PVT_MEASURE');
+	let lflags = getenv('PVT_UCODE_L') || '';
+	let fleetfile = RUN + '/peak_fleet.json';
+	let gen = popen(sprintf('%s %s -D mode=generate -D fleet=%s -S %s 2>&1',
+		ucode, lflags, fleetfile, measure), 'r');
+	let gout = gen ? gen.read('all') : '';
+	let gcode = gen ? gen.close() : -1;
+	ok('fleet generation runs', gcode == 0 && index(gout, 'generated 18000') >= 0);
+
+	let mp = popen(sprintf('%s %s -D mode=measure -D fleet=%s -S %s 2>&1',
+		ucode, lflags, fleetfile, measure), 'r');
+	let mout = mp ? mp.read('all') : '';
+	let mcode = mp ? mp.close() : -1;
+	ok('peak measurement runs', mcode == 0 && index(mout, 'gateways 19800') >= 0);
+	let bytes = match(mout, /input_bytes (\d+)/);
+	let hwm = match(mout, /stage after_serialize rss_kB \d+ hwm_kB (\d+)/);
+	ok('measurement reports input size and peak', bytes != null && hwm != null);
+	if (bytes && hwm)
+		ok(sprintf('peak stays under 6x the body (got %dx)',
+			int(hwm[1]) * 1024 / int(bytes[1])),
+			int(hwm[1]) * 1024 <= 6 * int(bytes[1]));
+	unlink(fleetfile);
+}
+
+// 9c. the fallback log must count ALL logical pieces: a body truncated in
+// its document tail makes the walk give up on the last of the excerpt's
+// five logicals, and the log must say 'of 5' — not one less. Runs in a
+// CHILD process so stderr (where log() writes) is capturable.
+{
+	let ucode = getenv('UCODE') || 'ucode';
+	let lflags = getenv('PVT_UCODE_L') || '';
+	let esc_fixture = replace(fixture, /[^\/]+$/, 'logicals_escapes.json');
+	let probe = RUN + '/fallback_log_probe.uc';
+	writefile(probe,
+		"import { readfile } from 'fs';\n" +
+		"const _c = require('protonvpn.cache');\n" +
+		"let raw = readfile(global.fix);\n" +
+		"raw = substr(raw, 0, length(raw) - 12);\n" +
+		"let doc = _c.normalize_body(raw);\n" +
+		"print('doc ', doc ? 'ok' : 'null', ' mode ', _c.body_parse_mode());\n");
+	let lp = popen(sprintf('%s %s -D fix=%s -S %s 2>&1',
+		ucode, lflags, esc_fixture, probe), 'r');
+	let lout = lp ? lp.read('all') : '';
+	let lcode = lp ? lp.close() : -1;
+	ok('fallback probe runs and falls back',
+		lcode == 0 && index(lout, 'doc null mode monolith') >= 0);
+	ok('fallback log counts every logical (5 of 5)',
+		index(lout, 'gave up at logical 5 of 5') >= 0);
+	unlink(probe);
 }
 
 print(failures ? sprintf('\nFAILURES: %d\n', failures) : '\nALL CACHE TESTS PASSED\n');

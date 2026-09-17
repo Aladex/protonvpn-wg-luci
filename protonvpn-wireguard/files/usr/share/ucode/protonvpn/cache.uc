@@ -179,18 +179,17 @@ function add_server(acc, logical) {
 	}
 }
 
-// Normalize an array of raw logical-server objects into the cache structure.
-// Exported for fixture tests.
-function normalize(list) {
-	let acc = {
+// Fresh normalization accumulator, shared by normalize() and normalize_body().
+function normalize_begin() {
+	return {
 		country_index: {}, location_index: {}, country_list: [],
 		stats: { countries: 0, cities: 0, gateways: 0, servers_seen: 0 }
 	};
-	if (type(list) == 'array')
-		for (let logical in list)
-			add_server(acc, logical);
+}
 
-	// Drop empty cities/countries and sort by name so the UI order is stable.
+// Drop empty cities/countries, sort by name so the UI order is stable, and
+// wrap the accumulator into the cache document.
+function normalize_finish(acc) {
 	let filtered = [];
 	for (let country in acc.country_list) {
 		let valid = [];
@@ -224,6 +223,271 @@ function normalize(list) {
 		source: LOGICALS_URL,
 		generated_at: iso_ts()
 	};
+}
+
+// Normalize an array of raw logical-server objects into the cache structure.
+// Exported for fixture tests. CONSUMES the array: each logical is released
+// as it is normalized, so the parsed fleet and the growing document never
+// coexist in full (issue #1). Callers must not reuse the array afterwards.
+function normalize(list) {
+	let acc = normalize_begin();
+	if (type(list) == 'array')
+		for (let i = 0; i < length(list); i++) {
+			add_server(acc, list[i]);
+			list[i] = null;
+		}
+	return normalize_finish(acc);
+}
+
+// ── Raw-body parse (issue #1) ──────────────────────────────────────────────
+
+// Parse one logical's piece text (everything after its "Name" key up to and
+// including the closing '}'). The text is WRAPPED in two array levels before
+// parsing: in the whole document the logical object sits under the root
+// object and the LogicalServers array, and the decoder enforces its nesting
+// limit on the parser's depth — parsing the piece as its own root would
+// apply that limit two levels shallower than json(raw) does, accepting
+// documents the monolithic parse rejects with 'nesting too deep'. The
+// wrapper restores the exact document offset, whatever the decoder's limit
+// happens to be. The result must be exactly [[ logical ]]: anything else
+// means the piece held more than one logical's worth of text (e.g. a forged
+// array boundary inside it), which the monolith would reject as a syntax
+// error — so the strict shape check sends those to the fallback like the
+// unwrapped parse did. Returns null when the piece is not one logical
+// object.
+function parse_logical(text) {
+	let w = null;
+	try {
+		w = json('[[{"Name"' + text + ']]');
+	} catch (e) {
+		w = null;
+	}
+	if (type(w) != 'array' || length(w) != 1 ||
+	    type(w[0]) != 'array' || length(w[0]) != 1)
+		return null;
+	return w[0][0];
+}
+
+// Trim one split piece back to the end of its logical object. Pieces between
+// logicals end with the element separator (ws '{' ws ',' — walk order is
+// from the end). Returns the trimmed length, or -1 when the piece does not
+// look like a logical boundary at all (then the whole parse falls back to
+// the monolith). The FINAL piece is different — it ends with the array
+// close and the document tail, see last_piece().
+function piece_end(piece) {
+	const WS = " \t\n\r";
+	let j = length(piece) - 1;
+	let skip_ws = function() {
+		while (j >= 0 && index(WS, substr(piece, j, 1)) >= 0)
+			j--;
+	};
+	skip_ws();
+	if (j < 0 || substr(piece, j, 1) != '{')
+		return -1;
+	j--;
+	skip_ws();
+	if (j < 0 || substr(piece, j, 1) != ',')
+		return -1;
+	j--;
+	skip_ws();
+	return (j >= 0 && substr(piece, j, 1) == '}') ? j + 1 : -1;
+}
+
+// Fold the LAST split piece into the accumulator. It holds the final logical
+// plus everything that trails it: the array close and the document tail.
+// Proton does NOT end the root with the array — real responses close with
+// "ResponseMetadata":{...},"Code":1000} — so the tail is validated, not
+// assumed: try each ']' from the end as the array close; the logical before
+// it must parse, the tail after it must parse as a document whose array is
+// empty, and its decoded root keys must not redefine LogicalServers (the
+// monolith would take the LAST duplicate, the walk the first). The piece is
+// one logical plus a short tail (~1 KB), so the probes stay cheap. False =
+// not walkable, fall back to the monolith.
+function last_piece(piece, acc) {
+	const WS = " \t\n\r";
+	for (let p = length(piece) - 1; p > 0; p--) {
+		if (substr(piece, p, 1) != ']')
+			continue;
+		let q = p - 1;
+		while (q >= 0 && index(WS, substr(piece, q, 1)) >= 0)
+			q--;
+		if (q < 0 || substr(piece, q, 1) != '}')
+			continue;
+		let logical = parse_logical(substr(piece, 0, q + 1));
+		if (type(logical) != 'object')
+			continue;
+		let tail = null;
+		try {
+			tail = json('{"LogicalServers":[]' + substr(piece, p + 1));
+		} catch (e) {
+			tail = null;
+		}
+		if (type(tail) != 'object')
+			continue;
+		// A trailing LogicalServers field would REPLACE the walked array in
+		// the monolithic parse (duplicate keys: the last occurrence wins),
+		// while the walk keeps the first — so this candidate is only valid
+		// when the tail does not redefine the selected array. The tail's
+		// root keys are validated DECODED, not as raw text: an escaped
+		// spelling like "LogicalServers" is invisible to a substring
+		// check but decodes to a real duplicate for the parser. Only root
+		// keys matter — the monolith reads doc.LogicalServers, and a nested
+		// LogicalServers (e.g. inside ResponseMetadata) replaces nothing.
+		let fields = substr(piece, p + 1);
+		let f = 0;
+		while (f < length(fields) && index(WS, substr(fields, f, 1)) >= 0)
+			f++;
+		if (substr(fields, f, 1) == ',') {
+			let tail_keys = null;
+			try {
+				tail_keys = json('{' + substr(fields, f + 1));
+			} catch (e) {
+				tail_keys = null;
+			}
+			if (type(tail_keys) != 'object' || exists(tail_keys, 'LogicalServers'))
+				continue;
+		}
+		add_server(acc, logical);
+		return true;
+	}
+	return false;
+}
+
+// Validate the document head up to the first logical's "Name" key: it must
+// be a syntactically valid root-object prefix immediately followed by
+// "LogicalServers" : [ { — nothing between the array open and the first
+// logical's Name key, and the array must be the ROOT LogicalServers one.
+// Anything looser would be misparsed silently: fields before the first
+// logical's Name would be dropped (JSON key order is free and must never
+// change the cache), logicals under another key would be consumed as the
+// fleet, and a malformed prefix the real parser would reject would slip
+// through. All of those fall back to the monolithic parse instead.
+function head_is_logicals_open(head) {
+	const WS = " \t\n\r";
+	const KEY = '"LogicalServers"';
+	let j = length(head) - 1;
+	let ws_back = function() {
+		while (j >= 0 && index(WS, substr(head, j, 1)) >= 0)
+			j--;
+	};
+	let back = function(ch) {
+		ws_back();
+		if (j < 0 || substr(head, j, 1) != ch)
+			return false;
+		j--;
+		return true;
+	};
+	// From the end: ws '{' ws '[' ws ':' ws, then the "LogicalServers" key.
+	if (!back('{') || !back('[') || !back(':'))
+		return false;
+	ws_back();
+	if (j < length(KEY) - 1 ||
+	    substr(head, j - length(KEY) + 1, length(KEY)) != KEY)
+		return false;
+	// What precedes the key must be real JSON, not text that merely contains
+	// the right substrings: parsed closed with a dummy pair, the prefix must
+	// hold. That also pins the key to the ROOT object — the appended pair
+	// plus '}' can only complete the document when the prefix sits at depth
+	// 1, so a "LogicalServers" nested in something else
+	// ({"A":[...,{"LogicalServers":...) cannot validate either.
+	let pre = substr(head, 0, j - length(KEY) + 1);
+	let probe = null;
+	try {
+		probe = json(pre + '"LogicalServers":null}');
+	} catch (e) {
+		probe = null;
+	}
+	return type(probe) == 'object';
+}
+
+// Normalize a raw /vpn/logicals body WITHOUT ever holding the whole parsed
+// fleet: the array text is split on the "Name" key (a quoted key cannot
+// occur inside a string value unescaped, and Proton's serializer starts
+// every logical with it — see the fixture, a trimmed real response), then
+// one logical at a time is parsed and folded in — each wrapped at its
+// document depth, so the decoder's nesting limit accepts and rejects
+// exactly what json(raw) would (see parse_logical()). The peak is the body
+// plus one logical plus the growing document, instead of ~14x the body for the
+// monolithic parse — which is what got protonvpn-service OOM-killed on
+// routers with little free RAM (issue #1). Any structural surprise falls
+// back to the monolithic parse; null means the body is not a logicals
+// response at all. The result is byte-identical to normalize() over the
+// monolithic parse either way.
+//
+// The fallback must never be SILENT: last_body_mode records which parse the
+// last call took ('walk' or 'monolith', see body_parse_mode()), and a walk
+// that gives up on a logicals-shaped body is logged — a silent fallback is
+// how the fix once shipped while doing nothing on live data (issue #1
+// blocker: real responses trail the LogicalServers array with
+// ResponseMetadata and Code, which the strict last-piece boundary rejected).
+let last_body_mode = null;
+function normalize_body(raw) {
+	// Cleared up front: a call that rejects its input without parsing must
+	// not inherit the previous call's mode.
+	last_body_mode = null;
+	if (type(raw) != 'string' || raw == '')
+		return null;
+	let pieces = split(raw, '"Name"');
+	// pieces[0] is the document head through the first logical's '{'; the
+	// walk only starts when it is exactly the root LogicalServers array open
+	// (see head_is_logicals_open), everything else goes to the monolith.
+	if (length(pieces) > 2 && head_is_logicals_open(pieces[0])) {
+		let acc = normalize_begin();
+		let ok = true, fail_at = -1;
+		for (let i = 1; i < length(pieces) && ok; i++) {
+			if (i == length(pieces) - 1) {
+				ok = last_piece(pieces[i], acc);
+				pieces[i] = null;
+				if (!ok)
+					fail_at = i;
+				break;
+			}
+			let end = piece_end(pieces[i]);
+			if (end < 0) {
+				ok = false;
+				fail_at = i;
+				break;
+			}
+			let logical = parse_logical(substr(pieces[i], 0, end));
+			pieces[i] = null;
+			if (type(logical) != 'object') {
+				ok = false;
+				fail_at = i;
+			} else {
+				add_server(acc, logical);
+			}
+		}
+		if (ok) {
+			last_body_mode = 'walk';
+			return normalize_finish(acc);
+		}
+		// Structural surprise: re-parse monolithically below. raw is intact.
+		log(sprintf('cache: logicals walk gave up at logical %d of %d — ' +
+			'using the monolithic parse (peak ~14x the body)', fail_at,
+			length(pieces) - 1));
+	} else if (length(pieces) > 2) {
+		log('cache: logicals head not walkable — ' +
+			'using the monolithic parse (peak ~14x the body)');
+	}
+
+	last_body_mode = 'monolith';
+	let doc0 = null;
+	try { doc0 = json(raw); } catch (e) { doc0 = null; }
+	let list = (type(doc0) == 'object') ? doc0.LogicalServers : null;
+	if (type(list) != 'array')
+		return null;
+	doc0 = null;                    // the wrapper can go once the array is taken
+	return normalize(list);
+}
+
+// Which parse the last normalize_body() call took: 'walk' (one logical at a
+// time, the whole point of the issue #1 fix) or 'monolith' (the ~14x-peak
+// fallback). Null when the last call rejected its input without parsing
+// (empty/null/non-string body) or normalize_body() was never called.
+// Exported so tests and diagnostics can prove the fast path is actually
+// taken on real response shapes.
+function body_parse_mode() {
+	return last_body_mode;
 }
 
 // Rounded mean load, or null when there is nothing to average. The `* 1.0`
@@ -434,16 +698,17 @@ function fetch_servers() {
 	unlink(tmp);
 	if (!raw)
 		return { error: 'empty /vpn/logicals response' };
-	let doc0 = null;
-	try { doc0 = json(raw); } catch (e) { doc0 = null; }
-	raw = null;                       // let the 13 MB string go before parsing
-	let list = doc0 ? doc0.LogicalServers : null;
-	if (type(list) != 'array')
-		return { error: 'unexpected /vpn/logicals response' };
 
-	write_fetch_status({ state: 'running', stage: 'normalize',
-		servers: length(list) });
-	let doc = normalize(list);
+	write_fetch_status({ state: 'running', stage: 'normalize' });
+	// One logical at a time, never the whole parsed fleet beside the growing
+	// document (issue #1 — the monolithic parse peaks at ~14x the body and
+	// got the service OOM-killed on a router with ~175 MB FREE RAM).
+	// normalize_body falls back to the monolithic parse when the body does
+	// not walk cleanly.
+	let doc = normalize_body(raw);
+	raw = null;
+	if (!doc)
+		return { error: 'unexpected /vpn/logicals response' };
 	write_fetch_status({ state: 'done', servers: doc.stats.servers_seen,
 		gateways: doc.stats.gateways });
 	return doc;
@@ -519,7 +784,8 @@ function fetch_and_build(path) {
 return {
 	FEATURE_SECURE_CORE, FEATURE_TOR, FEATURE_P2P, FEATURE_STREAMING, FEATURE_IPV6,
 	city_code_of, trim_relay,
-	write_fetch_status, read_fetch_status, add_server, normalize,
+	write_fetch_status, read_fetch_status, add_server, normalize, normalize_body,
+	body_parse_mode,
 	locations_tree, city_relays, pool_relays,
 	fetch_servers, read_cache, cache_is_stale, write_cache, fetch_and_build
 };

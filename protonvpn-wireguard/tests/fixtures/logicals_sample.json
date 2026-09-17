@@ -1,5 +1,4 @@
 {
- "Code": 1000,
  "LogicalServers": [
   {
    "Name": "SE-JP#1",
@@ -372,7 +371,7 @@
    "Tier": 0,
    "Features": 16,
    "Region": null,
-   "City": "Osaka",
+   "City": "S\u00e3o Paulo",
    "Score": 4.9942055167,
    "HostCountry": null,
    "OrganizationID": null,
@@ -435,5 +434,9 @@
    "Status": 1,
    "Load": 80
   }
- ]
+ ],
+ "ResponseMetadata": {
+  "ListIsTruncated": false
+ },
+ "Code": 1000
 }
