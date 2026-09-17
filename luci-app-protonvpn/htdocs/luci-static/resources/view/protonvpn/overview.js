@@ -107,6 +107,11 @@ var STYLE = '' +
 	'.pv-pool-head{display:flex;align-items:center;justify-content:space-between;gap:.5em;padding:.1em .3em .3em;font-weight:600}' +
 	'.pv-pool-x{border:0;background:transparent;cursor:pointer;font:inherit;font-weight:700;color:inherit;padding:0 .2em}' +
 	'.pv-pool-filter{width:100%;box-sizing:border-box;margin:0 0 .3em 0}' +
+	// The filter input and the IPv6-only toggle share one row in the panel
+	// head: the input keeps the width, the toggle never wraps mid-label.
+	'.pv-pool-filterrow{display:flex;align-items:center;gap:.6em;margin:0 0 .3em 0}' +
+	'.pv-pool-filterrow .pv-pool-filter{margin:0}' +
+	'.pv-pool-v6only{flex:none;white-space:nowrap;font-weight:normal}' +
 	'.pv-pool-row{display:flex;align-items:center;gap:.55em;padding:.34em .5em;border-radius:.3em;cursor:pointer;white-space:nowrap}' +
 	'.pv-pool-row:hover{background:rgba(0,105,214,.14)}' +
 	'.pv-pool-row.is-in{opacity:.55}' +
@@ -558,8 +563,21 @@ return view.extend({
 			(Array.isArray(sn) ? sn.length > 0 : !!sn);
 	},
 
+	// The picker's "IPv6 only" view filter: on only when the user asked AND
+	// the hop mode can have IPv6 gateways at all. ipv6_count is counted
+	// against the standard kind only (cache.uc locations_tree: 0 of 122
+	// Secure Core and 0 of 7 Tor logicals carry the bit), so filtering in
+	// the other modes would empty the list — the toggle is rendered
+	// disabled there instead, and a state carried over from Standard goes
+	// inert rather than taking the list with it. This is a view filter: it
+	// narrows what the accordion lists, never what the backend may connect
+	// to, and nothing of it is written to uci.
+	v6FilterOn: function () {
+		return !!this._poolV6Only && this.hopMode() === 'standard';
+	},
+
 	// " · N/M IPv6" for a country or city row in the location picker, or ''
-	// when the requirement is not on.
+	// when neither the requirement nor the view filter is on.
 	//
 	// A count rather than a yes/no on purpose. The bit is per gateway while a
 	// location set is per country or city, so a city can hold both kinds: a
@@ -570,9 +588,13 @@ return view.extend({
 	// Unlike the server picker, a zero row is shown rather than hidden. This
 	// is where the set is chosen, and a country that silently disappeared
 	// would make the backend's later "no IPv6 gateways in the selected
-	// locations" impossible to act on.
+	// locations" impossible to act on. The "IPv6 only" toggle is the one
+	// sanctioned exception, and it holds to the same rule: the list ends in
+	// a line saying how many countries and cities were dropped, and this
+	// label shows while it is on — a user looking at IPv6 needs the number
+	// even without the requirement.
 	v6CountLabel: function (row) {
-		if (!this.requireV6Active() || !row)
+		if (!row || (!this.requireV6Active() && !this.v6FilterOn()))
 			return '';
 		var n = row.ipv6_count || 0;
 		var m = row.standard_count || 0;
@@ -1271,6 +1293,10 @@ return view.extend({
 		this._poolCountry = null;
 		this._poolExpanded = {};
 		this._poolFilter = '';
+		// View filter, not a setting: it only defaults from the requirement
+		// (the user already said IPv6 gateways are what they want) and can be
+		// turned right back off; nothing of it reaches uci.
+		this._poolV6Only = this.requireV6Active();
 		this._poolOpen = true;
 		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
 		this.poolPanel.classList.remove('hidden');
@@ -1295,6 +1321,7 @@ return view.extend({
 		this._poolExpanded = {};
 		this._poolExpanded[cc] = true;
 		this._poolFilter = '';
+		this._poolV6Only = this.requireV6Active();
 		this._poolOpen = true;
 		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
 		this.poolPanel.classList.remove('hidden');
@@ -1340,7 +1367,32 @@ return view.extend({
 			this.poolRenderCountryList();
 		}, this));
 		filt.addEventListener('click', function(ev) { ev.stopPropagation(); });
-		panel.appendChild(filt);
+		// "IPv6 only": a view filter over the accordion. Disabled with the
+		// reason in Secure Core/Tor rather than hidden — ipv6_count is
+		// standard-only, so there the filter could only empty the list, and
+		// a control that vanishes without a word teaches nothing. The box
+		// keeps its checked state while disabled, so a mode round trip
+		// restores it.
+		var hop = this.hopMode();
+		var v6box = E('input', { type: 'checkbox', change: L.bind(function() {
+			this._poolV6Only = v6box.checked;
+			this.poolRenderCountryList();
+		}, this) });
+		v6box.checked = this.v6FilterOn();
+		if (hop !== 'standard') {
+			v6box.disabled = true;
+			v6box.checked = !!this._poolV6Only;
+		}
+		var v6title = (hop === 'secure_core')
+			? _('No Secure Core gateway forwards IPv6, so this would empty the list.')
+			: (hop === 'tor'
+				? _('No Tor gateway forwards IPv6, so this would empty the list.')
+				: _('Show only locations whose gateways forward IPv6'));
+		panel.appendChild(E('div', { class: 'pv-pool-filterrow' }, [
+			filt,
+			E('label', { class: 'pv-check pv-pool-v6only', title: v6title }, [
+				v6box, _('IPv6 only') ])
+		]));
 		this._poolListEl = E('div', {});
 		panel.appendChild(this._poolListEl);
 		this.poolRenderCountryList();
@@ -1378,9 +1430,18 @@ return view.extend({
 		var any = false;
 		var key = this.hopCountKey();
 		var loadKey = this.hopLoadKey();
+		var v6only = this.v6FilterOn();
+		var v6hidden = 0;
+		var v6chidden = 0;
 		this.filteredCountries().forEach(L.bind(function(c) {
 			if (f && c.name.toLowerCase().indexOf(f) < 0 && c.code.toLowerCase().indexOf(f) < 0)
 				return;
+			if (v6only && !(c.ipv6_count > 0)) {
+				// Dropped, but never silently: counted here, reported under
+				// the list — see the comment above v6CountLabel.
+				v6hidden++;
+				return;
+			}
 			any = true;
 			var cc = c.code;
 			var st = this.poolCountryHas(cc);
@@ -1403,6 +1464,14 @@ return view.extend({
 			if (!open)
 				return;
 			(c.cities || []).forEach(L.bind(function(city) {
+				if (v6only && !(city.ipv6_count > 0)) {
+					// Dropped cities count too: only expanded countries reach
+					// this loop, so every drop here is a row the user would
+					// otherwise see — the same no-silent-narrowing rule as for
+					// countries, reported under the list.
+					v6chidden++;
+					return;
+				}
 				var on = st.whole || !!st.cities[city.code];
 				el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-acc-city' +
 					(on ? ' is-in' : '') }, [
@@ -1419,6 +1488,21 @@ return view.extend({
 		}, this));
 		if (!any)
 			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, _('No matches')));
+		// The narrowing is always said out loud: a location that silently
+		// disappeared would make the backend's later "no IPv6 gateways in the
+		// selected locations" impossible to act on. Countries and cities get
+		// their own lines — reporting a country as hidden when only cities
+		// were dropped would be its own kind of lie.
+		if (v6hidden > 0)
+			el.appendChild(E('div', { class: 'pv-pool-row is-in pv-pool-v6hidden' },
+				v6hidden === 1
+					? _('1 country hidden — no IPv6 gateways')
+					: _('%d countries hidden — no IPv6 gateways').format(v6hidden)));
+		if (v6chidden > 0)
+			el.appendChild(E('div', { class: 'pv-pool-row is-in pv-pool-v6hidden' },
+				v6chidden === 1
+					? _('1 city hidden — no IPv6 gateways')
+					: _('%d cities hidden — no IPv6 gateways').format(v6chidden)));
 		if (this._poolEdit) {
 			var rmcc = this._poolCountry;
 			el.appendChild(E('div', { class: 'pv-pool-sep' }));

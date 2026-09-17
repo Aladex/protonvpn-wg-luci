@@ -463,6 +463,11 @@ test('the IPv6 count label still lands in country and city rows', () => {
 	ctx.locations.countries[0].ipv6_count = 1;
 	ctx.locations.countries[0].cities[0].ipv6_count = 0;
 	ctx.poolTogglePanel();
+	// The requirement defaults the IPv6-only filter on, and Frankfurt has no
+	// IPv6 gateways: turn the filter off so the zero-IPv6 label can show.
+	const v6t = v6Toggle(ctx.poolPanel);
+	v6t.box.checked = false;
+	v6t.box.attrs.change();
 	assert.match(text(mustRow(ctx._poolListEl, 'DE')), /1\/4 IPv6/);
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	assert.match(text(mustRow(ctx._poolListEl, 'Frankfurt')), /no IPv6/);
@@ -499,4 +504,242 @@ test('the hit and exp cells carry their own hover and column geometry', () => {
 		'the exp cell has its own hover');
 	assert.ok(/\.pv-acc-city \.pv-acc-hit\{[^}]*padding-left:2\.1em/.test(src),
 		'city hits are indented to sit under the country name');
+});
+
+// ── the "IPv6 only" view filter ─────────────────────────────────────────
+// A view filter, not a setting: it narrows what the accordion LISTS, never
+// what the backend will connect to (that is require_ipv6's job), and it is
+// never silent — the list says how many countries were dropped.
+
+// The toggle's checkbox element inside the panel head.
+function v6Toggle(panel) {
+	const tog = findOneClass(panel, 'pv-pool-v6only');
+	assert.ok(tog, 'the panel head carries the IPv6-only toggle');
+	const box = (tog.children || []).find((c) => c && c.tag === 'input');
+	assert.ok(box, 'the toggle has no checkbox');
+	return { label: tog, box };
+}
+
+function v6HiddenLine(el) {
+	const n = findOneClass(el, 'pv-pool-v6hidden');
+	return n ? text(n) : null;
+}
+
+test('IPv6 only drops countries without IPv6 gateways and says how many', () => {
+	const ctx = pickerCtx();
+	ctx.locations.countries[0].ipv6_count = 2;
+	ctx.locations.countries[1].ipv6_count = 0;
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	assert.equal(box.checked, false, 'the toggle defaults to off without the requirement');
+	box.checked = true;
+	box.attrs.change();
+	assert.ok(mustRow(ctx._poolListEl, 'DE'), 'the country with IPv6 stays');
+	assert.equal(accRows(ctx._poolListEl).filter((r) => !has(r, 'pv-acc-city')).length, 1,
+		'the zero-IPv6 country is still listed');
+	assert.match(v6HiddenLine(ctx._poolListEl) || '', /1 country hidden/i,
+		'the narrowing happens silently — no line says how much is hidden');
+	// The user explicitly asked to look at IPv6, so the count shows even
+	// though the requirement is off.
+	assert.match(text(metaOf(mustRow(ctx._poolListEl, 'DE'))), /2\/4 IPv6/,
+		'the N/M IPv6 count is gated on the requirement even while filtering by it');
+	box.checked = false;
+	box.attrs.change();
+	assert.ok(mustRow(ctx._poolListEl, 'NL'), 'toggling back off restores the list');
+	assert.equal(v6HiddenLine(ctx._poolListEl), null,
+		'the hidden-count line outlives the filter');
+});
+
+test('IPv6 only drops zero-IPv6 cities inside an expanded country', () => {
+	const ctx = pickerCtx();
+	ctx.locations.countries[0].ipv6_count = 1;
+	ctx.locations.countries[0].cities[0].ipv6_count = 1;
+	ctx.locations.countries[0].cities[1].ipv6_count = 0;
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	box.checked = true;
+	box.attrs.change();
+	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
+	assert.ok(mustRow(ctx._poolListEl, 'Frankfurt'), 'the city with IPv6 stays');
+	assert.equal(accRows(ctx._poolListEl).filter((r) => has(r, 'pv-acc-city')).length, 1,
+		'the zero-IPv6 city is still listed');
+	assert.match(text(metaOf(mustRow(ctx._poolListEl, 'Frankfurt'))), /1\/2 IPv6/);
+});
+
+test('the text filter and IPv6 only compose', () => {
+	const ctx = pickerCtx();
+	ctx.locations.countries[0].ipv6_count = 2;
+	ctx.locations.countries[1].ipv6_count = 0;
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	box.checked = true;
+	box.attrs.change();
+	const filt = findOneClass(ctx.poolPanel, 'pv-pool-filter');
+	filt.value = 'nl';
+	filt.listeners.input.forEach((fn) => fn());
+	// 'nl' matches NL by text, but NL has no IPv6: both conditions narrowed it.
+	assert.equal(accRows(ctx._poolListEl).filter((r) => !has(r, 'pv-acc-city')).length, 0,
+		'a row survived the combination of text filter and toggle');
+	assert.match(text(ctx._poolListEl), /No matches/);
+	assert.match(v6HiddenLine(ctx._poolListEl) || '', /1 country hidden/i);
+});
+
+test('the toggle is disabled with an explanation in Secure Core and never empties the list', () => {
+	const ctx = pickerCtx();
+	ctx.hopValue = 'secure_core';
+	ctx.locations.countries.forEach((c) => {
+		c.secure_core_count = c.standard_count;
+		c.ipv6_count = 0;    // counted against the standard kind only
+	});
+	ctx.poolTogglePanel();
+	const { label, box } = v6Toggle(ctx.poolPanel);
+	assert.equal(box.disabled, true, 'the toggle stays clickable in Secure Core');
+	assert.match(label.attrs.title || '', /Secure Core/i,
+		'the disabled toggle does not say why: ' + label.attrs.title);
+	// A toggle left on from Standard must not empty the other modes' lists.
+	ctx._poolV6Only = true;
+	ctx.poolRenderCountryList();
+	assert.ok(mustRow(ctx._poolListEl, 'NL'),
+		'the carried-over toggle emptied the Secure Core list');
+});
+
+test('switching hop mode with the toggle on re-renders the panel without an empty list', () => {
+	const ctx = pickerCtx();
+	ctx.locations.countries[0].ipv6_count = 2;
+	ctx.locations.countries[1].ipv6_count = 0;
+	ctx.locations.countries.forEach((c) => { c.secure_core_count = c.standard_count; });
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	box.checked = true;
+	box.attrs.change();
+	assert.equal(accRows(ctx._poolListEl).filter((r) => !has(r, 'pv-acc-city')).length, 1,
+		'setup: the toggle is filtering');
+	ctx.setHopMode('secure_core');
+	assert.ok(mustRow(ctx._poolListEl, 'NL'),
+		'the mode switch left the toggle silently filtering an IPv6-less mode');
+	const after = v6Toggle(ctx.poolPanel);
+	assert.equal(after.box.disabled, true,
+		'the toggle is not re-rendered disabled after the mode switch');
+});
+
+test('the toggle defaults to on when the IPv6 requirement already applies', () => {
+	const ctx = pickerCtx({
+		v6Only: { checked: true },
+		v6Sel: { value: 'auto' },
+		autoRouting: { checked: false },
+		steerBoxes: { guest: { checked: true } }
+	});
+	ctx.locations.countries[0].ipv6_count = 2;
+	ctx.locations.countries[1].ipv6_count = 0;
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	assert.equal(box.checked, true,
+		'the requirement is on but the picker still lists zero-IPv6 countries');
+	assert.equal(accRows(ctx._poolListEl).filter((r) => !has(r, 'pv-acc-city')).length, 1);
+	box.checked = false;
+	box.attrs.change();
+	assert.ok(mustRow(ctx._poolListEl, 'NL'), 'the user cannot turn the filter back off');
+});
+
+test('IPv6 only says how many cities it hides, even when no country is hidden', () => {
+	const ctx = pickerCtx();
+	// Both countries have IPv6; only cities inside them lack it, so the
+	// narrowing is city-only and a country count could only lie.
+	ctx.locations.countries.forEach((c) => { c.ipv6_count = 1; });
+	ctx.locations.countries[0].cities[0].ipv6_count = 1; // Frankfurt
+	ctx.locations.countries[0].cities[1].ipv6_count = 0; // Berlin
+	ctx.locations.countries[1].cities[0].ipv6_count = 0; // Amsterdam
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	box.checked = true;
+	box.attrs.change();
+	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
+	assert.ok(mustRow(ctx._poolListEl, 'Frankfurt'), 'the city with IPv6 stays');
+	assert.equal(accRows(ctx._poolListEl).filter((r) => has(r, 'pv-acc-city')).length, 1,
+		'the zero-IPv6 city is still listed');
+	const line = v6HiddenLine(ctx._poolListEl);
+	assert.match(line || '', /1 city hidden/i,
+		'Berlin vanished with zero hidden countries and the list says nothing');
+	assert.doesNotMatch(line || '', /country hidden/i,
+		'a country is reported hidden when none is');
+	// Expanding the second country drops its zero-IPv6 city too.
+	cell(mustRow(ctx._poolListEl, 'NL'), 'pv-acc-exp').attrs.click(EV);
+	assert.match(v6HiddenLine(ctx._poolListEl) || '', /2 cities hidden/i,
+		'the hidden-city count stops at one');
+	// The opposite order — the cities already expanded when the toggle flips —
+	// is the same narrowing and is reported the same.
+	box.checked = false;
+	box.attrs.change();
+	assert.ok(mustRow(ctx._poolListEl, 'Berlin'), 'toggling off restores hidden cities');
+	box.checked = true;
+	box.attrs.change();
+	assert.match(v6HiddenLine(ctx._poolListEl) || '', /2 cities hidden/i,
+		'expand-then-enable narrows silently');
+	// And the count follows the matched subset when a text filter applies.
+	const filt = findOneClass(ctx.poolPanel, 'pv-pool-filter');
+	filt.value = 'de';
+	filt.listeners.input.forEach((fn) => fn());
+	assert.match(v6HiddenLine(ctx._poolListEl) || '', /1 city hidden/i,
+		'the hidden-city count does not follow the matched subset');
+});
+
+test('the hidden-country count is exact for several countries and follows the text filter', () => {
+	const ctx = pickerCtx();
+	ctx.locations.countries[0].ipv6_count = 0;
+	ctx.locations.countries[1].ipv6_count = 0;
+	ctx.poolTogglePanel();
+	const { box } = v6Toggle(ctx.poolPanel);
+	box.checked = true;
+	box.attrs.change();
+	assert.equal(v6HiddenLine(ctx._poolListEl), '2 countries hidden — no IPv6 gateways',
+		'the plural line does not give the exact count');
+	const filt = findOneClass(ctx.poolPanel, 'pv-pool-filter');
+	filt.value = 'de';
+	filt.listeners.input.forEach((fn) => fn());
+	assert.equal(v6HiddenLine(ctx._poolListEl), '1 country hidden — no IPv6 gateways',
+		'the count does not follow the matched subset');
+});
+
+test('the toggle is disabled with an explanation in Tor and never empties the list', () => {
+	const ctx = pickerCtx();
+	ctx.locations.countries.forEach((c) => {
+		c.tor_count = c.standard_count;
+		c.ipv6_count = 0;    // counted against the standard kind only
+	});
+	ctx.poolTogglePanel();
+	// A toggle left on from Standard…
+	const { box } = v6Toggle(ctx.poolPanel);
+	box.checked = true;
+	box.attrs.change();
+	ctx.setHopMode('tor');
+	// …must go inert there: disabled with the reason, and the Tor rows (which
+	// do have gateways) retained rather than filtered by Standard counts.
+	const after = v6Toggle(ctx.poolPanel);
+	assert.equal(after.box.disabled, true, 'the toggle stays clickable in Tor');
+	assert.match(after.label.attrs.title || '', /Tor/i,
+		'the disabled toggle does not say why: ' + after.label.attrs.title);
+	assert.ok(mustRow(ctx._poolListEl, 'DE'), 'the carried-over toggle emptied the Tor list');
+	assert.ok(mustRow(ctx._poolListEl, 'NL'), 'the carried-over toggle emptied the Tor list');
+});
+
+test('the view filter is never written to uci', () => {
+	const { spec: spec2, uciData } = loadView();
+	const ctx = makeCtx(spec2, {
+		refs: {},
+		autoRouting: { checked: false },
+		ksBox: { checked: false },
+		v6Sel: { value: 'block' },
+		v6Only: { checked: false },
+		dnsSel: { value: 'off' },
+		steerBoxes: { guest: { checked: true } },
+		hopValue: 'standard',
+		poolEntries: [],
+		_serverChosen: '',
+		_poolV6Only: true
+	});
+	ctx.collectIntoUci();
+	const stored = uciData.protonvpn.main;
+	assert.equal(stored.ipv6_only, undefined, 'the view filter leaked into uci');
+	assert.equal(stored.require_ipv6, '0',
+		'the view filter flipped the real requirement');
 });
