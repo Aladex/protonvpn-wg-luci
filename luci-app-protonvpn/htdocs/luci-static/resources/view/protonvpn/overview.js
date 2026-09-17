@@ -2214,7 +2214,7 @@ return view.extend({
 					E('div', {}, [ this.poolChips ]),
 					this.poolWrap,
 					this.poolNote
-				], _('Countries this instance connects between. Picking a country adds the whole country; open its chip to narrow it to specific cities. The initial connect and the rotation both pick within this set.')),
+				], _('Countries this instance connects between. Picking a country adds the whole country; the arrow at its right end expands its cities to narrow the set. The initial connect and the rotation both pick within this set.')),
 				this.row(_('Server'), [
 					this.srvWrap
 				], _('Automatic picks a server from the set (rotation-friendly). Pin a specific one to lock it; pinning disables automatic rotation.'))

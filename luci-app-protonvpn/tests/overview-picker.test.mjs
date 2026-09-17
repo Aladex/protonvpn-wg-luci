@@ -91,6 +91,27 @@ function codes(ctx) {
 
 // ── row structure ──────────────────────────────────────────────────────────
 
+test('the Locations description matches the accordion picker', () => {
+	const ctx = makeCtx(spec, { locations: locations() });
+	ctx._building = true;
+	const node = ctx.buildConnection();
+	ctx._building = false;
+	const loc = findAllClass(node, 'cbi-value').find((r) => {
+		const title = findOneClass(r, 'cbi-value-title');
+		return title && text(title) === 'Locations';
+	});
+	assert.ok(loc, 'the connection section renders no Locations row');
+	const desc = findAllClass(loc, 'cbi-value-description').map(text).join(' ');
+	assert.match(desc, /adds the whole country/, desc);
+	assert.match(desc, /arrow/i,
+		'the description never says how a country is expanded: ' + desc);
+	assert.doesNotMatch(desc, /chip/i,
+		'the description still sends the user to the chips: ' + desc);
+	assert.doesNotMatch(desc, /back/i,
+		'the description still mentions a screen to go back from: ' + desc);
+});
+
+
 test('country rows are acc rows built from a hit cell and a separate expand cell', () => {
 	const ctx = pickerCtx();
 	ctx.poolTogglePanel();
