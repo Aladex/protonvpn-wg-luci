@@ -17,13 +17,27 @@ je zu verlassen. Jede Zeile zeigt die durchschnittliche Last ihrer
 Gateways im aktuellen Hop-Modus. Verlangt die Instanz IPv6-Gateways (die
 Option *Only use gateways that forward IPv6*, wirksam bei Automatic-IPv6 im
 Standard-Modus mit geleitetem Routing), zeigt die Zeile zusätzlich, wie viele
-ihrer Gateways IPv6 weiterleiten.
+ihrer Gateways IPv6 weiterleiten. Im Kopf des Panels, neben dem Filterfeld,
+liegt außerdem der Schalter **IPv6 only** (Nur IPv6): Ist er aktiv, bleiben
+Länder und Städte ohne IPv6-weiterleitende Gateways außen vor, und eine Zeile
+unter der Liste sagt, wie viele ausgeblendet wurden — getrennt für Länder und
+für Städte, damit die Eingrenzung nie still geschieht. Der IPv6-Zähler in den
+Zeilen erscheint, solange der Schalter aktiv ist, auch wenn die Instanz kein
+IPv6 verlangt. Es ist ein reiner Ansichtsfilter: Er ändert, was die Liste
+zeigt, niemals was die Instanz speichert oder wohin sie sich verbindet — das
+bleibt der Option *Only use gateways that forward IPv6* vorbehalten, und der
+Schalter ist standardmäßig aktiv, wenn diese Option bereits eingeschaltet
+ist. In Secure Core und Tor ist der Schalter nicht verfügbar, weil diese
+Gateways niemals IPv6 weiterleiten (das Bit ist bei 0 von 122
+Secure-Core-Servern und 0 von 7 Tor-Servern der gesamten Flotte gesetzt).
 Klicke auf **Save and reconnect** (Speichern und
 neu verbinden). Sowohl die erste Verbindung als auch jede spätere Rotation
 wählt aus diesem Set. Lass **Server** auf *Automatic*, damit das Backend
 zufällig einen Server aus dem Set wählt, oder pinne einen fest; das Anpinnen
 deaktiviert die Rotation für
 diese Instanz.
+
+![Der Filter „IPv6 only“](screenshots/location-filter.png)
 
 Der **Hop-Modus** (Hop mode) schaltet zwischen Standard, Secure Core (Eintritt
 über einen gehärteten, Proton-eigenen Server in einem datenschutzfreundlichen

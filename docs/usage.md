@@ -15,11 +15,24 @@ without ever leaving the list. Each row shows the average load of its
 gateways in the current hop mode. When the instance requires IPv6 gateways
 (the *Only use gateways that forward IPv6* option, which applies to Automatic
 IPv6 in Standard mode with steered routing), the row also counts how many of
-its gateways qualify. Press
+its gateways qualify. The panel head adds an **IPv6 only** toggle next to the
+filter box: with it on, countries and cities that have no IPv6-forwarding
+gateways are left out of the list, and a line under the list says how many
+were hidden — separately for countries and for cities, so the narrowing is
+never silent. The per-row IPv6 count shows whenever the toggle is on, even
+when the instance does not require IPv6. It is a view filter only — it
+changes what the list shows, never what the instance saves or connects to;
+that remains the *Only use gateways that forward IPv6* option, and the toggle
+defaults to on when that option is already enabled. In Secure Core and Tor
+the toggle is unavailable, because those gateways never forward IPv6 (the bit
+is set on 0 of 122 Secure Core and 0 of 7 Tor logicals across the fleet).
+Press
 **Save and reconnect**. The initial connect and every later
 rotation pick from that set. Leave **Server** on *Automatic* to let the backend
 pick a server from the set at random, or pin one; pinning disables rotation
 for that instance.
+
+![The IPv6 only filter](screenshots/location-filter.png)
 
 **Hop mode** switches between Standard, Secure Core (entry through a hardened
 Proton-owned server in a privacy-friendly country) and Tor (exit through the
