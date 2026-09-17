@@ -149,6 +149,50 @@ const doc = normalize(raw.LogicalServers);
 	eq('tree country total matches cache', jp.gateway_count,
 		jp.standard_count + jp.secure_core_count + jp.tor_count);
 	ok('tree cities present', length(jp.cities) > 0);
+
+	// The average load rides next to the counts, per kind, null where the
+	// kind is absent: the tree carries no per-relay data, so the UI cannot
+	// recompute it and must never invent one.
+	let tokyo = null, amsterdam = null;
+	for (let c in tree)
+		for (let ct in c.cities) {
+			if (ct.code == 'jp-tokyo')
+				tokyo = ct;
+			if (ct.code == 'nl-amsterdam')
+				amsterdam = ct;
+		}
+	ok('tree has tokyo', tokyo != null);
+	eq('tokyo standard load averages its gateways', tokyo.standard_load, 89);
+	eq('tokyo secure-core load averages its gateways', tokyo.secure_core_load, 50);
+	eq('tokyo has no tor load', tokyo.tor_load, null);
+	eq('jp standard load averages across cities', jp.standard_load, 85);
+	eq('jp secure-core load', jp.secure_core_load, 50);
+	eq('amsterdam standard load', amsterdam.standard_load, 38);
+
+	// Tor is a first-class kind like the other two: FR#13-TOR (Load 98) is
+	// the only Tor relay in the fixture, so Paris and FR must average to 98 —
+	// a present kind must never collapse to 0 — while countries without the
+	// kind carry null at the country level too.
+	let fr = null, paris = null, nl = null;
+	for (let c in tree) {
+		if (c.code == 'fr')
+			fr = c;
+		if (c.code == 'nl')
+			nl = c;
+		for (let ct in c.cities)
+			if (ct.code == 'fr-paris')
+				paris = ct;
+	}
+	ok('tree has fr', fr != null);
+	ok('tree has paris', paris != null);
+	eq('paris counts its tor gateway', paris.tor_count, 1);
+	eq('paris tor load is its gateway load', paris.tor_load, 98);
+	eq('fr counts its tor gateway', fr.tor_count, 1);
+	eq('fr tor load averages its tor gateways', fr.tor_load, 98);
+	eq('paris has no standard load', paris.standard_load, null);
+	eq('jp has no country-level tor load', jp.tor_load, null);
+	eq('nl has no country-level tor load', nl.tor_load, null);
+	eq('nl has no country-level secure-core load', nl.secure_core_load, null);
 }
 
 // 4. hop-mode filtering: the same location yields different pools

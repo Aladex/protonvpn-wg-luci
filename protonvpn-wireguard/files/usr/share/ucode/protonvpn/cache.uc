@@ -226,6 +226,13 @@ function normalize(list) {
 	};
 }
 
+// Rounded mean load, or null when there is nothing to average. The `* 1.0`
+// matters: ucode divides int/int as integers (676/8 is 84), which would
+// truncate the +0.5 rounding away.
+function load_avg(sum, n) {
+	return n ? int(sum * 1.0 / n + 0.5) : null;
+}
+
 // Trimmed country/city tree for the UI (no per-relay data).
 function locations_tree(cache) {
 	let out = [];
@@ -233,11 +240,14 @@ function locations_tree(cache) {
 		return out;
 	for (let c in cache.countries) {
 		let cities = [], totals = { standard: 0, secure_core: 0, tor: 0, ipv6: 0 };
+		let load_sums = { standard: 0, secure_core: 0, tor: 0 };
 		for (let city in c.cities) {
 			let n = { standard: 0, secure_core: 0, tor: 0, ipv6: 0 };
+			let load = { standard: 0, secure_core: 0, tor: 0 };
 			for (let r in city.relays) {
 				let kind = relay_kind(r);
 				n[kind]++;
+				load[kind] += r.load;
 				// Counted against the standard kind only, which is the one the
 				// IPv6 requirement can apply to. It is also the only place the
 				// bit occurs: across the full fleet it is set on 0 of 122
@@ -247,12 +257,21 @@ function locations_tree(cache) {
 			}
 			for (let k in [ 'standard', 'secure_core', 'tor', 'ipv6' ])
 				totals[k] += n[k];
+			for (let k in [ 'standard', 'secure_core', 'tor' ])
+				load_sums[k] += load[k];
 			push(cities, {
 				code: city.code, name: city.name,
 				gateway_count: length(city.relays),
 				standard_count: n.standard,
 				secure_core_count: n.secure_core,
 				tor_count: n.tor,
+				// Average load per kind, computed here because the tree
+				// deliberately carries no per-relay data, so the UI cannot
+				// recompute it. Null when the kind is absent: the row then
+				// shows the counter alone rather than an invented figure.
+				standard_load: load_avg(load.standard, n.standard),
+				secure_core_load: load_avg(load.secure_core, n.secure_core),
+				tor_load: load_avg(load.tor, n.tor),
 				// "N of M", not a yes/no: a city where 3 of 40 gateways carry
 				// the bit is not the same offer as one where 38 do, and a
 				// boolean would have to call both of them "yes".
@@ -265,6 +284,9 @@ function locations_tree(cache) {
 			standard_count: totals.standard,
 			secure_core_count: totals.secure_core,
 			tor_count: totals.tor,
+			standard_load: load_avg(load_sums.standard, totals.standard),
+			secure_core_load: load_avg(load_sums.secure_core, totals.secure_core),
+			tor_load: load_avg(load_sums.tor, totals.tor),
 			ipv6_count: totals.ipv6,
 			cities: cities
 		});
