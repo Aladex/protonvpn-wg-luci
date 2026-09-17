@@ -92,13 +92,13 @@ var STYLE = '' +
 	// buttons inside. A stale code (no longer in the server list) is dashed.
 	'.pv-pool{display:flex;flex-direction:column;align-items:flex-start;gap:.4em;margin-top:.45em}' +
 	'.pv-chip{display:inline-flex;align-items:center;gap:.35em;border:1px solid #0069d6;border-radius:1.2em;padding:.15em .55em;line-height:1.4;white-space:nowrap}' +
-	'.pv-chip-country{background:#0069d6;color:#fff}' +
+	'.pv-chip-country{background:var(--primary-color-medium,#0069d6);color:#fff}' +
 	'.pv-chip-click{cursor:pointer}' +
 	'.pv-chip-stale{border-style:dashed;color:var(--text-color-medium,#666)}' +
 	'.pv-chip button{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 .1em;margin:0;font:inherit;font-weight:700;line-height:1}' +
 	'.pv-pool-count{color:var(--text-color-medium,#666);font-size:.9em}' +
-	// Custom location picker: the trigger opens an inline panel that walks
-	// countries -> cities (checkbox narrowing) in place. The trigger hides
+	// Custom location picker: the trigger opens an inline accordion — the
+	// country rows expand to their cities in place. The trigger hides
 	// while the panel is open, so there is no duplicate "add" affordance.
 	'.pv-pool-wrap{display:block;margin-top:.5em}' +
 	'.pv-pool-trigger::after{content:" \\25be"}' +
@@ -113,22 +113,42 @@ var STYLE = '' +
 	'.pv-pool-row .grow{flex:1;overflow:hidden;text-overflow:ellipsis}' +
 	'.pv-pool-row .chev{color:var(--text-color-medium,#888);font-weight:700}' +
 	'.pv-pool-row .box{font-weight:700;width:1.15em;text-align:center;flex:none}' +
-	'.pv-pool-back{font-weight:600}' +
 	'.pv-pool-remove{color:#c0392b;font-weight:600}' +
 	'.pv-pool-remove:hover{background:rgba(192,57,43,.12)}' +
 	'.pv-pool-sep{border-top:1px solid var(--border-color-medium,#ddd);margin:.25em 0}' +
 	'.pv-chip-add{font-weight:700;padding:0 .15em}' +
+	// The location picker accordion, scoped to its own panel so the server
+	// picker's rows keep the base .pv-pool-row look. Each row is two cells:
+	// the hit cell takes the width and does the selecting, the 34px expand
+	// cell opens the country's cities inline — the country list is never
+	// swapped for a city page.
+	'.pv-pool-acc{width:100%;max-width:460px}' +
+	'.pv-pool-acc .pv-acc-row{display:flex;align-items:stretch;gap:0;padding:0}' +
+	'.pv-pool-acc .pv-acc-row:hover{background:transparent}' +
+	'.pv-pool-acc .pv-acc-row.pv-acc-open{background:rgba(0,105,214,.08)}' +
+	'.pv-pool-acc .pv-acc-row.pv-acc-open:hover{background:rgba(0,105,214,.08)}' +
+	'.pv-pool-acc .pv-acc-hit{flex:1;min-width:0;display:flex;align-items:center;gap:.55em;padding:.34em .5em;border-radius:.3em;cursor:pointer;white-space:nowrap}' +
+	'.pv-pool-acc .pv-acc-hit:hover{background:rgba(0,105,214,.14)}' +
+	// The metadata (load dot + figure, gateway count, IPv6 count) is a sibling
+	// of the name, never inside it: .grow alone flexes and ellipsises, so a
+	// long country name can never eat these.
+	'.pv-pool-acc .pv-acc-meta{flex:none;display:flex;align-items:center;gap:.4em;color:var(--text-color-medium,#888);font-variant-numeric:tabular-nums}' +
+	'.pv-pool-acc .pv-acc-exp{flex:none;width:34px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-left:1px solid var(--border-color-medium,#ddd);color:var(--text-color-medium,#888);font-weight:700;cursor:pointer}' +
+	'.pv-pool-acc .pv-acc-exp:hover{background:rgba(0,105,214,.14)}' +
+	'.pv-acc-city .pv-acc-hit{padding-left:2.1em}' +
+	'.pv-pool-acc .pv-acc-city .pv-acc-exp{cursor:default}' +
+	'.pv-pool-acc .pv-acc-city .pv-acc-exp:hover{background:transparent}' +
 	// Server picker: same panel, plus a load dot (green/amber/red), a group
 	// header per country and quick "Automatic / Lowest load" rows at the top.
 	'.pv-srv-trigger{max-width:100%;overflow:hidden;text-overflow:ellipsis;text-align:left}' +
 	'.pv-srv-x{border:0;background:transparent;cursor:pointer;font:inherit;font-weight:700;color:inherit;padding:0 .2em;margin-left:.3em}' +
 	'.pv-dot{display:inline-block;width:.7em;height:.7em;border-radius:50%;flex:none}' +
-	'.pv-dot-lo{background:#3c8c3c}' +
-	'.pv-dot-mid{background:#c79100}' +
-	'.pv-dot-hi{background:#c0392b}' +
+	'.pv-dot-lo{background:var(--success-color-medium,#3c8c3c)}' +
+	'.pv-dot-mid{background:var(--warn-color-medium,#c79100)}' +
+	'.pv-dot-hi{background:var(--error-color-medium,#c0392b)}' +
 	'.pv-srv-load{color:var(--text-color-medium,#888);font-variant-numeric:tabular-nums;flex:none}' +
-	'.pv-srv-cur{color:#3c8c3c;font-weight:600;flex:none}' +
-	// Deliberately muted and theme-driven, unlike pv-srv-cur's hardcoded
+	'.pv-srv-cur{color:var(--success-color-medium,#3c8c3c);font-weight:600;flex:none}' +
+	// Deliberately muted and theme-driven, unlike pv-srv-cur's success
 	// green: it marks a capability, not a state, and it shares a narrow row
 	// with the load figure — which must never be pushed off.
 	'.pv-srv-v6{flex:none;font-size:78%;font-weight:600;line-height:1.5;' +
@@ -482,7 +502,7 @@ return view.extend({
 			return '';
 		if (regionNames === null) {
 			try {
-				regionNames = new Intl.DisplayNames([ navigator.language || 'en' ],
+				regionNames = new Intl.DisplayNames([ window.navigator.language || 'en' ],
 					{ type: 'region' });
 			} catch (e) {
 				regionNames = false;
@@ -623,6 +643,16 @@ return view.extend({
 			: (m === 'tor' ? 'tor_count' : 'standard_count');
 	},
 
+	// Key of the matching per-kind average load. cache.uc computes it next to
+	// the counters because the locations tree carries no per-relay data;
+	// caches written before the field existed simply have none, and the row
+	// then shows the counter alone rather than an invented figure.
+	hopLoadKey: function () {
+		var m = this.hopMode();
+		return m === 'secure_core' ? 'secure_core_load'
+			: (m === 'tor' ? 'tor_load' : 'standard_load');
+	},
+
 	setHopMode: function (mode) {
 		if (this.hopValue === mode)
 			return;
@@ -680,7 +710,12 @@ return view.extend({
 				return (city[key] || 0) > 0;
 			});
 			var count = c[key] || 0;
-			if (cities.length && count > 0)
+			// Listed whenever the country has gateways of the current kind,
+			// even when the cache carries no per-city counts for it: the row
+			// shows the country's own counter, and the expand cell simply has
+			// no cities to offer. Demanding city counts here would drop whole
+			// countries from the secure-core/tor lists.
+			if (count > 0)
 				out.push(Object.assign({}, c, {
 					cities: cities, gateway_count: count,
 					name: self.countryLabel(c.code)
@@ -1232,8 +1267,9 @@ return view.extend({
 	poolTogglePanel: function() {
 		if (this._poolOpen)
 			return this.poolClosePanel();
-		this._poolLevel = 'country';
+		this._poolEdit = false;
 		this._poolCountry = null;
+		this._poolExpanded = {};
 		this._poolFilter = '';
 		this._poolOpen = true;
 		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
@@ -1247,17 +1283,17 @@ return view.extend({
 		if (this.poolTrigger) this.poolTrigger.classList.remove('hidden');
 	},
 
-	// Open a country's city checklist. Entering a country selects it whole
-	// ("pick a country = whole country in the set"); checkboxes then narrow it.
-	// edit=true means we came from a chip (editing that country): no "back to
-	// countries", but a "remove this country" action instead. edit=false is the
-	// add flow from the country list (keeps a back step).
+	// Open the picker from a chip: the same accordion as the plain add flow,
+	// but that one country arrives expanded and the list ends in a "remove
+	// this country" row. The country is added whole when it was not in the
+	// set yet ("pick a country = whole country in the set").
 	poolOpenCountry: function(cc, edit) {
 		if (!this.poolCountryHas(cc).has)
 			this.poolSetWhole(cc);
-		this._poolLevel = 'city';
-		this._poolCountry = cc;
 		this._poolEdit = !!edit;
+		this._poolCountry = cc;
+		this._poolExpanded = {};
+		this._poolExpanded[cc] = true;
 		this._poolFilter = '';
 		this._poolOpen = true;
 		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
@@ -1265,78 +1301,35 @@ return view.extend({
 		this.poolRenderPanel();
 	},
 
-	// City level: a back row, a "Whole country" master toggle, then a checkbox
-	// per city. Country level: a header with close, a filter, the country list.
+	// The chevron hit: expand or collapse one country's cities in place. Pure
+	// presentation — it never touches the set and never swaps the list.
+	poolToggleExpand: function(cc) {
+		this._poolExpanded = this._poolExpanded || {};
+		if (this._poolExpanded[cc])
+			delete this._poolExpanded[cc];
+		else
+			this._poolExpanded[cc] = true;
+		this.poolRenderCountryList();
+	},
+
+	// The panel: a head with close, a filter, then the accordion list. Edit
+	// mode (reached from a chip) is the same accordion, headed by the country
+	// being edited.
 	poolRenderPanel: function() {
 		var panel = this.poolPanel;
 		if (!panel)
 			return;
-		dom.content(panel, '');
+		dom.content(panel, []);
 
-		if (this._poolLevel === 'city') {
-			var cc = this._poolCountry;
-			var c = (this._ccData || {})[cc];
-			if (this._poolEdit) {
-				var cflag = this.countryFlag(cc);
-				panel.appendChild(E('div', { class: 'pv-pool-head' }, [
-					E('span', {}, (cflag ? cflag + ' ' : '') + (this.countryLabel(cc))),
-					E('button', { type: 'button', class: 'pv-pool-x', title: _('Done'),
-						click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
-				]));
-			} else {
-				panel.appendChild(E('div', { class: 'pv-pool-head' }, [
-					E('span', { class: 'pv-pool-back', style: 'cursor:pointer',
-						click: L.bind(function(ev) {
-							ev.stopPropagation();
-							this._poolLevel = 'country';
-							this._poolCountry = null;
-							this._poolFilter = '';
-							this.poolRenderPanel();
-						}, this) }, '‹ ' + _('Back to countries')),
-					E('button', { type: 'button', class: 'pv-pool-x', title: _('Close'),
-						click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
-				]));
-			}
-			panel.appendChild(E('div', { class: 'pv-pool-sep' }));
-			if (!c) {
-				panel.appendChild(E('div', { class: 'pv-pool-row is-in' }, _('No cities available')));
-				return;
-			}
-			var st = this.poolCountryHas(cc);
-			panel.appendChild(E('div', { class: 'pv-pool-row',
-				click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, [
-					E('span', { class: 'box' }, st.whole ? '☑' : '☐'),
-					E('span', { class: 'grow' }, _('Whole country (%d)').format(c.gateway_count || 0) +
-						this.v6CountLabel(c))
-				]));
-			panel.appendChild(E('div', { class: 'pv-pool-sep' }));
-			var key = this.hopCountKey();
-			(c.cities || []).forEach(L.bind(function(city) {
-				var on = st.whole || !!st.cities[city.code];
-				panel.appendChild(E('div', { class: 'pv-pool-row',
-					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, [
-						E('span', { class: 'box' }, on ? '☑' : '☐'),
-						E('span', { class: 'grow' }, '%s (%d)'.format(city.name, city[key] || 0) +
-							this.v6CountLabel(city))
-					]));
-			}, this));
-			if (this._poolEdit) {
-				panel.appendChild(E('div', { class: 'pv-pool-sep' }));
-				panel.appendChild(E('div', { class: 'pv-pool-row pv-pool-remove',
-					click: L.bind(function(ev) {
-						ev.stopPropagation();
-						this.poolRemoveCountry(cc);
-						this.poolClosePanel();
-					}, this) }, [
-						E('span', { class: 'box' }, '🗑'),
-						E('span', { class: 'grow' }, _('Remove this country'))
-					]));
-			}
-			return;
+		var title;
+		if (this._poolEdit && this._poolCountry) {
+			var cflag = this.countryFlag(this._poolCountry);
+			title = (cflag ? cflag + ' ' : '') + this.countryLabel(this._poolCountry);
+		} else {
+			title = _('Add a location');
 		}
-
 		panel.appendChild(E('div', { class: 'pv-pool-head' }, [
-			E('span', {}, _('Add a location')),
+			E('span', {}, title),
 			E('button', { type: 'button', class: 'pv-pool-x', title: _('Close'),
 				click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
 		]));
@@ -1354,33 +1347,94 @@ return view.extend({
 		setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
 	},
 
-	// Country rows, filtered. Mark: whole = check, partial = half, none = blank.
-	// Clicking a row opens that country (adding it whole, then narrow-able).
+	// The metadata half of an accordion row: the average-load dot and figure
+	// (only when the cache carries them — see hopLoadKey), then the gateway
+	// counter and the IPv6 count label. Lives outside the .grow name span so
+	// a long name ellipsises alone and never eats these.
+	poolMetaKids: function (count, avg, v6row) {
+		var kids = [];
+		if (typeof avg === 'number') {
+			kids.push(E('span', { class: 'pv-dot ' + this.srvLoadClass(avg),
+				title: _('Average load of these gateways') }));
+			kids.push(E('span', {}, '%d%%'.format(avg)));
+		}
+		kids.push(E('span', {}, '(%d)'.format(count) + this.v6CountLabel(v6row)));
+		return kids;
+	},
+
+	// The accordion: one row per country, two cells each. The hit cell (name
+	// side) toggles the whole country in the set; the exp cell (the 34px
+	// chevron column) expands that country's city rows inline. Mark: whole =
+	// check, partial = small square, none = blank. The square (U+25AA) renders
+	// in the theme font, unlike the half-circle that used to be here and came
+	// out as tofu on the router. City rows repeat the two cells but their exp
+	// cell is an inert spacer, so the chevron column stays aligned.
 	poolRenderCountryList: function() {
 		var el = this._poolListEl;
 		if (!el)
 			return;
-		dom.content(el, '');
+		dom.content(el, []);
 		var f = (this._poolFilter || '').toLowerCase();
 		var any = false;
+		var key = this.hopCountKey();
+		var loadKey = this.hopLoadKey();
 		this.filteredCountries().forEach(L.bind(function(c) {
 			if (f && c.name.toLowerCase().indexOf(f) < 0 && c.code.toLowerCase().indexOf(f) < 0)
 				return;
 			any = true;
-			var st = this.poolCountryHas(c.code);
-			var mark = st.whole ? '☑' : (st.has ? '◐' : '');
-			var flag = this.countryFlag(c.code);
-			el.appendChild(E('div', { class: 'pv-pool-row' + (st.has ? ' is-in' : ''),
-				click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(c.code); }, this) }, [
-					E('span', { class: 'box' }, mark),
-					E('span', { class: 'grow' }, (flag ? flag + ' ' : '') +
-						'%s (%d)'.format(c.name, c.gateway_count || 0) +
-						this.v6CountLabel(c)),
-					E('span', { class: 'chev' }, '›')
+			var cc = c.code;
+			var st = this.poolCountryHas(cc);
+			var mark = st.whole ? '☑' : (st.has ? '▪' : '');
+			var open = !!(this._poolExpanded || {})[cc];
+			var flag = this.countryFlag(cc);
+			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row' +
+				(st.has ? ' is-in' : '') + (open ? ' pv-acc-open' : '') }, [
+				E('span', { class: 'pv-acc-hit',
+					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, [
+						E('span', { class: 'box' }, mark),
+						E('span', { class: 'grow' }, (flag ? flag + ' ' : '') + c.name),
+						E('span', { class: 'pv-acc-meta' },
+							this.poolMetaKids(c.gateway_count || 0, c[loadKey], c))
+					]),
+				E('span', { class: 'pv-acc-exp',
+					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleExpand(cc); }, this) },
+					open ? '▾' : '›')
+			]));
+			if (!open)
+				return;
+			(c.cities || []).forEach(L.bind(function(city) {
+				var on = st.whole || !!st.cities[city.code];
+				el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-acc-city' +
+					(on ? ' is-in' : '') }, [
+					E('span', { class: 'pv-acc-hit',
+						click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, [
+							E('span', { class: 'box' }, on ? '☑' : '☐'),
+							E('span', { class: 'grow' }, city.name),
+							E('span', { class: 'pv-acc-meta' },
+								this.poolMetaKids(city[key] || 0, city[loadKey], city))
+						]),
+					E('span', { class: 'pv-acc-exp' })
 				]));
+			}, this));
 		}, this));
 		if (!any)
 			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, _('No matches')));
+		if (this._poolEdit) {
+			var rmcc = this._poolCountry;
+			el.appendChild(E('div', { class: 'pv-pool-sep' }));
+			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-pool-remove' }, [
+				E('span', { class: 'pv-acc-hit',
+					click: L.bind(function(ev) {
+						ev.stopPropagation();
+						this.poolRemoveCountry(rmcc);
+						this.poolClosePanel();
+					}, this) }, [
+						E('span', { class: 'box' }, '🗑'),
+						E('span', { class: 'grow' }, _('Remove this country'))
+					]),
+				E('span', { class: 'pv-acc-exp' })
+			]));
+		}
 	},
 	srvLoadClass: function(load) {
 		if (typeof load !== 'number')
@@ -2134,7 +2188,7 @@ return view.extend({
 				ev.stopPropagation();
 				this.poolTogglePanel();
 			}, this) }, '+ ' + _('Add a location'));
-		this.poolPanel = E('div', { class: 'pv-pool-panel hidden' });
+		this.poolPanel = E('div', { class: 'pv-pool-panel pv-pool-acc hidden' });
 		this.poolWrap = E('div', { class: 'pv-pool-wrap' }, [ this.poolTrigger, this.poolPanel ]);
 
 		this.srvTrigger = E('button', { type: 'button', class: 'cbi-button pv-pool-trigger pv-srv-trigger',
@@ -2307,7 +2361,7 @@ return view.extend({
 				E('label', { class: 'pv-check' }, [ this.ksBox, _('Block LAN internet access while the VPN is down') ])
 			]);
 			this.v6Row = this.row(_('IPv6'), [ this.v6Sel, this.v6Note, this.v6Warn ],
-				_('ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through the tunnel on those and keeps blocking it on the rest, so it can never fall back to your provider.'));
+				_('ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through the tunnel on those and keeps blocking it on the rest, so it can never fall back to your provider. Block is the default: a fresh install lets no IPv6 past the router at all, because an IPv6 path around the tunnel would expose your address just as plainly as no VPN.'));
 			this.v6OnlyRow = this.row('', [
 				E('label', { class: 'pv-check' }, [ this.v6Only,
 					_('Only use gateways that forward IPv6') ]),
@@ -2347,6 +2401,29 @@ return view.extend({
 		return out;
 	},
 
+	// Why 'auto' would be inert under the routing currently on the form, or
+	// '' when it would bite. Mirrors the backend's rule (protonvpn.common
+	// require_ipv6_active): 'auto' hands clients IPv6 only through the
+	// per-network policy rules that steered routing creates, so it needs
+	// auto_routing off, at least one steered network and a routing table to
+	// steer into. The conditions are named separately because the fix
+	// differs per condition — a toggle to untick, a network to pick, a
+	// table to name — so the note can say which one applies. The table is
+	// read from the Advanced field once the form has built that far, and
+	// from the stored value before it.
+	v6AutoInert: function () {
+		if (this.autoRouting && this.autoRouting.checked)
+			return 'auto_routing';
+		if (!this.steeredNetworks().length)
+			return 'no_steered';
+		var ref = (this.refs || {}).routing_table;
+		var table = ref ? (ref.value || '').trim()
+			: (uci.get('protonvpn', this.instance, 'routing_table') || '');
+		if (!table)
+			return 'no_table';
+		return '';
+	},
+
 	onRoutingToggle: function (init) {
 		if (init !== true)
 			this.markDirty();
@@ -2358,18 +2435,35 @@ return view.extend({
 		var rt = (this.status || {}).routing || {};
 		var mode = this.v6Sel ? this.v6Sel.value : 'block';
 		// 'auto' hangs off the per-network policy rules that only steered
-		// routing creates, so routing everything through the tunnel leaves
-		// nothing to attach it to — say so instead of offering a dead option.
+		// routing creates, so where it cannot bite the option is not offered
+		// and the control is moved to what the save will store — with the
+		// reason named, because the fix differs per condition. A missing
+		// routing table is the exception: the save fills it from the
+		// interface name, so the mode survives and only the note explains
+		// why nothing has arrived yet.
+		var inert = this.v6Sel ? this.v6AutoInert() : '';
+		var deadOpt = (inert === 'auto_routing' || inert === 'no_steered');
 		var autoOpt = this.v6Sel ? this.v6Sel.querySelector('option[value="auto"]') : null;
 		if (autoOpt)
-			autoOpt.disabled = !!auto;
-		if (auto && mode === 'auto' && this.v6Sel) {
+			autoOpt.disabled = deadOpt;
+		if (deadOpt && mode === 'auto' && this.v6Sel) {
 			this.v6Sel.value = 'block';
 			mode = 'block';
+			// With nothing steered the whole IPv6 row is hidden, so the note
+			// cannot say this; auto_routing keeps the row and its note. Said
+			// on initialization too: a saved 'auto' with nothing steered is a
+			// supported legacy configuration, and normalizing it on page load
+			// with no word anywhere is exactly the silent downgrade the note
+			// and the save rewrite exist to eliminate.
+			if (inert === 'no_steered')
+				this.notice(_('Automatic IPv6 works only with at least one steered network — with none ticked, the mode is set to Block.'),
+					'warning', 8000);
 		}
 		var note = '';
-		if (auto)
+		if (inert === 'auto_routing')
 			note = _('Automatic IPv6 needs steered networks; while all LAN traffic goes through the VPN, IPv6 is blocked.');
+		else if (inert === 'no_table' && mode === 'auto')
+			note = _('Automatic IPv6 needs a routing table to steer into — set one under Advanced settings; until it exists, IPv6 stays blocked.');
 		else if (mode === 'auto' && this.ipv6Unmet())
 			note = this.ipv6Unmet().note;
 		else if (mode === 'auto' && rt.ipv6_gateway === false)
@@ -2735,10 +2829,17 @@ return view.extend({
 			var steered = autoOn ? [] : this.steeredNetworks();
 			uci.set('protonvpn', inst, 'auto_routing', autoOn ? '1' : '0');
 			uci.set('protonvpn', inst, 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
-			// auto_routing has no steered networks to attach the IPv6 lookup
-			// rules to, so 'auto' is stored as the 'block' it behaves as.
+			// 'auto' hands clients IPv6 only through the per-network policy
+			// rules that steered routing creates, so where the backend would
+			// ignore it the 'block' it behaves as is stored instead — never
+			// an 'auto' the control was no longer showing (v6AutoInert is the
+			// same rule the toggle applies). A missing routing table is not a
+			// rewrite case: it is filled from the interface name below, which
+			// is all 'auto' needs.
 			var v6 = (this.v6Sel && this.v6Sel.value) || 'block';
-			uci.set('protonvpn', inst, 'ipv6_mode', (autoOn && v6 === 'auto') ? 'block' : v6);
+			var v6inert = this.v6AutoInert();
+			uci.set('protonvpn', inst, 'ipv6_mode',
+				(v6 === 'auto' && (v6inert === 'auto_routing' || v6inert === 'no_steered')) ? 'block' : v6);
 			// Stored as ticked even where it cannot currently apply; the
 			// backend runs the same availability rule, so an inapplicable
 			// value is inert rather than wrong, and the setting survives a

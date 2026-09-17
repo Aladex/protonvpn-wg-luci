@@ -40,8 +40,50 @@ if (!String.prototype.format)
 	Object.defineProperty(String.prototype, 'format', { value: luciFormat });
 
 // A node is a plain record; `text()` flattens one the way a reader sees it.
+// Elements also carry the small DOM surface the view itself uses when it
+// builds panels inline: appends after dom.content(), listeners recorded per
+// event (so a test can fire what a click would), and a class list backed by
+// attrs.class so visibility toggles stay inspectable.
+// dom.content(el, '') resets children to a string, and a real DOM node would
+// still accept appends afterwards — coerce instead of letting String.concat
+// turn the appended elements into one opaque string (which is what made
+// rendered chips uninspectable: findAllClass saw "0 chips").
+function childList(el) {
+	if (Array.isArray(el.children))
+		return el.children;
+	return (el.children == null || el.children === '') ? [] : [ el.children ];
+}
+
 export function El(tag, attrs, children) {
-	return { tag, attrs: attrs || {}, children: children == null ? [] : children };
+	const el = { tag, attrs: attrs || {}, children: children == null ? [] : children };
+	const current = () => String(el.attrs.class || '').split(/\s+/).filter(Boolean);
+	const set = (cls, on) => {
+		const parts = current();
+		const at = parts.indexOf(cls);
+		if (on && at < 0) parts.push(cls);
+		if (!on && at >= 0) parts.splice(at, 1);
+		el.attrs.class = parts.join(' ');
+	};
+	el.appendChild = (c) => { el.children = childList(el).concat([c]); return c; };
+	// The one selector shape the view uses: an option lookup inside a select.
+	el.querySelector = (sel) => {
+		const m = /^([a-z]+)\[value="(.*)"\]$/.exec(sel);
+		if (!m)
+			return null;
+		return childList(el).find((c) => c && c.tag === m[1] &&
+			String((c.attrs && c.attrs.value) || '') === m[2]) || null;
+	};
+	el.addEventListener = (ev, fn) => {
+		el.listeners = el.listeners || {};
+		(el.listeners[ev] = el.listeners[ev] || []).push(fn);
+	};
+	el.classList = {
+		add: (...cs) => cs.forEach((c) => set(c, true)),
+		remove: (...cs) => cs.forEach((c) => set(c, false)),
+		toggle: (c, on) => set(c, on === undefined ? !current().includes(c) : !!on),
+		contains: (c) => current().includes(c)
+	};
+	return el;
 }
 
 export function text(node) {
@@ -75,6 +117,30 @@ export function findClass(node, cls) {
 	if (own.split(/\s+/).includes(cls))
 		return text(node);
 	return findClass(node.children, cls);
+}
+
+// The element records carrying the given CSS class, depth first. findClass()
+// answers "what does the user read"; this one answers "what did the view
+// build" — needed where the interesting part is the structure itself (a hit
+// target separate from the chevron cell) rather than its text.
+export function findAllClass(node, cls) {
+	const out = [];
+	const walk = (n) => {
+		if (n == null || typeof n !== 'object')
+			return;
+		if (Array.isArray(n))
+			return n.forEach(walk);
+		const own = String((n.attrs && n.attrs.class) || '');
+		if (own.split(/\s+/).includes(cls))
+			out.push(n);
+		walk(n.children);
+	};
+	walk(node);
+	return out;
+}
+
+export function findOneClass(node, cls) {
+	return findAllClass(node, cls)[0] || null;
 }
 
 export function loadView(opts) {
@@ -133,7 +199,7 @@ export function loadView(opts) {
 		poll: { add: () => {}, remove: () => {}, start: () => {}, stop: () => {} },
 		dom: {
 			content: (el, children) => { el.children = children; return el; },
-			append: (el, children) => { el.children = (el.children || []).concat(children); },
+			append: (el, children) => { el.children = childList(el).concat(children); },
 			create: El, parse: (s) => s, isEmpty: () => false
 		},
 		E: El,
@@ -158,7 +224,10 @@ export function loadView(opts) {
 	// trailing `return` is why this has to be a Function body and not a module.
 	const factory = new Function(...names, src);
 	const spec = factory(...names.map((n) => globals[n]));
-	return { spec, globals, notices, rpcCalls, uciData };
+	// The stylesheet is a plain string constant inside the view, injected by
+	// render(); tests that assert on it (theme variables, panel width) read
+	// the source rather than standing up the whole form.
+	return { spec, globals, notices, rpcCalls, uciData, src };
 }
 
 // A view context with the real methods on its prototype and only the state a

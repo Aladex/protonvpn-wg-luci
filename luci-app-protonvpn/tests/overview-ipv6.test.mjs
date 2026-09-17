@@ -15,7 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadView, makeCtx, findClass, El } from './luci-harness.mjs';
+import { loadView, makeCtx, findClass, findAllClass, findOneClass, text, El } from './luci-harness.mjs';
 
 const { spec } = loadView();
 
@@ -163,6 +163,7 @@ function noteFor(status) {
 		ksRow: { classList: { toggle: () => {} } },
 		steerRow: { classList: { toggle: () => {} } },
 		steerBoxes: { guest: { checked: true } },
+		refs: { routing_table: { value: 'main' } },
 		hopValue: 'standard',
 		_serverChosen: '',
 		srvRenderTrigger: () => {}, srvRenderPanel: () => {}
@@ -178,4 +179,200 @@ test('the routing note distinguishes unreachable from unsupported', () => {
 	assert.doesNotMatch(unreach, /widen/i,
 		'the note tells the user to widen locations that were not the problem: ' + unreach);
 	assert.match(unreach, /could not be reached|unreachable|again/i, unreach);
+});
+
+// ── inert 'auto': the page must say why, and the save must agree ─────────
+// The backend (protonvpn.common require_ipv6_active) treats 'auto' as inert
+// when auto_routing is on, when no source network is steered, or when there
+// is no routing table to steer into. The forum report behind these tests:
+// IPv6 set to Automatic, IPv6 never arrives, and nothing on the page says
+// why. Each condition has a different fix, so the wording has to name the
+// one that applies, and what is stored must match what the control shows.
+
+// A context standing in the traffic-routing panel mid-edit: the widgets
+// onRoutingToggle reads, with a stable auto option record so its disabled
+// flag can be asserted afterwards.
+function routingCtx(over) {
+	const autoOpt = { disabled: false };
+	const state = Object.assign({
+		status: {},
+		autoRouting: { checked: false },
+		ksBox: { checked: false },
+		v6Sel: { value: 'auto',
+			querySelector: (sel) => (sel === 'option[value="auto"]' ? autoOpt : null) },
+		v6Note: El('div', { class: 'hidden' }),
+		v6Warn: El('div', { class: 'hidden' }),
+		v6Only: { checked: false, disabled: false },
+		v6OnlyNote: El('div', { class: 'hidden' }),
+		v6Row: El('div', {}),
+		v6OnlyRow: El('div', {}),
+		ksRow: El('div', {}),
+		steerRow: El('div', {}),
+		steerBoxes: { guest: { checked: true } },
+		refs: { routing_table: { value: 'protonvpn' } },
+		hopValue: 'standard',
+		_serverChosen: '',
+		srvRenderTrigger: () => {}, srvRenderPanel: () => {}
+	}, over);
+	const ctx = makeCtx(spec, state);
+	ctx.autoOpt = autoOpt;
+	return ctx;
+}
+
+// A context far enough through collectIntoUci to store the routing block.
+function saveCtx(spec2, over) {
+	return makeCtx(spec2, Object.assign({
+		refs: {},
+		autoRouting: { checked: false },
+		ksBox: { checked: false },
+		v6Sel: { value: 'auto' },
+		v6Only: { checked: false },
+		dnsSel: { value: 'off' },
+		steerBoxes: { guest: { checked: true } },
+		hopValue: 'standard',
+		poolEntries: [],
+		_serverChosen: ''
+	}, over));
+}
+
+test('a save with no steered network stores the block the control was forced to show', () => {
+	const { spec: spec2, uciData } = loadView();
+	const ctx = saveCtx(spec2, { steerBoxes: { guest: { checked: false } } });
+	ctx.collectIntoUci();
+	assert.equal(uciData.protonvpn.main.ipv6_mode, 'block',
+		"'auto' with nothing steered is inert in the backend, so storing it silently would leave the page claiming Automatic");
+});
+
+test('unticking the last steered network forces the control to Block and says why', () => {
+	const ctx = routingCtx({ steerBoxes: { guest: { checked: false } } });
+	ctx.onRoutingToggle();
+	assert.equal(ctx.v6Sel.value, 'block',
+		'the control still offers the Automatic the save would have to rewrite');
+	assert.equal(ctx.autoOpt.disabled, true,
+		'Automatic stays selectable where it cannot apply');
+	const warn = (ctx._notices || []).find((n) => n.kind === 'warning');
+	assert.ok(warn, 'the rewrite of the user\'s mode happens with no word about it');
+	assert.match(warn.text, /steered network/i,
+		'the warning does not name the condition: ' + warn.text);
+});
+
+test('a missing routing table is named as the reason, and the mode is not rewritten', () => {
+	const ctx = routingCtx({ refs: { routing_table: { value: '' } } });
+	ctx.onRoutingToggle(true);
+	const note = ctx.v6Note.textContent || '';
+	assert.match(note, /routing table/i,
+		'the note never says which condition defeats Automatic: ' + note);
+	assert.match(note, /Advanced/i,
+		'the fix differs per condition, so the note must point at it: ' + note);
+	assert.ok(!ctx.v6Note.classList.contains('hidden'),
+		'the note is rendered but kept hidden');
+	assert.equal(ctx.v6Sel.value, 'auto',
+		'the save fills the table from the interface name, so the mode must survive');
+	assert.equal(ctx.autoOpt.disabled, false,
+		'Automatic is disabled over a condition the save itself cures');
+});
+
+test('with steering in place Automatic stays offered, shown and saved', () => {
+	const ctx = routingCtx();
+	ctx.onRoutingToggle(true);
+	assert.equal(ctx.v6Sel.value, 'auto',
+		'the force-to-Block reached a mode the backend would honour');
+	assert.equal(ctx.autoOpt.disabled, false,
+		'Automatic is disabled although steering would carry it');
+	const { spec: spec2, uciData } = loadView();
+	saveCtx(spec2).collectIntoUci();
+	assert.equal(uciData.protonvpn.main.ipv6_mode, 'auto',
+		'the save rewrote a mode the backend would honour');
+});
+
+test('auto_routing still stores the block an Automatic selection behaves as', () => {
+	const { spec: spec2, uciData } = loadView();
+	saveCtx(spec2, { autoRouting: { checked: true } }).collectIntoUci();
+	assert.equal(uciData.protonvpn.main.ipv6_mode, 'block',
+		'the existing auto_routing rewrite regressed while widening it');
+});
+
+test('the IPv6 description says what the default is and why', () => {
+	const { spec: spec2 } = loadView();
+	const ctx = makeCtx(spec2, {
+		status: { routing: { mode: 'steered', networks: [ 'guest' ] } },
+		srvRenderTrigger: () => {}, srvRenderPanel: () => {}
+	});
+	const node = ctx.buildRoutingSection();
+	const v6row = findAllClass(node, 'cbi-value').find((r) => {
+		const title = findOneClass(r, 'cbi-value-title');
+		return title && text(title) === 'IPv6';
+	});
+	assert.ok(v6row, 'the routing section renders no IPv6 row');
+	// The row holds note/warn divs in the same class; the description is the
+	// one that actually says something.
+	const desc = findAllClass(v6row, 'cbi-value-description')
+		.map(text).filter(Boolean).join(' ');
+	assert.match(desc, /default/i,
+		'the description never says Block is the shipped default: ' + desc);
+	assert.match(desc, /block/i,
+		'the description never names the default mode: ' + desc);
+});
+
+// A saved 'auto' with auto_routing off and no source_network is a supported
+// legacy configuration (the former collector rewrote only auto_routing).
+// Building the page normalizes the selector to Block and hides the IPv6
+// row, so unless initialization itself says something, the later save
+// writes Block without a word — the exact silent downgrade this feature
+// exists to remove.
+test('normalizing a saved Automatic during initialization is announced, and the save agrees', () => {
+	const { spec: spec2, uciData } = loadView({ uci: { protonvpn: { main: {
+		ipv6_mode: 'auto', auto_routing: '0' } } } });
+	const ctx = makeCtx(spec2, {
+		status: { routing: { mode: 'steered', networks: [ 'guest' ] } },
+		refs: {},
+		srvRenderTrigger: () => {}, srvRenderPanel: () => {}
+	});
+	ctx.buildRoutingSection();
+	assert.equal(ctx.v6Sel.value, 'block',
+		'the selector is not normalized to what the save will store');
+	assert.ok(ctx.v6Row.classList.contains('hidden'),
+		'the IPv6 row should stay hidden while nothing is steered');
+	const warn = (ctx._notices || []).find((n) => n.kind === 'warning');
+	assert.ok(warn,
+		'the saved Automatic is silently downgraded on page load — no note (row hidden), no notice');
+	assert.match(warn.text, /steered network/i,
+		'the notice does not name the condition: ' + warn.text);
+	ctx.collectIntoUci();
+	assert.equal(uciData.protonvpn.main.ipv6_mode, 'block',
+		'the save stores something other than what the control was showing');
+});
+
+test('routed-everything mode disables Automatic, and the save stores Block', () => {
+	const ctx = routingCtx({ autoRouting: { checked: true } });
+	ctx.onRoutingToggle(true);
+	assert.equal(ctx.autoOpt.disabled, true,
+		'Automatic stays selectable while all LAN traffic goes through the VPN');
+	assert.equal(ctx.v6Sel.value, 'block',
+		'the control still shows the Automatic the collector rewrites');
+	const note = ctx.v6Note.textContent || '';
+	assert.match(note, /LAN traffic/i,
+		'the note does not name the auto_routing condition: ' + note);
+	assert.ok(!ctx.v6Note.classList.contains('hidden'),
+		'the note is rendered but kept hidden');
+	const { spec: spec2, uciData } = loadView();
+	saveCtx(spec2, { autoRouting: { checked: true } }).collectIntoUci();
+	assert.equal(uciData.protonvpn.main.ipv6_mode, 'block',
+		'the save stores something other than what the control was showing');
+});
+
+test('saving steering with an empty table fills it from the interface, field included', () => {
+	const { spec: spec2, uciData } = loadView();
+	const tableField = { value: '' };
+	saveCtx(spec2, {
+		refs: { routing_table: tableField, interface: { value: 'pv_guest' } }
+	}).collectIntoUci();
+	assert.equal(uciData.protonvpn.main.routing_table, 'pv_guest',
+		'Automatic is saved while the routing table it needs is absent');
+	assert.equal(tableField.value, 'pv_guest',
+		'the Advanced field keeps showing an empty table the save replaced');
+	assert.equal(uciData.protonvpn.main.ipv6_mode, 'auto',
+		'Automatic must survive: with the table filled, the backend honours it');
+	assert.deepEqual(uciData.protonvpn.main.source_network, [ 'guest' ],
+		'the steered network the table was filled for is not stored');
 });
