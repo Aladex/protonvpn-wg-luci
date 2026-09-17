@@ -8,8 +8,12 @@ password is processed in your browser and never sent to the router. The server
 list downloads right after login; it is large (Proton publishes tens of
 thousands of servers), so the first refresh takes a few seconds.
 
-Then pick a **location set** — whole countries, or individual cities inside
-them — and press **Save and reconnect**. The initial connect and every later
+Then pick a **location set**. The picker is an accordion: clicking a country
+selects it whole, and the arrow at the right end of its row expands that
+country's cities in place, so you can narrow the set to individual cities
+without ever leaving the list. Each row also shows the average load of its
+gateways in the current hop mode and how many of them forward IPv6. Press
+**Save and reconnect**. The initial connect and every later
 rotation pick from that set. Leave **Server** on *Automatic* to let the backend
 choose by load, or pin one; pinning disables rotation for that instance.
 

@@ -30,7 +30,7 @@ Netzwerk-Interface.
 | `source_network` | — | Nur diese Netzwerke steuern statt alles |
 | `routing_table` | — | Eigene Routing-Tabelle (leer = main) |
 | `killswitch` | `0` | Den gesteuerten Netzwerken das WAN sperren, solange der Tunnel unten ist |
-| `ipv6_mode` | `block` | Umgang mit IPv6: `block` (verbieten), `auto` (durch den Tunnel auf Gateways, die IPv6 weiterleiten, sonst verbieten; nur bei geleiteten Netzwerken) oder `off` (nicht anfassen) |
+| `ipv6_mode` | `block` | Umgang mit IPv6: `block` (verbieten), `auto` (durch den Tunnel auf Gateways, die IPv6 weiterleiten, sonst verbieten) oder `off` (nicht anfassen). `auto` hängt an den netzspezifischen Policy-Regeln, die nur das geleitete Routing erzeugt, und ist daher wirkungslos bei eingeschaltetem `auto_routing`, ohne `source_network` oder ohne `routing_table`; die Seite nennt die zutreffende Bedingung, statt still `block` zu speichern. `block` ist der Standard, weil ein IPv6-Pfad am Tunnel vorbei deine Adresse genauso offenlegt wie gar kein VPN |
 | `require_ipv6` | `0` | Nur Gateways berücksichtigen, die IPv6 weiterleiten — beim ersten Verbinden, bei der Rotation und beim Watchdog gleichermaßen. Gilt nur mit `ipv6_mode` `auto`, `hop_mode` `standard` und geleitetem Routing; enthalten die gewählten Standorte kein solches Gateway, verbindet sich die Instanz nicht |
 | `vpn_dns` | `off` | `off` (System-Resolver) oder `standard` (im Tunnel, 10.2.0.1) |
 | `mtu` | — | Interface-MTU (die UI empfiehlt WAN-MTU − 80) |

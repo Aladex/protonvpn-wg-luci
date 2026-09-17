@@ -9,8 +9,13 @@ Browser verarbeitet und nie an den Router gesendet. Die Serverliste wird direkt
 nach der Anmeldung heruntergeladen; sie ist groß (Proton veröffentlicht
 Zehntausende Server), deshalb dauert die erste Aktualisierung einige Sekunden.
 
-Stelle dann ein **Standort-Set** (location set) zusammen — ganze Länder oder
-einzelne Städte darin — und klicke auf **Save and reconnect** (Speichern und
+Stelle dann ein **Standort-Set** (location set) zusammen. Die Auswahl ist ein
+Akkordeon: Ein Klick auf ein Land wählt es komplett aus, und der Pfeil am
+rechten Ende der Zeile klappt die Städte dieses Landes direkt in der Liste
+auf — so lässt sich das Set auf einzelne Städte eingrenzen, ohne die Liste
+je zu verlassen. Jede Zeile zeigt außerdem die durchschnittliche Last ihrer
+Gateways im aktuellen Hop-Modus und wie viele davon IPv6 weiterleiten.
+Klicke auf **Save and reconnect** (Speichern und
 neu verbinden). Sowohl die erste Verbindung als auch jede spätere Rotation
 wählt aus diesem Set. Lass **Server** auf *Automatic*, damit das Backend nach
 Last auswählt, oder pinne einen fest; das Anpinnen deaktiviert die Rotation für

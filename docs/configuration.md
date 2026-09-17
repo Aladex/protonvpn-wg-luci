@@ -28,7 +28,7 @@ WireGuard private key on the managed network interface.
 | `source_network` | — | Steer only these networks instead of everything |
 | `routing_table` | — | Custom routing table (empty = main) |
 | `killswitch` | `0` | Block the steered networks from the WAN while down |
-| `ipv6_mode` | `block` | IPv6 handling: `block` (prohibit it), `auto` (through the tunnel on gateways that forward IPv6, prohibit on the rest; steered routing only) or `off` (leave IPv6 alone) |
+| `ipv6_mode` | `block` | IPv6 handling: `block` (prohibit it), `auto` (through the tunnel on gateways that forward IPv6, prohibit on the rest) or `off` (leave IPv6 alone). `auto` rides on the per-network policy rules that only steered routing creates, so it is inert with `auto_routing` on, with no `source_network` or with no `routing_table`; the page names whichever condition applies rather than silently storing `block`. `block` is the default because an IPv6 path around the tunnel would expose your address just as plainly as no VPN |
 | `require_ipv6` | `0` | Only consider gateways that forward IPv6, for the initial connect, rotation and the watchdog alike. Applies only with `ipv6_mode` `auto`, `hop_mode` `standard` and steered routing; when the selected locations hold no such gateway the instance does not connect |
 | `vpn_dns` | `off` | `off` (system resolver) or `standard` (in-tunnel 10.2.0.1) |
 | `mtu` | — | Interface MTU (the UI recommends WAN MTU − 80) |
