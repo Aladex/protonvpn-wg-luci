@@ -103,6 +103,10 @@ check('hop modes validate',
 	common.validate_hop_mode('single') == null);
 
 let api = require('protonvpn.api');
-check('PM_APPVERSION is stamped (Code 5003 guard)', match(api.PM_APPVERSION, /^linux-vpn@/));
+// The version gate answers 5003 (legacy) or 2028 (current); both mean the
+// stamped client version is no longer accepted. The official client format
+// carries a client-type segment: 'linux-vpn-<type>@<version>'.
+check('PM_APPVERSION is stamped (Code 5003/2028 guard)',
+	match(api.PM_APPVERSION, /^linux-vpn-[a-z0-9-]+@[0-9]+\.[0-9]+\.[0-9]+$/) != null);
 
 exit(ok ? 0 : 1);

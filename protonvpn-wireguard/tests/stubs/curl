@@ -1,0 +1,36 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Test stub for curl. Every Proton API call ends in a curl process, and the
+# offline suite must never let one near the network — a real call would hit
+# api.protonvpn.ch from a test. By default the stub fails the way curl does
+# when it cannot connect (exit 7, no output), which api_call() reports as
+# code 0, the same "network trouble" a dead WAN produces on the device.
+#
+# A test that needs the API to answer opts in by writing a response file:
+#   $PROTONVPN_RUN_DIR/curl-response — first line the HTTP status, the rest
+#   the response body. With `-o <file>` (the /vpn/logicals download path)
+#   the body goes to that file and only the status to stdout, matching
+#   api_call()'s -w contract. Remove the file afterwards, same opt-in
+#   convention as the ifup stub.
+resp="${PROTONVPN_RUN_DIR:-/tmp}/curl-response"
+[ -f "$resp" ] || exit 7
+
+code=$(sed -n '1p' "$resp")
+out=''
+prev=''
+for a in "$@"; do
+	[ "$prev" = "-o" ] && out="$a"
+	prev="$a"
+done
+
+if [ -n "$out" ]; then
+	tail -n +2 "$resp" > "$out"
+	printf '%s' "$code"
+else
+	# No trailing newline after the status: real curl's -w '\n%{http_code}'
+	# leaves the code as the last bytes of output, and api_call() splits on
+	# the final newline — a trailing one would read an empty status.
+	tail -n +2 "$resp"
+	printf '%s' "$code"
+fi
+exit 0

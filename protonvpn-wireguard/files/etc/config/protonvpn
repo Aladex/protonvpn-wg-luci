@@ -102,5 +102,15 @@ config instance 'main'
 	# Server-list cache directory (empty = /tmp) and background refresh period.
 	option cache_dir ''
 	option cache_refresh_interval '21600'
+	# Client version stamped on every Proton API request (x-pm-appversion).
+	# Only needed when Proton starts rejecting the version built into the
+	# package and no update is installed yet: set the current official Linux
+	# client string, e.g. 'linux-vpn-gtk@4.18.2' (current value: versions.yml
+	# at the root of ProtonVPN/proton-vpn-gtk-app). Empty or malformed = the
+	# version built into the package. Shared between instances, like cache_dir;
+	# read from a 'globals' section when one exists (which then takes
+	# precedence over this 'main' section). UCI-only, no LuCI control; takes
+	# effect immediately, no restart needed.
+	# option app_version ''
 	# Stamped by the migration/uci-defaults script; gates one-shot migrations.
 	# option config_version '2'

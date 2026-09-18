@@ -20,6 +20,7 @@
 'use strict';
 
 import { open, stat, chmod, unlink, mkdir, pipe, readfile, popen } from 'fs';
+import { cursor } from 'uci';
 const _common = require('protonvpn.common');
 const API_BASE = _common.API_BASE,
       open_cmd = _common.open_cmd,
@@ -35,11 +36,43 @@ const API_BASE = _common.API_BASE,
 
 // ── Constants ────────────────────────────────────────────────────────────
 
-// REQUIRED on every request: Proton rejects outdated app versions with HTTP
-// 422 / error Code 5003 ("app version outdated"). Community tooling stamps
-// the version of the current official Linux client; when the API starts
-// rejecting this constant it must be bumped (checked live 2026-07-30).
-const PM_APPVERSION = 'linux-vpn@4.9.0';
+// REQUIRED on every request: Proton rejects outdated app versions at sign-in
+// (HTTP 422 / Code 2028 "app no longer supported", or a misleading Code 8002
+// before any two-factor code was submitted; the legacy gate is Code 5003).
+// The format follows the official Linux client: 'linux-vpn-<type>@<version>'
+// (python-proton-vpn-api-core, proton/vpn/core/session_holder.py); the value
+// is the current release from versions.yml at the root of
+// ProtonVPN/proton-vpn-gtk-app. CI re-stamps this line from upstream at
+// package build time and a scheduled workflow watches for drift — the
+// committed value is the fallback both use. A user blocked by the gate can
+// override it without a package update (see app_version() below).
+const PM_APPVERSION = 'linux-vpn-gtk@4.18.2';
+
+// The x-pm-appversion value actually sent: the uci override (option
+// app_version in the protonvpn globals section, or in main when there is no
+// globals section) when one is set AND well-formed, else PM_APPVERSION. Read
+// on every call so unblocking a version gate takes effect without an rpcd
+// restart. The strict shape check is deliberate: a malformed override must
+// fall back to the known-good constant, not get stamped on every request.
+//
+// CR/LF are rejected explicitly before the shape test because ucode compiles
+// regexes with REG_NEWLINE: ^ and $ match LINE boundaries, so the anchored
+// test alone accepts a multiline value when any single line has the right
+// shape — and the value is concatenated into the quoted curl config, where
+// an extra line injects curl options. Once the value is a single line, the
+// anchored test constrains every character of it, so nothing else can slip
+// through.
+function app_version() {
+	let c = cursor();
+	let v = c ? c.get('protonvpn', _common.globals_section(c), 'app_version') : null;
+	if (type(v) != 'string')
+		return PM_APPVERSION;
+	if (index(v, '\n') >= 0 || index(v, '\r') >= 0)
+		return PM_APPVERSION;
+	if (!match(v, /^linux-vpn-[a-z0-9-]+@[0-9]+\.[0-9]+\.[0-9]+$/))
+		return PM_APPVERSION;
+	return v;
+}
 
 const AUTH_INFO_URL = API_BASE + '/auth/info';
 const AUTH_URL = API_BASE + '/auth';
@@ -125,7 +158,7 @@ function api_call(opts) {
 	}
 
 	let conf = '';
-	conf += 'header = "x-pm-appversion: ' + PM_APPVERSION + '"\n';
+	conf += 'header = "x-pm-appversion: ' + app_version() + '"\n';
 	conf += 'header = "Accept: application/vnd.protonmail.v1+json"\n';
 	if (opts.token && opts.uid) {
 		conf += 'header = "x-pm-uid: ' + opts.uid + '"\n';
@@ -221,14 +254,23 @@ function api_call(opts) {
 	return { code: status, data: data, raw: body };
 }
 
-// Turn a Proton error response into one readable message. Code 5003 means the
-// stamped client version is too old and PM_APPVERSION needs bumping.
-function api_error(res) {
+// Turn a Proton error response into one readable message. Codes 5003 and
+// 2028 both mean the stamped client version is no longer accepted.
+// `ctx` tells 8002 apart: only the 'totp' caller has actually submitted a
+// two-factor code, so only there may the message blame one.
+function api_error(res, ctx) {
 	if (res.error)
 		return res.error;
 	let d = res.data;
 	if (d && d.Code == 5003)
 		return 'Proton rejected the client version (Code 5003) — PM_APPVERSION needs updating';
+	if (d && d.Code == 2028)
+		return 'Proton no longer accepts the client version this package stamps ' +
+			'(Code 2028, HTTP 422). Update the protonvpn-wireguard package; if no ' +
+			'update is available yet, set the current official client string in uci: ' +
+			"option app_version 'linux-vpn-gtk@<version>' in the protonvpn globals " +
+			'section (in main when there is no globals section) — takes effect ' +
+			'immediately, see README.';
 	// Anti-abuse gate: Proton demands a CAPTCHA, which cannot be solved from
 	// LuCI. Seen after several login attempts in quick succession from one IP.
 	// Retrying immediately makes it worse; the message tells the user what to do.
@@ -237,8 +279,19 @@ function api_error(res) {
 			'Wait a while before retrying — repeated attempts prolong it. ' +
 			'An existing session keeps working; if you have none, sign in with an ' +
 			'official Proton client once and import that session (see README).';
-	if (d && d.Code == 8002)
-		return 'Wrong or already-used two-factor code (Code 8002)';
+	if (d && d.Code == 8002) {
+		if (ctx == 'totp')
+			return 'Wrong or already-used two-factor code (Code 8002)';
+		// 8002 on the sign-in path — before any two-factor code was submitted —
+		// is the version gate wearing a misleading message, observed live: the
+		// login "reached the second factor" only in the error text. Do not send
+		// the user hunting for a TOTP they never typed.
+		return 'Proton rejected the sign-in with Code 8002 before a two-factor ' +
+			'code was submitted — not a 2FA problem: the client version this ' +
+			'package stamps is likely no longer accepted. Update the ' +
+			'protonvpn-wireguard package or override the version ' +
+			'(uci option app_version, see README).';
+	}
 	if (d && d.Error)
 		return d.Error + ' (Code ' + (d.Code || '?') + ', HTTP ' + res.code + ')';
 	return 'HTTP ' + res.code;
@@ -292,7 +345,7 @@ function auth_headers() {
 	if (!s)
 		return null;
 	return [
-		'x-pm-appversion: ' + PM_APPVERSION,
+		'x-pm-appversion: ' + app_version(),
 		'x-pm-uid: ' + s.uid,
 		'Authorization: Bearer ' + s.access_token
 	];
@@ -393,7 +446,9 @@ function totp_submit(code) {
 	let res = api_call({ url: TOTP_URL, uid: s.uid, token: s.access_token,
 		body: { TwoFactorCode: '' + code } });
 	if (res.code != 200)
-		return { error: api_error(res) };
+		// 'totp': the only call site where an 8002 can honestly mean a wrong
+		// two-factor code, because a code was actually submitted here.
+		return { error: api_error(res, 'totp') };
 
 	// Scope is upgraded server-side; reflect that locally so the UI stops
 	// asking. The wrong-code path leaves the session alone on purpose, so the
@@ -791,7 +846,7 @@ function access_token_stale(session, now) {
 
 return {
 	PM_APPVERSION, SESSION_FILE, ACCESS_TOKEN_TTL, ACCESS_REFRESH_MARGIN,
-	api_call, api_error, auth_headers, access_token_stale,
+	api_call, api_error, app_version, auth_headers, access_token_stale,
 	generate_keypair, pem_from_seed, wg_key_from_seed,
 	session_load, session_store,
 	auth_info, auth_finish, totp_submit, auth_refresh, logout,
