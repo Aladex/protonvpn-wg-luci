@@ -2,7 +2,8 @@
 
 **English** · [Русский](configuration.ru.md) · [Deutsch](configuration.de.md) · [← README](../README.md)
 
-Everything below is also reachable from the page's *Advanced settings*:
+Everything below is also reachable from the page's *Advanced settings*,
+except where marked UCI-only:
 
 ![Advanced settings](screenshots/advanced.png)
 
@@ -34,3 +35,4 @@ WireGuard private key on the managed network interface.
 | `mtu` | — | Interface MTU (the UI recommends WAN MTU − 80) |
 | `cache_dir` | — | Server-list cache directory, shared by all instances |
 | `cache_refresh_interval` | `21600` | Seconds between background cache refreshes |
+| `app_version` | — | **UCI-only**, not exposed in the LuCI UI. Client version stamped on Proton API requests (`x-pm-appversion`), shared by all instances. Empty = the version built into the package. Only set this when Proton starts rejecting the built-in version (login fails with Code 2028, or Code 8002 before any two-factor code) and no update is installed yet — use the current official Linux client string, e.g. `linux-vpn-gtk@4.18.2` (see `versions.yml` in ProtonVPN/proton-vpn-gtk-app). Malformed values are ignored. Takes effect immediately. Read from the `globals` section when one exists, which then takes precedence over `main` — set the option there in that case |

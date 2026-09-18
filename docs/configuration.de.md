@@ -3,7 +3,7 @@
 [English](configuration.md) · [Русский](configuration.ru.md) · **Deutsch** · [← README](../README.de.md)
 
 Alles Folgende ist auch über die *Advanced settings* (Erweiterte Einstellungen)
-der Seite erreichbar:
+der Seite erreichbar, sofern nicht als UCI-only markiert:
 
 ![Erweiterte Einstellungen](screenshots/advanced.png)
 
@@ -36,3 +36,4 @@ Netzwerk-Interface.
 | `mtu` | — | Interface-MTU (die UI empfiehlt WAN-MTU − 80) |
 | `cache_dir` | — | Verzeichnis für den Serverlisten-Cache, von allen Instanzen gemeinsam genutzt |
 | `cache_refresh_interval` | `21600` | Sekunden zwischen den Cache-Aktualisierungen im Hintergrund |
+| `app_version` | — | **Nur per UCI**, nicht in der LuCI-Oberfläche. Client-Version, die bei Proton-API-Aufrufen gestempelt wird (`x-pm-appversion`), von allen Instanzen gemeinsam genutzt. Leer = die im Paket eingebaute Version. Nur setzen, wenn Proton die eingebaute Version abzulehnen beginnt (Login scheitert mit Code 2028 oder mit Code 8002, bevor irgendein Zwei-Faktor-Code eingegeben wurde) und noch kein Update installiert ist — die aktuelle Zeichenkette des offiziellen Linux-Clients verwenden, z. B. `linux-vpn-gtk@4.18.2` (siehe `versions.yml` in ProtonVPN/proton-vpn-gtk-app). Ungültige Werte werden ignoriert. Wirkt sofort. Wird aus dem `globals`-Abschnitt gelesen, wenn einer existiert, der dann Vorrang vor `main` hat — die Option in dem Fall dort setzen |
