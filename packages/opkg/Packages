@@ -1,0 +1,38 @@
+Package: luci-app-protonvpn
+Version: 0.7.2-r1
+Depends: libc, luci-base, protonvpn-wireguard
+Source: feeds/luci/applications/luci-app-protonvpn
+SourceName: luci-app-protonvpn
+License: MIT
+Section: luci
+SourceDateEpoch: 1784877710
+URL: https://github.com/openwrt/luci
+Maintainer: OpenWrt LuCI community
+Architecture: all
+Installed-Size: 133120
+Filename: luci-app-protonvpn_0.7.2-r1_all.ipk
+Size: 38580
+SHA256sum: 45de1e04ed7244b43daccfcf998a45d84dd4c14a7567dd72df8929cea669e584
+Description:  Web interface for the ProtonVPN WireGuard backend (protonvpn-wireguard): SRP login in the browser, runtime status, server selection, automatic rotation and cache management. Unofficial; not affiliated with Proton AG.
+
+Package: protonvpn-wireguard
+Version: 0.7.2-r1
+Depends: libc, ca-bundle, curl, kmod-wireguard, openssl-util, rpcd, rpcd-mod-ucode, ucode, ucode-mod-fs, ucode-mod-math, ucode-mod-ubus, ucode-mod-uci, ucode-mod-uloop, wireguard-tools
+Source: feeds/base/protonvpn-wireguard
+SourceName: protonvpn-wireguard
+License: MIT
+Section: net
+SourceDateEpoch: 1784877710
+URL: https://github.com/Aladex/protonvpn-wg-luci
+Maintainer: Andrey Aleksandrov <aladex@gmail.com>
+Architecture: all
+Installed-Size: 307200
+Filename: protonvpn-wireguard_0.7.2-r1_all.ipk
+Size: 89838
+SHA256sum: b7fea150e42c4a5b4b434e636bfb159cf997d291ed3e7d6433dfb6479fc3b7cb
+Description:  ProtonVPN WireGuard service for OpenWrt: SRP login (relayed from the LuCI
+ page), WireGuard certificate registration, server-list cache, WireGuard
+ interface/peer generation, connectivity verification, scheduled server
+ rotation and runtime status. Usable from the CLI and ubus without LuCI.
+ Unofficial; not affiliated with or endorsed by Proton AG.
+
