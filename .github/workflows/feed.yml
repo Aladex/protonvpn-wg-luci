@@ -82,6 +82,11 @@ jobs:
       - name: Build the packages
         run: |
           cp -r protonvpn-wireguard "$SDKDIR/package/protonvpn-wireguard"
+          # Stamp the current upstream client version into the copy being
+          # packaged (never the checkout); falls back to the committed
+          # constant and always exits 0 — see the script.
+          protonvpn-wireguard/stamp-appversion.sh \
+            "$SDKDIR/package/protonvpn-wireguard/files/usr/share/ucode/protonvpn/api.uc"
           cd "$SDKDIR"
           ./scripts/feeds update -a
           cp -r "$GITHUB_WORKSPACE/luci-app-protonvpn" feeds/luci/applications/luci-app-protonvpn

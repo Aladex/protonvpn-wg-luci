@@ -24,9 +24,13 @@ jobs:
           for f in \
             protonvpn-wireguard/files/etc/init.d/protonvpn \
             protonvpn-wireguard/files/etc/uci-defaults/90-protonvpn-migrate \
-            protonvpn-wireguard/tests/run.sh; do
+            protonvpn-wireguard/stamp-appversion.sh \
+            protonvpn-wireguard/tests/run.sh \
+            protonvpn-wireguard/tests/test_stamp.sh; do
             echo "sh -n $f"; sh -n "$f"
           done
+      - name: Stamper parser regression tests
+        run: sh protonvpn-wireguard/tests/test_stamp.sh
       - name: Validate all JSON
         run: |
           fail=0
@@ -169,6 +173,11 @@ jobs:
           ./scripts/feeds update -a
           rm -rf package/protonvpn-wireguard
           cp -r "$GITHUB_WORKSPACE/protonvpn-wireguard" package/protonvpn-wireguard
+          # Stamp the current upstream client version into the copy being
+          # packaged (never the checkout). The script always exits 0 and
+          # falls back to the committed constant; its log line says which.
+          "$GITHUB_WORKSPACE/protonvpn-wireguard/stamp-appversion.sh" \
+            package/protonvpn-wireguard/files/usr/share/ucode/protonvpn/api.uc
           rm -rf feeds/luci/applications/luci-app-protonvpn
           cp -r "$GITHUB_WORKSPACE/luci-app-protonvpn" feeds/luci/applications/luci-app-protonvpn
           # Reindex the luci feed (-i, no fetch) so the just-copied app is

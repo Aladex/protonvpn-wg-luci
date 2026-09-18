@@ -1,0 +1,81 @@
+name: App version watch
+
+# Weekly drift check on the stamped Proton client version. The API gates
+# sign-ins on x-pm-appversion and does not advertise a required version
+# anywhere reachable, so the only source of truth is the official client's
+# repository (versions.yml at the root of ProtonVPN/proton-vpn-gtk-app).
+# When the committed PM_APPVERSION diverges, open ONE issue and keep it at
+# that while it stays open — a weekly duplicate helps nobody.
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+# Serialize runs: the list-then-create dedup below races when two runs both
+# observe zero open issues (a manual run overlapping the schedule), so never
+# let two instances of this workflow execute at the same time. Queued, not
+# cancelled — a skipped run means a missed week of drift detection.
+concurrency:
+  group: appversion-watch
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    name: Compare PM_APPVERSION with upstream
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare and open an issue on drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          API_UC=protonvpn-wireguard/files/usr/share/ucode/protonvpn/api.uc
+          committed=$(sed -n "s/^const PM_APPVERSION = '\([^']*\)';.*/\1/p" "$API_UC" | head -1)
+          # The stamper's own parser (--print-upstream), so this check and the
+          # build-time stamping share exactly one validation. An unreadable
+          # upstream proves nothing — stay quiet rather than open an issue on
+          # a network hiccup or a changed file shape.
+          if ! upstream=$(protonvpn-wireguard/stamp-appversion.sh --print-upstream); then
+            echo "upstream version unreadable or malformed; skipping comparison"
+            exit 0
+          fi
+          echo "committed: $committed"
+          echo "upstream:  $upstream"
+
+          if [ "$committed" = "$upstream" ]; then
+            echo "in sync"
+            exit 0
+          fi
+
+          title="PM_APPVERSION drift: committed $committed, upstream $upstream"
+          open_count=$(gh issue list --state open --limit 100 \
+            --search "PM_APPVERSION drift in:title" --json number --jq 'length')
+          if [ "$open_count" -gt 0 ]; then
+            echo "an open PM_APPVERSION drift issue already exists; not opening another"
+            exit 0
+          fi
+          gh issue create --title "$title" --body "$(cat <<'EOF'
+          The `PM_APPVERSION` constant in `protonvpn-wireguard/files/usr/share/ucode/protonvpn/api.uc`
+          no longer matches the current official Linux client
+          (`versions.yml` at the root of ProtonVPN/proton-vpn-gtk-app).
+
+          Proton gates sign-ins on the `x-pm-appversion` header; once it stops
+          accepting the committed value, new logins fail with Code 2028 (or a
+          misleading Code 8002 before any two-factor code is submitted).
+
+          Action: bump the constant (and its pinned value in
+          `protonvpn-wireguard/tests/test_api.uc`) to the upstream value shown
+          in the issue title. Package builds already stamp the upstream value
+          automatically; this issue tracks the committed fallback.
+
+          Until a release ships, users can override the version without an
+          update: set `option app_version '<upstream value>'` in the
+          `protonvpn` `globals` section (in `main` when there is no `globals`
+          section).
+          EOF
+          )"
