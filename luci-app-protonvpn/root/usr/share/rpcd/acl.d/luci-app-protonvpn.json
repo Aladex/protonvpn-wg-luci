@@ -12,6 +12,7 @@
 					"servers",
 					"external_ip",
 					"refresh_status",
+					"client_versions",
 					"apply_status",
 					"account"
 				]

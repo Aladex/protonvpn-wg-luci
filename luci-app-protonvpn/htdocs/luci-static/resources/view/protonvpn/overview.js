@@ -30,6 +30,10 @@ var callAuthFinish = rpc.declare({
 });
 var callSetTotp = rpc.declare({ object: 'protonvpn', method: 'set_totp', params: [ 'code' ] });
 var callLogout = rpc.declare({ object: 'protonvpn', method: 'logout' });
+// Reaches out to the official client's repository, so it is called from the
+// Advanced-settings button ONLY — never on page load and never as part of a
+// sign-in.
+var callClientVersions = rpc.declare({ object: 'protonvpn', method: 'client_versions' });
 var callRefreshLocations = rpc.declare({ object: 'protonvpn', method: 'refresh_locations' });
 var callAccount = rpc.declare({ object: 'protonvpn', method: 'account' });
 var callExternalIp = rpc.declare({
@@ -170,6 +174,9 @@ var STYLE = '' +
 	'.pv-inst-dim{color:var(--text-color-medium,#666);font-size:.92em}' +
 	'.pv-inst-act{flex:none;margin-left:auto}' +
 	'details.pv-advanced>summary{cursor:pointer;font-weight:700;padding:.3em 0}' +
+	// A disabled Continue button has to LOOK unavailable: the whole defect
+	// was a button that answered a press with nothing visible.
+	'button.pv-login-go[disabled]{opacity:.55;cursor:not-allowed}' +
 	// ── ProtonVPN account card ───────────────────────────────────────────
 	// A real card, not a bare paragraph: the credential state is the first
 	// thing to read on the page, and its actions must not collide with the
@@ -232,6 +239,54 @@ function loadCrypto() {
 				throw new Error('srp.js loaded but ProtonSRP is undefined');
 			return window.ProtonSRP;
 		});
+}
+
+// ── putting text on the page ─────────────────────────────────────────────
+//
+// LuCI's DOM.append() (luci.js) has two branches and they are NOT
+// interchangeable:
+//
+//   ARRAY  -> every non-element member becomes document.createTextNode(...)
+//   SCALAR -> node.innerHTML = `${children}`
+//
+// dom.content() delegates to append(), and E()/DOM.create() calls append()
+// with its third argument — so `E('p', {}, s)` and `dom.content(el, s)` both
+// parse `s` as HTML. Two things go wrong. Our own 5003 hint contains the
+// literal `linux-vpn-gtk@<version>`, and `<version>` is swallowed as a
+// phantom tag, so the page tells the user to type a string it does not show.
+// And every message that came from the API, from uci or from the user is
+// markup in the router's admin page.
+//
+// nodes() wraps a child so it always lands as text. Arrays, elements and
+// the function form pass through untouched, which is what lets it sit on
+// every E() and dom.content() call in this file rather than on the handful
+// someone remembered. There is a test that renders the whole page and fails
+// if anything reached innerHTML.
+function nodes(v) {
+	if (v == null)
+		return [];
+	// Arrays are already the safe branch. An "element" is whatever LuCI's own
+	// dom.elem() accepts — `typeof e == 'object' && 'nodeType' in e`,
+	// luci.js:1186 — which is the same test append() applies when it picks
+	// its branch, so the two agree by construction.
+	if (Array.isArray(v))
+		return v;
+	if (typeof v === 'object' && 'nodeType' in v)
+		return v;
+	// The function form is kept, because append() calls it with the target
+	// node, but its RESULT goes back through here: append() appends that
+	// result recursively (`return this.append(node, children(node))`), so a
+	// function returning a string reaches innerHTML exactly like a bare
+	// string would.
+	if (typeof v === 'function')
+		return function (node) { return nodes(v(node)); };
+	// Everything else becomes text. Spelling that out rather than passing
+	// every object through is what closes `new String(markup)`: it is an
+	// object, it is not an element, and a blanket passthrough would hand it
+	// to the innerHTML branch and have its tags eaten. Nothing in this view
+	// produces a boxed string or a function child today — the point is that
+	// nothing can.
+	return [ '' + v ];
 }
 
 function fmtTime(epoch) {
@@ -348,32 +403,32 @@ return view.extend({
 			rows.push(E('div', {
 				class: 'pv-inst-row',
 				click: L.bind(this.selectInstance, this, st.instance)
-			}, [
-				E('div', { class: 'pv-inst-info' }, [
-					E('span', { class: 'pv-inst-name' }, (selected ? '▸ ' : '') + st.instance),
-					E('span', { style: 'color:' + info.color }, info.label),
-					E('span', {}, (flag ? flag + ' ' : '') + (st.gateway || '—')),
-					next ? E('span', { class: 'pv-inst-dim' }, '⟳ ' + next) : ''
-				]),
-				E('span', { class: 'pv-inst-act' }, E('button', {
+			}, nodes([
+				E('div', { class: 'pv-inst-info' }, nodes([
+					E('span', { class: 'pv-inst-name' }, nodes((selected ? '▸ ' : '') + st.instance)),
+					E('span', { style: 'color:' + info.color }, nodes(info.label)),
+					E('span', {}, nodes((flag ? flag + ' ' : '') + (st.gateway || '—'))),
+					next ? E('span', { class: 'pv-inst-dim' }, nodes('⟳ ' + next)) : ''
+				])),
+				E('span', { class: 'pv-inst-act' }, nodes(E('button', {
 					class: 'cbi-button cbi-button-remove',
 					click: L.bind(this.showDeleteInstanceModal, this, st.instance)
-				}, st.instance === 'main' ? _('Reset') : _('Delete')))
-			]));
+				}, nodes(st.instance === 'main' ? _('Reset') : _('Delete')))))
+			])));
 		}, this));
 
-		dom.content(this.instancesNode, E('fieldset', { class: 'cbi-section' }, [
-			E('legend', {}, _('VPN instances')),
-			E('div', { class: 'cbi-section-node' }, [
-				E('div', {}, rows),
-				E('div', { style: 'margin-top:.6em' }, [
+		dom.content(this.instancesNode, nodes(E('fieldset', { class: 'cbi-section' }, nodes([
+			E('legend', {}, nodes(_('VPN instances'))),
+			E('div', { class: 'cbi-section-node' }, nodes([
+				E('div', {}, nodes(rows)),
+				E('div', { style: 'margin-top:.6em' }, nodes([
 					E('button', {
 						class: 'cbi-button cbi-button-add',
 						click: L.bind(this.showAddInstanceModal, this)
-					}, _('Add instance'))
-				])
-			])
-		]));
+					}, nodes(_('Add instance')))
+				]))
+			]))
+		]))));
 	},
 
 	selectInstance: function (name) {
@@ -392,7 +447,7 @@ return view.extend({
 		this.forgetExternalIp();
 		this.updateInstancesTable();
 		this.updateStatusBand();
-		dom.content(this.formNode, this.buildFormSections());
+		dom.content(this.formNode, nodes(this.buildFormSections()));
 	},
 
 	showAddInstanceModal: function () {
@@ -401,15 +456,15 @@ return view.extend({
 		var err = E('div', { class: 'cbi-value-description',
 			style: 'color:var(--error-color,#c0392b)' });
 		ui.showModal(_('Add VPN instance'), [
-			E('p', {}, _('A new instance runs its own tunnel on its own WireGuard interface, with its own locations and schedule. It uses the same Proton account — no separate credentials — but registers a certificate of its own.')),
-			E('div', { class: 'cbi-value' }, [ input ]),
+			E('p', {}, nodes(_('A new instance runs its own tunnel on its own WireGuard interface, with its own locations and schedule. It uses the same Proton account — no separate credentials — but registers a certificate of its own.'))),
+			E('div', { class: 'cbi-value' }, nodes([ input ])),
 			err,
-			E('div', { class: 'right' }, [
-				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+			E('div', { class: 'right' }, nodes([
+				E('button', { class: 'cbi-button', click: ui.hideModal }, nodes(_('Cancel'))),
 				' ',
 				E('button', { class: 'cbi-button cbi-button-action',
-					click: L.bind(this.addInstance, this, input, err) }, _('Add'))
-			])
+					click: L.bind(this.addInstance, this, input, err) }, nodes(_('Add')))
+			]))
 		]);
 	},
 
@@ -417,12 +472,12 @@ return view.extend({
 		var name = (input.value || '').trim();
 		// The backend prefixes the interface with 'pv_', which netifd caps.
 		if (!/^[A-Za-z0-9_]{1,12}$/.test(name)) {
-			dom.content(err, _('Use 1-12 letters, digits or underscores.'));
+			dom.content(err, nodes(_('Use 1-12 letters, digits or underscores.')));
 			return;
 		}
 		return callCreateInstance(name).then(L.bind(function (res) {
 			if (res && res.error) {
-				dom.content(err, res.error);
+				dom.content(err, nodes(res.error));
 				return;
 			}
 			ui.hideModal();
@@ -435,7 +490,7 @@ return view.extend({
 					.format(name), 'info', 6000);
 			}, this));
 		}, this)).catch(L.bind(function (e) {
-			dom.content(err, '' + e);
+			dom.content(err, nodes('' + e));
 		}, this));
 	},
 
@@ -446,16 +501,16 @@ return view.extend({
 		var main = (name === 'main');
 		ui.showModal(main ? _('Reset "main" to defaults?')
 			: _('Delete instance "%s"?').format(name), [
-			E('p', {}, main
+			E('p', {}, nodes(main
 				? _('The tunnel is taken down, its certificate is revoked, the key, interface and firewall objects are removed, and every setting returns to its default. Other instances are not affected.')
-				: _('The tunnel is taken down, its certificate is revoked, and its interface, firewall objects and settings are removed. Networks routed through it fall back to your other routes.')),
-			E('div', { class: 'right' }, [
-				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+				: _('The tunnel is taken down, its certificate is revoked, and its interface, firewall objects and settings are removed. Networks routed through it fall back to your other routes.'))),
+			E('div', { class: 'right' }, nodes([
+				E('button', { class: 'cbi-button', click: ui.hideModal }, nodes(_('Cancel'))),
 				' ',
 				E('button', { class: 'cbi-button cbi-button-negative',
 					click: L.bind(this.deleteInstance, this, name) },
-					main ? _('Reset') : _('Delete'))
-			])
+					nodes(main ? _('Reset') : _('Delete')))
+			]))
 		]);
 	},
 
@@ -483,7 +538,7 @@ return view.extend({
 				this.forgetExternalIp();
 				this.updateInstancesTable();
 				this.updateStatusBand();
-				dom.content(this.formNode, this.buildFormSections());
+				dom.content(this.formNode, nodes(this.buildFormSections()));
 			}, this));
 		}, this)).catch(L.bind(function (e) {
 			this.dismiss(n);
@@ -714,7 +769,7 @@ return view.extend({
 			tor: _('Traffic leaves the VPN server through the Tor network. Noticeably slower, and some sites block Tor exits.')
 		};
 		if (this.hopNote) {
-			dom.content(this.hopNote, notes[mode] || '');
+			dom.content(this.hopNote, nodes(notes[mode] || ''));
 			this.hopNote.classList.toggle('hidden', !notes[mode]);
 		}
 	},
@@ -816,7 +871,7 @@ return view.extend({
 	// notifications are sticky, and "Applying…" left on screen reads as a hang.
 	// `timeout` is for terminal good news only — errors stay until dismissed.
 	notice: function (text, kind, timeout) {
-		var node = ui.addNotification(null, E('p', {}, text), kind || 'info');
+		var node = ui.addNotification(null, E('p', {}, nodes(text)), kind || 'info');
 		if (timeout)
 			setTimeout(L.bind(this.dismiss, this, node), timeout);
 		return node;
@@ -845,82 +900,266 @@ return view.extend({
 	// says it is needed. Asking for a code up front misleads the majority of
 	// accounts that have none.
 	showLoginModal: function (step) {
-		var self = this;
 		this.loginStep = step || 'credentials';
 		this.loginErr = E('div', { class: 'pv-err' });
-		var body = E('div', {});
+		// Everything the dialog is made of lives on the view, and nothing here
+		// is captured in a closure. That is not tidiness: the sign-in outlives
+		// the window it started in, so a step still pending when the user
+		// closes and reopens has to render into whatever modal is on screen
+		// WHEN IT RESOLVES, not into the one that happened to start it. A
+		// captured body meant the two-factor field was drawn into a detached
+		// node while the visible dialog still asked for the password — with
+		// loginStep already 'totp', so its Continue button could only answer
+		// "enter the 6-digit code" for a field that was nowhere on screen.
+		this.loginBody = E('div', {});
+		this.loginBtn = E('button', { class: 'cbi-button cbi-button-apply pv-login-go',
+			click: L.bind(this.submitLogin, this) }, nodes(_('Continue')));
+		this.resumeLoginState();
+		this.renderLoginBody();
 
-		var render = function () {
-			var kids = [];
-			if (self.loginStep === 'totp') {
-				self.totpEl = E('input', { type: 'text', class: 'cbi-input-text',
-					placeholder: '123456', inputmode: 'numeric', maxlength: '8',
-					autocomplete: 'one-time-code', style: 'max-width:9em;letter-spacing:.2em',
-					keydown: function (ev) { if (ev.key === 'Enter') submit(); } });
-				kids = [
-					E('p', {}, _('Password accepted for %s. This account has two-factor authentication.')
-						.format(self.loginUser || '')),
-					E('div', { class: 'pv-field' }, [ E('label', {}, _('Two-factor code')), self.totpEl ]),
-					E('div', { class: 'cbi-value-description' },
-						_('A wrong code can simply be retyped — the password step is not repeated.'))
-				];
-			} else {
-				self.userEl = E('input', { type: 'text', class: 'cbi-input-text',
-					placeholder: 'user@proton.me', autocomplete: 'username',
-					value: self.loginUser || '',
-					keydown: function (ev) { if (ev.key === 'Enter') submit(); } });
-				self.passEl = E('input', { type: 'password', class: 'cbi-input-password',
-					autocomplete: 'current-password',
-					keydown: function (ev) { if (ev.key === 'Enter') submit(); } });
-				kids = [
-					E('div', { class: 'pv-field' }, [ E('label', {}, _('Proton username')), self.userEl ]),
-					E('div', { class: 'pv-field' }, [ E('label', {}, _('Password')), self.passEl ]),
-					E('div', { class: 'cbi-value-description' },
-						_('The password is turned into a proof in this page and never reaches the router.'))
-				];
-			}
-			dom.content(body, [ self.loginErr ].concat(kids));
-			setTimeout(function () {
-				try {
-					(self.loginStep === 'totp' ? self.totpEl :
-						(self.loginUser ? self.passEl : self.userEl)).focus();
-				} catch (e) {}
-			}, 60);
-		};
-
-		var fail = function (msg) {
-			dom.content(self.loginErr, msg);
-			self.loginBusy = false;
-		};
-
-		var submit = function () {
-			if (self.loginBusy)
-				return;
-			self.loginBusy = true;
-			dom.content(self.loginErr, '');
-			if (self.loginStep === 'totp')
-				return self.submitTotp(fail, render);
-			return self.submitCredentials(fail, render);
-		};
-
-		render();
 		ui.showModal(_('Sign in to Proton'), [
-			body,
-			E('div', { class: 'right' }, [
-				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+			this.loginBody,
+			E('div', { class: 'right' }, nodes([
+				E('button', { class: 'cbi-button pv-login-cancel',
+					click: L.bind(this.cancelLogin, this) }, nodes(_('Cancel'))),
 				' ',
-				E('button', { class: 'cbi-button cbi-button-apply',
-					click: function () { submit(); } }, _('Continue'))
-			])
+				this.loginBtn
+			]))
 		]);
 	},
 
-	submitCredentials: function (fail, render) {
+	// Draw the current step into the current body. Called on open and again
+	// whenever the step changes, including from a resolution that arrives
+	// after the dialog was closed and reopened — which is why it reads
+	// this.loginBody rather than closing over one.
+	renderLoginBody: function () {
 		var self = this;
+		var enter = function (ev) { if (ev.key === 'Enter') self.submitLogin(); };
+		var kids = [];
+		if (this.loginStep === 'totp') {
+			this.totpEl = E('input', { type: 'text', class: 'cbi-input-text',
+				placeholder: '123456', inputmode: 'numeric', maxlength: '8',
+				autocomplete: 'one-time-code', style: 'max-width:9em;letter-spacing:.2em',
+				keydown: enter });
+			kids = [
+				E('p', {}, nodes(_('Password accepted for %s. This account has two-factor authentication.')
+					.format(this.loginUser || ''))),
+				E('div', { class: 'pv-field' }, nodes([ E('label', {}, nodes(_('Two-factor code'))), this.totpEl ])),
+				E('div', { class: 'cbi-value-description' },
+					nodes(_('A wrong code can simply be retyped — the password step is not repeated.')))
+			];
+		} else {
+			this.userEl = E('input', { type: 'text', class: 'cbi-input-text',
+				placeholder: 'user@proton.me', autocomplete: 'username',
+				value: this.loginUser || '', keydown: enter });
+			this.passEl = E('input', { type: 'password', class: 'cbi-input-password',
+				autocomplete: 'current-password', keydown: enter });
+			kids = [
+				E('div', { class: 'pv-field' }, nodes([ E('label', {}, nodes(_('Proton username'))), this.userEl ])),
+				E('div', { class: 'pv-field' }, nodes([ E('label', {}, nodes(_('Password'))), this.passEl ])),
+				E('div', { class: 'cbi-value-description' },
+					nodes(_('The password is turned into a proof in this page and never reaches the router.')))
+			];
+		}
+		dom.content(this.loginBody, nodes([ this.loginErr ].concat(kids)));
+		setTimeout(function () {
+			try {
+				(self.loginStep === 'totp' ? self.totpEl :
+					(self.loginUser ? self.passEl : self.userEl)).focus();
+			} catch (e) {}
+		}, 60);
+	},
+
+	submitLogin: function (ev) {
+		var self = this;
+		if (ev && ev.preventDefault)
+			ev.preventDefault();
+		if (this.loginBusy)
+			return;
+		// Every callback this attempt hands out is stamped with its own
+		// number, so a resolution that arrives after the view has moved on
+		// cannot speak for a newer attempt.
+		var attempt = this.loginInFlight = ++this.loginAttempt;
+		this.setLoginState('busy');
+		dom.content(this.loginErr, []);
+		var failFor = function (msg, local) {
+			return self.failLogin(attempt, msg, local);
+		};
+		return this.runLoginAttempt(attempt, failFor, function () {
+			if (self.loginStep === 'totp')
+				return self.submitTotp(failFor);
+			return self.submitCredentials(failFor);
+		});
+	},
+
+	// Closing the dialog is not abandoning the sign-in. The request is still
+	// on the wire and the pause is still owed, so only the visible countdown
+	// is stopped here — the deadline itself lives on the view and is picked
+	// up again when the modal reopens.
+	cancelLogin: function () {
+		clearTimeout(this.loginCooldownTimer);
+		ui.hideModal();
+	},
+
+	// What the button shows when a modal opens. The sign-in outlives the
+	// window it was started from: closing and reopening used to clear the
+	// cooldown timer and force the button back to 'ready', which handed the
+	// user a second real attempt for the price of one Cancel — and a burst of
+	// real attempts is what gets the account temporarily limited in the first
+	// place.
+	resumeLoginState: function () {
+		clearTimeout(this.loginCooldownTimer);
+		if (this.loginInFlight)
+			return this.setLoginState('busy');
+		if (this.loginCooldownUntil > Date.now())
+			return this.tickLoginCooldown();
+		this.setLoginState('ready');
+	},
+
+	// Run one sign-in step under a guarantee: the attempt it started always
+	// ends. This is here rather than in each step because submit() is the only
+	// place that marks an attempt in flight, and an attempt that is never
+	// settled is permanent — loginBusy stays true, Continue stays disabled
+	// reading "Signing in…", and resumeLoginState() faithfully restores that,
+	// so reopening the modal reproduces the dead button instead of clearing
+	// it. Nothing short of reloading the page gets the user out.
+	//
+	// submitTotp() had exactly that hole: a .then() with no .catch(), so a
+	// rejected LuCI RPC — a transport failure, an rpcd restart, the router
+	// dropping the connection mid-2FA — settled nothing at all.
+	//
+	// Three ways a step can end without settling, all covered here: it
+	// rejects, it throws on its way to returning a promise, or it resolves
+	// having simply forgotten. failLogin() ignores an attempt that is no
+	// longer the one on the wire, so a step that DID settle is untouched by
+	// the net below.
+	runLoginAttempt: function (attempt, failFor, step) {
+		var self = this;
+		var running;
+		try {
+			running = step();
+		} catch (e) {
+			failFor(self.loginErrorText(e));
+			return Promise.resolve();
+		}
+		return Promise.resolve(running).catch(function (e) {
+			failFor(self.loginErrorText(e));
+		}).then(function () {
+			if (self.loginInFlight === attempt)
+				failFor(_('The sign-in did not finish and it is not clear why. Please try again.'));
+		});
+	},
+
+	// What to show the user for a thrown or rejected value. LuCI rejects with
+	// an Error for a transport failure and with a plain value elsewhere.
+	loginErrorText: function (e) {
+		return (e && e.message) || ('' + e);
+	},
+
+	// A sign-in attempt that failed. `attempt` is the number submit() stamped
+	// on this callback, and only the attempt actually on the wire may settle
+	// — once. That covers both ways a stale resolution arrives: one belonging
+	// to an attempt the user has already moved past (a late catch after a
+	// close and reopen), and a second settle for an attempt that has already
+	// finished (afterLogin() rejecting behind a sign-in that succeeded, which
+	// would otherwise open a pause nobody earned).
+	//
+	// `local` marks a refusal that never left the browser: an empty field, a
+	// malformed code. Nothing was attempted, so there is nothing to pace and
+	// the user may fix the typo at once.
+	failLogin: function (attempt, msg, local) {
+		if (attempt !== this.loginInFlight)
+			return;
+		this.loginInFlight = 0;
+		dom.content(this.loginErr, nodes(msg));
+		if (local)
+			this.setLoginState('ready');
+		else
+			this.beginLoginCooldown();
+	},
+
+	// A sign-in attempt that got through, under the same rule. Returns false
+	// when the caller should stop: it is speaking for an attempt that is no
+	// longer the one on the wire.
+	settleLogin: function (attempt) {
+		if (attempt !== this.loginInFlight)
+			return false;
+		this.loginInFlight = 0;
+		this.setLoginState('ready');
+		return true;
+	},
+
+	// How long the Continue button stays out of reach after a failed sign-in.
+	// Each press after a failure is a real new attempt, and a burst of them is
+	// what Proton's anti-abuse answers by temporarily limiting the account —
+	// which then reaches the user as an error about their account rather than
+	// about a button that looked like it had done nothing.
+	LOGIN_RETRY_PAUSE_MS: 5000,
+
+	// Sign-in state that belongs to the sign-in, not to the dialog showing it:
+	// the attempt counter, which attempt is still on the wire, and when the
+	// pause after the last failure runs out. All three survive a close.
+	loginAttempt: 0,
+	loginInFlight: 0,
+	loginCooldownUntil: 0,
+
+	// The Continue button has three states: 'ready' (usable), 'busy' (a
+	// sign-in is in flight: disabled, with a spinner) and 'cooldown' (an
+	// attempt just failed: disabled, counting the pause down in its label).
+	// Anything but 'ready' also stops submit(), so a click a disabled button
+	// would not have delivered cannot get through another way either.
+	setLoginState: function (state, label) {
+		this.loginState = state;
+		this.loginBusy = (state !== 'ready');
+		var btn = this.loginBtn;
+		if (!btn)
+			return;
+		btn.disabled = (state !== 'ready');
+		btn.classList.toggle('pv-busy', state !== 'ready');
+		if (state === 'busy')
+			dom.content(btn, nodes([ E('span', { class: 'spinning' }), ' ', _('Signing in…') ]));
+		else if (state === 'cooldown')
+			dom.content(btn, nodes(label || _('Please wait…')));
+		else
+			dom.content(btn, nodes(_('Continue')));
+	},
+
+	// Hold the button after a failed attempt and count the pause down in its
+	// label, so the wait is something the user can watch rather than presses
+	// that silently do nothing.
+	//
+	// The deadline is kept on the view rather than in the timer's closure,
+	// because it has to outlive both the timer and the modal: a Cancel stops
+	// the countdown, and reopening must resume the same pause rather than
+	// grant a fresh button.
+	beginLoginCooldown: function () {
+		this.loginCooldownUntil = Date.now() + (this.LOGIN_RETRY_PAUSE_MS || 0);
+		this.tickLoginCooldown();
+	},
+
+	tickLoginCooldown: function () {
+		var self = this;
+		clearTimeout(this.loginCooldownTimer);
+		var tick = function () {
+			var left = (self.loginCooldownUntil || 0) - Date.now();
+			if (left <= 0) {
+				self.loginCooldownUntil = 0;
+				return self.setLoginState('ready');
+			}
+			self.setLoginState('cooldown',
+				_('Try again in %ds').format(Math.ceil(left / 1000)));
+			self.loginCooldownTimer = setTimeout(tick, Math.min(250, left));
+		};
+		tick();
+	},
+
+	submitCredentials: function (fail) {
+		var self = this;
+		var attempt = this.loginAttempt;
 		var username = (this.userEl.value || '').trim();
 		var password = this.passEl.value || '';
 		if (!username || !password)
-			return fail(_('Enter the username and password'));
+			return fail(_('Enter the username and password'), true);
 		this.loginUser = username;
 
 		var SRP, params;
@@ -948,34 +1187,53 @@ return view.extend({
 			if (res.server_proof &&
 			    !SRP.verifyServerProof(self._expectedProof, res.server_proof))
 				throw new Error(_('The server proof did not verify — aborting.'));
-			self.loginBusy = false;
+			if (!self.settleLogin(attempt))
+				return;
 			if (res.twofa) {
 				self.loginStep = 'totp';
-				render();
+				self.renderLoginBody();
 				return;
 			}
 			ui.hideModal();
 			self.notice(_('Signed in.'), 'info', 4000);
-			return self.afterLogin();
+			return self.afterLoginReported();
 		}).catch(function (err) {
-			fail(err.message || ('' + err));
+			fail(self.loginErrorText(err));
 		});
 	},
 
 	submitTotp: function (fail) {
 		var self = this;
+		var attempt = this.loginAttempt;
 		var code = (this.totpEl.value || '').trim();
 		if (!/^[0-9]{6,8}$/.test(code))
-			return fail(_('Enter the 6-digit code from your authenticator'));
+			return fail(_('Enter the 6-digit code from your authenticator'), true);
 		return callSetTotp(code).then(function (res) {
-			self.loginBusy = false;
 			if (!res || res.error) {
 				self.totpEl.value = '';
 				return fail((res && res.error) || _('no response'));
 			}
+			if (!self.settleLogin(attempt))
+				return;
 			ui.hideModal();
 			self.notice(_('Signed in.'), 'info', 4000);
-			return self.afterLogin();
+			return self.afterLoginReported();
+		}).catch(function (err) {
+			fail(self.loginErrorText(err));
+		});
+	},
+
+	// The sign-in is over by the time this runs: the session exists and the
+	// modal is closed. What follows it can still fail, and that has to read as
+	// what it is. Left to flow back into the sign-in's own error handling it
+	// would either open a retry pause on a sign-in that worked, or — where
+	// there is no catch at all — become an unhandled rejection the user never
+	// sees while the server list quietly stays empty.
+	afterLoginReported: function () {
+		var self = this;
+		return this.afterLogin().catch(function (e) {
+			self.notice(_('Signed in, but loading the server list failed: %s')
+				.format((e && e.message) || e), 'warning');
 		});
 	},
 
@@ -1179,7 +1437,7 @@ return view.extend({
 		if (this._poolOpen)
 			this.poolRenderPanel();
 
-		dom.content(this.poolChips, '');
+		dom.content(this.poolChips, nodes(''));
 		// One chip per country (country-first model). A whole-country chip shows
 		// just the country; a narrowed one lists its picked cities. Remove drops
 		// the whole country; the pencil opens its city checklist.
@@ -1233,7 +1491,7 @@ return view.extend({
 				class: 'pv-chip pv-chip-country pv-chip-click' + (stale ? ' pv-chip-stale' : ''),
 				title: _('Edit or remove'),
 				click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(g.cc, true); }, this) },
-				label));
+				nodes(label)));
 		}, this));
 
 		var summary = '';
@@ -1241,7 +1499,7 @@ return view.extend({
 			summary = total ? _('set: %d countries, ~%d servers').format(groups.length, total)
 				: _('set: %d countries').format(groups.length);
 		this.poolChips.appendChild(this.poolCount);
-		dom.content(this.poolCount, summary);
+		dom.content(this.poolCount, nodes(summary));
 
 		// Guidance: the server list drives the picker, and the set must not be
 		// empty — the connection picks within it.
@@ -1250,7 +1508,7 @@ return view.extend({
 			note = _('Loading server list… use "Refresh server list" in Advanced settings if it does not appear.');
 		else if (!groups.length)
 			note = _('Add at least one country or city.');
-		dom.content(this.poolNote, note);
+		dom.content(this.poolNote, nodes(note));
 		this.poolNote.classList.toggle('hidden', !note);
 		if (this.poolTrigger)
 			this.poolTrigger.disabled = !(this.locations || {}).available;
@@ -1346,7 +1604,7 @@ return view.extend({
 		var panel = this.poolPanel;
 		if (!panel)
 			return;
-		dom.content(panel, []);
+		dom.content(panel, nodes([]));
 
 		var title;
 		if (this._poolEdit && this._poolCountry) {
@@ -1355,11 +1613,11 @@ return view.extend({
 		} else {
 			title = _('Add a location');
 		}
-		panel.appendChild(E('div', { class: 'pv-pool-head' }, [
-			E('span', {}, title),
+		panel.appendChild(E('div', { class: 'pv-pool-head' }, nodes([
+			E('span', {}, nodes(title)),
 			E('button', { type: 'button', class: 'pv-pool-x', title: _('Close'),
-				click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
-		]));
+				click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, nodes('✕'))
+		])));
 		var filt = E('input', { type: 'text', class: 'cbi-input-text pv-pool-filter',
 			placeholder: _('Filter') + '…', value: this._poolFilter });
 		filt.addEventListener('input', L.bind(function() {
@@ -1388,11 +1646,11 @@ return view.extend({
 			: (hop === 'tor'
 				? _('No Tor gateway forwards IPv6, so this would empty the list.')
 				: _('Show only locations whose gateways forward IPv6'));
-		panel.appendChild(E('div', { class: 'pv-pool-filterrow' }, [
+		panel.appendChild(E('div', { class: 'pv-pool-filterrow' }, nodes([
 			filt,
-			E('label', { class: 'pv-check pv-pool-v6only', title: v6title }, [
-				v6box, _('IPv6 only') ])
-		]));
+			E('label', { class: 'pv-check pv-pool-v6only', title: v6title }, nodes([
+				v6box, _('IPv6 only') ]))
+		])));
 		this._poolListEl = E('div', {});
 		panel.appendChild(this._poolListEl);
 		this.poolRenderCountryList();
@@ -1408,9 +1666,9 @@ return view.extend({
 		if (typeof avg === 'number') {
 			kids.push(E('span', { class: 'pv-dot ' + this.srvLoadClass(avg),
 				title: _('Average load of these gateways') }));
-			kids.push(E('span', {}, '%d%%'.format(avg)));
+			kids.push(E('span', {}, nodes('%d%%'.format(avg))));
 		}
-		kids.push(E('span', {}, '(%d)'.format(count) + this.v6CountLabel(v6row)));
+		kids.push(E('span', {}, nodes('(%d)'.format(count) + this.v6CountLabel(v6row))));
 		return kids;
 	},
 
@@ -1425,7 +1683,7 @@ return view.extend({
 		var el = this._poolListEl;
 		if (!el)
 			return;
-		dom.content(el, []);
+		dom.content(el, nodes([]));
 		var f = (this._poolFilter || '').toLowerCase();
 		var any = false;
 		var key = this.hopCountKey();
@@ -1449,18 +1707,18 @@ return view.extend({
 			var open = !!(this._poolExpanded || {})[cc];
 			var flag = this.countryFlag(cc);
 			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row' +
-				(st.has ? ' is-in' : '') + (open ? ' pv-acc-open' : '') }, [
+				(st.has ? ' is-in' : '') + (open ? ' pv-acc-open' : '') }, nodes([
 				E('span', { class: 'pv-acc-hit',
-					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, [
-						E('span', { class: 'box' }, mark),
-						E('span', { class: 'grow' }, (flag ? flag + ' ' : '') + c.name),
+					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, nodes([
+						E('span', { class: 'box' }, nodes(mark)),
+						E('span', { class: 'grow' }, nodes((flag ? flag + ' ' : '') + c.name)),
 						E('span', { class: 'pv-acc-meta' },
-							this.poolMetaKids(c.gateway_count || 0, c[loadKey], c))
-					]),
+							nodes(this.poolMetaKids(c.gateway_count || 0, c[loadKey], c)))
+					])),
 				E('span', { class: 'pv-acc-exp',
 					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleExpand(cc); }, this) },
-					open ? '▾' : '›')
-			]));
+					nodes(open ? '▾' : '›'))
+			])));
 			if (!open)
 				return;
 			(c.cities || []).forEach(L.bind(function(city) {
@@ -1474,20 +1732,20 @@ return view.extend({
 				}
 				var on = st.whole || !!st.cities[city.code];
 				el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-acc-city' +
-					(on ? ' is-in' : '') }, [
+					(on ? ' is-in' : '') }, nodes([
 					E('span', { class: 'pv-acc-hit',
-						click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, [
-							E('span', { class: 'box' }, on ? '☑' : '☐'),
-							E('span', { class: 'grow' }, city.name),
+						click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, nodes([
+							E('span', { class: 'box' }, nodes(on ? '☑' : '☐')),
+							E('span', { class: 'grow' }, nodes(city.name)),
 							E('span', { class: 'pv-acc-meta' },
-								this.poolMetaKids(city[key] || 0, city[loadKey], city))
-						]),
+								nodes(this.poolMetaKids(city[key] || 0, city[loadKey], city)))
+						])),
 					E('span', { class: 'pv-acc-exp' })
-				]));
+				])));
 			}, this));
 		}, this));
 		if (!any)
-			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, _('No matches')));
+			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, nodes(_('No matches'))));
 		// The narrowing is always said out loud: a location that silently
 		// disappeared would make the backend's later "no IPv6 gateways in the
 		// selected locations" impossible to act on. Countries and cities get
@@ -1495,29 +1753,29 @@ return view.extend({
 		// were dropped would be its own kind of lie.
 		if (v6hidden > 0)
 			el.appendChild(E('div', { class: 'pv-pool-row is-in pv-pool-v6hidden' },
-				v6hidden === 1
+				nodes(v6hidden === 1
 					? _('1 country hidden — no IPv6 gateways')
-					: _('%d countries hidden — no IPv6 gateways').format(v6hidden)));
+					: _('%d countries hidden — no IPv6 gateways').format(v6hidden))));
 		if (v6chidden > 0)
 			el.appendChild(E('div', { class: 'pv-pool-row is-in pv-pool-v6hidden' },
-				v6chidden === 1
+				nodes(v6chidden === 1
 					? _('1 city hidden — no IPv6 gateways')
-					: _('%d cities hidden — no IPv6 gateways').format(v6chidden)));
+					: _('%d cities hidden — no IPv6 gateways').format(v6chidden))));
 		if (this._poolEdit) {
 			var rmcc = this._poolCountry;
 			el.appendChild(E('div', { class: 'pv-pool-sep' }));
-			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-pool-remove' }, [
+			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-pool-remove' }, nodes([
 				E('span', { class: 'pv-acc-hit',
 					click: L.bind(function(ev) {
 						ev.stopPropagation();
 						this.poolRemoveCountry(rmcc);
 						this.poolClosePanel();
-					}, this) }, [
-						E('span', { class: 'box' }, '🗑'),
-						E('span', { class: 'grow' }, _('Remove this country'))
-					]),
+					}, this) }, nodes([
+						E('span', { class: 'box' }, nodes('🗑')),
+						E('span', { class: 'grow' }, nodes(_('Remove this country')))
+					])),
 				E('span', { class: 'pv-acc-exp' })
-			]));
+			])));
 		}
 	},
 	srvLoadClass: function(load) {
@@ -1563,7 +1821,7 @@ return view.extend({
 			return;
 		var host = this._serverChosen;
 		if (!host) {
-			dom.content(t, _('Automatic server'));
+			dom.content(t, nodes(_('Automatic server')));
 			return;
 		}
 		var r = this.srvRelayByHost(host);
@@ -1572,16 +1830,16 @@ return view.extend({
 			var flag = this.countryFlag(r.country_code);
 			kids = [
 				E('span', { class: 'pv-dot ' + this.srvLoadClass(r.load) }),
-				E('span', {}, ' ' + (flag ? flag + ' ' : '') +
+				E('span', {}, nodes(' ' + (flag ? flag + ' ' : '') +
 					'%s / %s'.format(r.city || '?', r.name || r.hostname) +
-					(r.load != null ? ' (%d%%)'.format(r.load) : ''))
+					(r.load != null ? ' (%d%%)'.format(r.load) : '')))
 			];
 		} else {
-			kids = [ E('span', {}, host + ' ' + _('(not in the set)')) ];
+			kids = [ E('span', {}, nodes(host + ' ' + _('(not in the set)'))) ];
 		}
 		kids.push(E('button', { type: 'button', class: 'pv-srv-x', title: _('Clear (back to automatic)'),
-			click: L.bind(function(ev) { ev.preventDefault(); ev.stopPropagation(); this.srvSetChosen(''); }, this) }, '×'));
-		dom.content(t, kids);
+			click: L.bind(function(ev) { ev.preventDefault(); ev.stopPropagation(); this.srvSetChosen(''); }, this) }, nodes('×')));
+		dom.content(t, nodes(kids));
 	},
 
 	srvTogglePanel: function() {
@@ -1614,12 +1872,12 @@ return view.extend({
 		var panel = this.srvPanel;
 		if (!panel)
 			return;
-		dom.content(panel, '');
-		panel.appendChild(E('div', { class: 'pv-pool-head' }, [
-			E('span', {}, _('Pick a server')),
+		dom.content(panel, nodes(''));
+		panel.appendChild(E('div', { class: 'pv-pool-head' }, nodes([
+			E('span', {}, nodes(_('Pick a server'))),
 			E('button', { type: 'button', class: 'pv-pool-x', title: _('Close'),
-				click: L.bind(function(ev) { ev.stopPropagation(); this.srvClosePanel(); }, this) }, '✕')
-		]));
+				click: L.bind(function(ev) { ev.stopPropagation(); this.srvClosePanel(); }, this) }, nodes('✕'))
+		])));
 		var filt = E('input', { type: 'text', class: 'cbi-input-text pv-pool-filter',
 			placeholder: _('Filter servers') + '…', value: this._srvFilter });
 		filt.addEventListener('input', L.bind(function() {
@@ -1638,26 +1896,26 @@ return view.extend({
 		var el = this._srvListEl;
 		if (!el)
 			return;
-		dom.content(el, '');
+		dom.content(el, nodes(''));
 		var chosen = this._serverChosen;
 		var current = this.srvCurrentGateway();
 		var f = (this._srvFilter || '').toLowerCase();
 
 		el.appendChild(E('div', { class: 'pv-pool-row pv-srv-quick',
-			click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(''); }, this) }, [
-				E('span', { class: 'box' }, chosen ? '' : '☑'),
-				E('span', { class: 'grow' }, _('Automatic (rotation picks)'))
-			]));
+			click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(''); }, this) }, nodes([
+				E('span', { class: 'box' }, nodes(chosen ? '' : '☑')),
+				E('span', { class: 'grow' }, nodes(_('Automatic (rotation picks)')))
+			])));
 		var best = this.srvLowestLoad();
 		if (best) {
 			var bn = this.countryLabel(best.country_code);
 			el.appendChild(E('div', { class: 'pv-pool-row pv-srv-quick',
-				click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(best.name || best.hostname); }, this) }, [
-					E('span', { class: 'box' }, '⚡'),
-					E('span', { class: 'grow' }, _('Lowest load') + ' · ' + (best.city || bn) +
-						(best.load != null ? ' (%d%%)'.format(best.load) : '')),
+				click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(best.name || best.hostname); }, this) }, nodes([
+					E('span', { class: 'box' }, nodes('⚡')),
+					E('span', { class: 'grow' }, nodes(_('Lowest load') + ' · ' + (best.city || bn) +
+						(best.load != null ? ' (%d%%)'.format(best.load) : ''))),
 					E('span', { class: 'pv-dot ' + this.srvLoadClass(best.load) })
-				]));
+				])));
 		}
 		el.appendChild(E('div', { class: 'pv-pool-sep' }));
 
@@ -1713,41 +1971,41 @@ return view.extend({
 				return (a.name || a.hostname || '').localeCompare(
 					b.name || b.hostname || '', undefined, { numeric: true });
 			});
-			el.appendChild(E('div', { class: 'pv-srv-grp' }, (g.flag ? g.flag + ' ' : '') +
-				'%s (%d)'.format(g.name, g.rows.length)));
+			el.appendChild(E('div', { class: 'pv-srv-grp' }, nodes((g.flag ? g.flag + ' ' : '') +
+				'%s (%d)'.format(g.name, g.rows.length))));
 			g.rows.forEach(L.bind(function(r) {
 				var isCur = current && (r.name === current || r.hostname === current);
 				var isPin = (r.name || r.hostname) === chosen;
 				el.appendChild(E('div', { class: 'pv-pool-row' + (isPin ? ' is-in' : ''),
-					click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(r.name || r.hostname); }, this) }, [
+					click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(r.name || r.hostname); }, this) }, nodes([
 						E('span', { class: 'pv-dot ' + this.srvLoadClass(r.load) }),
-						E('span', { class: 'grow' }, '%s / %s'.format(r.city || '?', r.name || r.hostname)),
+						E('span', { class: 'grow' }, nodes('%s / %s'.format(r.city || '?', r.name || r.hostname))),
 						r.secure_core ? E('span', { class: 'pv-tagline' },
-							this.countryLabel(r.entry_country) + ' → ') : '',
-						r.tier === 0 ? E('span', { class: 'pv-tagline' }, _('free')) : '',
+							nodes(this.countryLabel(r.entry_country) + ' → ')) : '',
+						r.tier === 0 ? E('span', { class: 'pv-tagline' }, nodes(_('free'))) : '',
 						// Bit 16 of the logical server's Features bitmask is
 						// ProtonVPN's IPv6 flag (protonvpn.common FEATURE_IPV6);
 						// cache.uc keeps the raw mask on every relay.
 						(showV6 && this.relayHasV6(r)) ? E('span', { class: 'pv-srv-v6',
-							title: _('This server forwards IPv6 through the tunnel') }, _('IPv6')) : '',
-						isCur ? E('span', { class: 'pv-srv-cur' }, '● ' + _('current')) : '',
-						E('span', { class: 'pv-srv-load' }, r.load != null ? '%d%%'.format(r.load) : '')
-					]));
+							title: _('This server forwards IPv6 through the tunnel') }, nodes(_('IPv6'))) : '',
+						isCur ? E('span', { class: 'pv-srv-cur' }, nodes('● ' + _('current'))) : '',
+						E('span', { class: 'pv-srv-load' }, nodes(r.load != null ? '%d%%'.format(r.load) : ''))
+					])));
 			}, this));
 		}, this));
 
 		if (chosen && !this.srvChosenOfferable())
-			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, chosen + ' ' +
+			el.appendChild(E('div', { class: 'pv-pool-row is-in' }, nodes(chosen + ' ' +
 				(this.srvRelayByHost(chosen) ? _('(does not forward IPv6)')
-					: _('(not in the set)'))));
+					: _('(not in the set)')))));
 		else if (!groups.length)
 			// Say which emptiness this is. "No matches" under an active
 			// requirement sends the user to widen a filter that is not the
 			// problem, and the connection is about to be refused for a reason
 			// they were never shown.
 			el.appendChild(E('div', { class: 'pv-pool-row is-in' },
-				(onlyV6 && !f) ? _('No gateways in these locations forward IPv6.')
-					: _('No matches')));
+				nodes((onlyV6 && !f) ? _('No gateways in these locations forward IPv6.')
+					: _('No matches'))));
 	},
 
 	// ── credential banner ────────────────────────────────────────────────
@@ -1771,9 +2029,9 @@ return view.extend({
 			actions = [
 				E('button', { class: 'cbi-button',
 					click: ui.createHandlerFn(this, 'handleRefreshLocations') },
-					_('Update server list')),
+					nodes(_('Update server list'))),
 				E('button', { class: 'cbi-button cbi-button-remove',
-					click: ui.createHandlerFn(this, 'handleLogout') }, _('Sign out'))
+					click: ui.createHandlerFn(this, 'handleLogout') }, nodes(_('Sign out')))
 			];
 		} else if (st.state === 'needs_2fa') {
 			cls += ' pv-acct-warn';
@@ -1782,7 +2040,7 @@ return view.extend({
 			sub = _('The password was accepted; enter the code from your authenticator to finish.');
 			actions = [
 				E('button', { class: 'cbi-button cbi-button-apply',
-					click: ui.createHandlerFn(this, 'showLoginModal', 'totp') }, _('Enter code'))
+					click: ui.createHandlerFn(this, 'showLoginModal', 'totp') }, nodes(_('Enter code')))
 			];
 		} else if (st.state === 'expired') {
 			cls += ' pv-acct-warn';
@@ -1793,7 +2051,7 @@ return view.extend({
 			actions = [
 				E('button', { class: 'cbi-button cbi-button-apply',
 					click: ui.createHandlerFn(this, 'showLoginModal', 'credentials') },
-					_('Sign in again'))
+					nodes(_('Sign in again')))
 			];
 		} else {
 			cls += ' pv-acct-bad';
@@ -1802,20 +2060,20 @@ return view.extend({
 			sub = _('ProtonVPN needs your account to fetch the server list and register this router as a device.');
 			actions = [
 				E('button', { class: 'cbi-button cbi-button-apply',
-					click: ui.createHandlerFn(this, 'showLoginModal', 'credentials') }, _('Sign in'))
+					click: ui.createHandlerFn(this, 'showLoginModal', 'credentials') }, nodes(_('Sign in')))
 			];
 		}
 
 		this.bandEl.className = cls;
-		dom.content(this.bandEl, [
-			E('div', { class: 'pv-acct-main' }, [
-				E('div', { class: 'pv-acct-title' }, [
-					E('span', { class: 'pv-led ' + led }), E('span', {}, title)
-				]),
-				E('div', { class: 'pv-acct-sub' }, sub)
-			]),
-			E('div', { class: 'pv-acct-actions' }, actions)
-		]);
+		dom.content(this.bandEl, nodes([
+			E('div', { class: 'pv-acct-main' }, nodes([
+				E('div', { class: 'pv-acct-title' }, nodes([
+					E('span', { class: 'pv-led ' + led }), E('span', {}, nodes(title))
+				])),
+				E('div', { class: 'pv-acct-sub' }, nodes(sub))
+			])),
+			E('div', { class: 'pv-acct-actions' }, nodes(actions))
+		]));
 	},
 
 	// ── connection status ────────────────────────────────────────────────
@@ -1835,19 +2093,19 @@ return view.extend({
 	// it turns the instance off, and the daemon will not bring it back.
 	actionButtons: function (st, disp) {
 		var btns = [ E('button', { class: 'cbi-button',
-			click: ui.createHandlerFn(this, 'refreshStatus') }, _('Refresh')) ];
+			click: ui.createHandlerFn(this, 'refreshStatus') }, nodes(_('Refresh'))) ];
 
 		if (!st.configured)
 			return btns;
 
 		if (st.enabled === false) {
 			btns.push(E('button', { class: 'cbi-button cbi-button-apply',
-				click: ui.createHandlerFn(this, 'handleConnect') }, _('Enable')));
+				click: ui.createHandlerFn(this, 'handleConnect') }, nodes(_('Enable'))));
 			return btns;
 		}
 
 		btns.push(E('button', { class: 'cbi-button cbi-button-apply',
-			click: ui.createHandlerFn(this, 'handleConnect') }, _('Reconnect')));
+			click: ui.createHandlerFn(this, 'handleConnect') }, nodes(_('Reconnect'))));
 
 		// Rotation cannot work on a pinned server — the backend refuses it — so
 		// that case drops the button entirely. Otherwise it stays put and is
@@ -1856,11 +2114,11 @@ return view.extend({
 		if (!st.fixed) {
 			var live = (disp === 'connected' || disp === 'degraded');
 			btns.push(E('button', { class: 'cbi-button', disabled: !live || null,
-				click: ui.createHandlerFn(this, 'handleRotateNow') }, _('Rotate now')));
+				click: ui.createHandlerFn(this, 'handleRotateNow') }, nodes(_('Rotate now'))));
 		}
 
 		btns.push(E('button', { class: 'cbi-button cbi-button-remove',
-			click: ui.createHandlerFn(this, 'handleDisconnect') }, _('Disable')));
+			click: ui.createHandlerFn(this, 'handleDisconnect') }, nodes(_('Disable'))));
 		return btns;
 	},
 
@@ -1967,22 +2225,22 @@ return view.extend({
 
 		var heading = [
 			E('span', { class: 'pv-led ' + led }),
-			E('span', { class: 'pv-state-label' }, title)
+			E('span', { class: 'pv-state-label' }, nodes(title))
 		];
 		// With several tunnels running side by side the card has to say which
 		// one it is describing.
 		if ((this.instances || []).length > 1)
-			heading.push(E('span', { class: 'pv-tagline' }, this.instance));
+			heading.push(E('span', { class: 'pv-tagline' }, nodes(this.instance)));
 
 		this.stateEl.className = cls;
-		dom.content(this.stateEl, [
-			E('div', { class: 'pv-state-main' }, [
-				E('div', { class: 'pv-state-title' }, heading),
-				E('div', { class: 'pv-state-sub' }, sub.join(' · ') || _('No tunnel yet.')),
-				quota ? E('div', { class: 'pv-quota' }, quota) : ''
-			]),
-			E('div', { class: 'pv-state-actions' }, actions)
-		]);
+		dom.content(this.stateEl, nodes([
+			E('div', { class: 'pv-state-main' }, nodes([
+				E('div', { class: 'pv-state-title' }, nodes(heading)),
+				E('div', { class: 'pv-state-sub' }, nodes(sub.join(' · ') || _('No tunnel yet.'))),
+				quota ? E('div', { class: 'pv-quota' }, nodes(quota)) : ''
+			])),
+			E('div', { class: 'pv-state-actions' }, nodes(actions))
+		]));
 	},
 
 	// Fetch the tunnel's public IP once per instance+gateway combination. The
@@ -2061,7 +2319,7 @@ return view.extend({
 			// every tick or it freezes at whatever it said when the form was
 			// built and quietly goes stale by hours.
 			if (self.rotNextSpan)
-				dom.content(self.rotNextSpan, self.nextRotationText());
+				dom.content(self.rotNextSpan, nodes(self.nextRotationText()));
 		});
 	},
 
@@ -2222,13 +2480,13 @@ return view.extend({
 	// LuCI's own two-column form markup, so the page lines up with every other
 	// LuCI page instead of inventing a private layout.
 	row: function (labelText, fieldNodes, descText) {
-		var field = E('div', { class: 'cbi-value-field' }, fieldNodes);
+		var field = E('div', { class: 'cbi-value-field' }, nodes(fieldNodes));
 		if (descText)
-			field.appendChild(E('div', { class: 'cbi-value-description' }, descText));
-		return E('div', { class: 'cbi-value' }, [
-			E('label', { class: 'cbi-value-title' }, labelText),
+			field.appendChild(E('div', { class: 'cbi-value-description' }, nodes(descText)));
+		return E('div', { class: 'cbi-value' }, nodes([
+			E('label', { class: 'cbi-value-title' }, nodes(labelText)),
 			field
-		]);
+		]));
 	},
 
 	buildConnection: function () {
@@ -2248,15 +2506,15 @@ return view.extend({
 		}, this));
 
 		this.hopButtons = {};
-		var seg = E('div', { class: 'pv-seg' }, [
+		var seg = E('div', { class: 'pv-seg' }, nodes([
 			[ 'standard', _('Standard') ],
 			[ 'secure_core', _('Secure Core') ],
 			[ 'tor', _('Tor') ]
 		].map(L.bind(function (o) {
-			var b = E('button', { type: 'button', click: L.bind(this.setHopMode, this, o[0]) }, o[1]);
+			var b = E('button', { type: 'button', click: L.bind(this.setHopMode, this, o[0]) }, nodes(o[1]));
 			this.hopButtons[o[0]] = b;
 			return b;
-		}, this)));
+		}, this))));
 		this.hopNote = E('div', { class: 'cbi-value-description' });
 
 		this.poolChips = E('div', { class: 'pv-pool' });
@@ -2271,39 +2529,39 @@ return view.extend({
 				ev.preventDefault();
 				ev.stopPropagation();
 				this.poolTogglePanel();
-			}, this) }, '+ ' + _('Add a location'));
+			}, this) }, nodes('+ ' + _('Add a location')));
 		this.poolPanel = E('div', { class: 'pv-pool-panel pv-pool-acc hidden' });
-		this.poolWrap = E('div', { class: 'pv-pool-wrap' }, [ this.poolTrigger, this.poolPanel ]);
+		this.poolWrap = E('div', { class: 'pv-pool-wrap' }, nodes([ this.poolTrigger, this.poolPanel ]));
 
 		this.srvTrigger = E('button', { type: 'button', class: 'cbi-button pv-pool-trigger pv-srv-trigger',
 			click: L.bind(function (ev) {
 				ev.preventDefault();
 				ev.stopPropagation();
 				this.srvTogglePanel();
-			}, this) }, _('Automatic server'));
+			}, this) }, nodes(_('Automatic server')));
 		this.srvPanel = E('div', { class: 'pv-pool-panel hidden' });
 
-		this.srvWrap = E('span', { class: 'pv-pool-wrap' }, [ this.srvTrigger, this.srvPanel ]);
+		this.srvWrap = E('span', { class: 'pv-pool-wrap' }, nodes([ this.srvTrigger, this.srvPanel ]));
 
 		// Initial repaint: the same hooks a user edit would trigger.
 		this.updateHopButtons();
 		this.rebuildPoolWidget();
 		this.refreshServerList();
 
-		return E('fieldset', { class: 'cbi-section' }, [
-			E('legend', {}, _('Connection')),
-			E('div', { class: 'cbi-section-node' }, [
+		return E('fieldset', { class: 'cbi-section' }, nodes([
+			E('legend', {}, nodes(_('Connection'))),
+			E('div', { class: 'cbi-section-node' }, nodes([
 				this.row(_('Hop mode'), [ seg, this.hopNote ]),
 				this.row(_('Locations'), [
-					E('div', {}, [ this.poolChips ]),
+					E('div', {}, nodes([ this.poolChips ])),
 					this.poolWrap,
 					this.poolNote
 				], _('Countries this instance connects between. Picking a country adds the whole country; the arrow at its right end expands its cities to narrow the set. The initial connect and the rotation both pick within this set.')),
 				this.row(_('Server'), [
 					this.srvWrap
 				], _('Automatic picks a server from the set (rotation-friendly). Pin a specific one to lock it; pinning disables automatic rotation.'))
-			])
-		]);
+			]))
+		]));
 	},
 
 	buildFormSections: function () {
@@ -2348,7 +2606,7 @@ return view.extend({
 		var tbl = g('routing_table', '') || iface;
 		body.appendChild(this.row(_('Interface / table'), [
 			E('span', { class: 'pv-inline-note' },
-				_('Interface %s · routing table %s — edit under Advanced settings.').format(iface, tbl))
+				nodes(_('Interface %s · routing table %s — edit under Advanced settings.').format(iface, tbl)))
 		]));
 
 		if (rt.mode === 'manual') {
@@ -2359,16 +2617,16 @@ return view.extend({
 			if (table)
 				what.push(_('routing table "%s"').format(table));
 			body.appendChild(this.row(_('Mode'), [
-				E('div', {}, [
-					E('span', {}, _('Manual — %s detected. The app leaves routing and firewall untouched.')
-						.format(what.join(' + ') || _('custom configuration'))),
+				E('div', {}, nodes([
+					E('span', {}, nodes(_('Manual — %s detected. The app leaves routing and firewall untouched.')
+						.format(what.join(' + ') || _('custom configuration')))),
 					E('div', { class: 'cbi-value-description' },
-						_('Remove your own routes/rules that reference this interface to manage routing from here.'))
-				])
+						nodes(_('Remove your own routes/rules that reference this interface to manage routing from here.')))
+				]))
 			]));
 			if (rt.ipv6_wan)
 				body.appendChild(this.row('', [ E('span', { class: 'pv-inline-note' },
-					_('⚠ IPv6 is active on the WAN and bypasses the VPN unless your rules cover it.')) ]));
+					nodes(_('⚠ IPv6 is active on the WAN and bypasses the VPN unless your rules cover it.'))) ]));
 		} else {
 			this.autoRouting = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
 			// Absent means off, exactly as the backend reads it. It used to
@@ -2390,24 +2648,24 @@ return view.extend({
 			var v6mode = g('ipv6_mode', 'block');
 			if ([ 'block', 'auto', 'off' ].indexOf(v6mode) < 0)
 				v6mode = 'block';
-			this.v6Sel = E('select', { class: 'cbi-input-select', change: L.bind(this.onRoutingToggle, this) }, [
-				E('option', { value: 'block' }, _('Block — no IPv6 past the router')),
-				E('option', { value: 'auto' }, _('Automatic — through the tunnel where the server supports it')),
-				E('option', { value: 'off' }, _('Off — leave IPv6 alone'))
-			]);
+			this.v6Sel = E('select', { class: 'cbi-input-select', change: L.bind(this.onRoutingToggle, this) }, nodes([
+				E('option', { value: 'block' }, nodes(_('Block — no IPv6 past the router'))),
+				E('option', { value: 'auto' }, nodes(_('Automatic — through the tunnel where the server supports it'))),
+				E('option', { value: 'off' }, nodes(_('Off — leave IPv6 alone')))
+			]));
 			this.v6Sel.value = v6mode;
 			this.v6Warn = E('div', { class: 'cbi-value-description pv-inline-note hidden' },
-				_('⚠ IPv6 stays outside the tunnel and can leak your address.'));
+				nodes(_('⚠ IPv6 stays outside the tunnel and can leak your address.')));
 			// "Automatic" follows whatever gateway you land on; this narrows
 			// the fleet so you only ever land on one that forwards IPv6. Off
 			// by default: it costs a third of the servers, which is only worth
 			// paying when the user says IPv6 is what they came for.
 			this.v6Only = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
 			this.v6Only.checked = (g('require_ipv6', '0') === '1');
-			this.v6OnlyNote = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, '');
+			this.v6OnlyNote = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, nodes(''));
 			// Filled in by onRoutingToggle: why 'auto' is unavailable, or what
 			// it is doing on the gateway the tunnel is on right now.
-			this.v6Note = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, '');
+			this.v6Note = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, nodes(''));
 
 			this.steerBoxes = {};
 			var current = uci.get('protonvpn', this.instance, 'source_network');
@@ -2419,7 +2677,7 @@ return view.extend({
 			// directly — so refuse it here, where the choice is made.
 			var takenBy = this.networkOwners();
 			var nets = rt.networks || [];
-			this.steerWrap = E('div', { class: 'pv-inline', style: 'gap:1em' }, nets.map(L.bind(function (n) {
+			this.steerWrap = E('div', { class: 'pv-inline', style: 'gap:1em' }, nodes(nets.map(L.bind(function (n) {
 				var owner = takenBy[n];
 				var cb = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
 				cb.checked = currentList.indexOf(n) >= 0;
@@ -2427,28 +2685,28 @@ return view.extend({
 				// could not be handed back.
 				cb.disabled = !!owner && !cb.checked;
 				this.steerBoxes[n] = cb;
-				var label = E('label', { class: 'pv-check' }, [ cb, n ]);
+				var label = E('label', { class: 'pv-check' }, nodes([ cb, n ]));
 				if (cb.disabled)
 					label.appendChild(E('span', { class: 'pv-inline-note' },
-						_('(steered by %s)').format(owner)));
+						nodes(_('(steered by %s)').format(owner))));
 				return label;
-			}, this)));
+			}, this))));
 
 			body.appendChild(this.row(_('Traffic routing'), [
-				E('label', { class: 'pv-check' }, [ this.autoRouting, _('Route all LAN traffic through the VPN') ])
+				E('label', { class: 'pv-check' }, nodes([ this.autoRouting, _('Route all LAN traffic through the VPN') ]))
 			], _('Creates a firewall zone and a default route via the tunnel; disabling removes exactly what was created.')));
 			this.steerRow = this.row(_('Steered networks'), [ this.steerWrap ],
 				_('Or route only these networks through this instance — policy rules send their traffic into its routing table.'));
 			if (nets.length)
 				body.appendChild(this.steerRow);
 			this.ksRow = this.row(_('Kill switch'), [
-				E('label', { class: 'pv-check' }, [ this.ksBox, _('Block LAN internet access while the VPN is down') ])
+				E('label', { class: 'pv-check' }, nodes([ this.ksBox, _('Block LAN internet access while the VPN is down') ]))
 			]);
 			this.v6Row = this.row(_('IPv6'), [ this.v6Sel, this.v6Note, this.v6Warn ],
 				_('ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through the tunnel on those and keeps blocking it on the rest, so it can never fall back to your provider. Block is the default: a fresh install lets no IPv6 past the router at all, because an IPv6 path around the tunnel would expose your address just as plainly as no VPN.'));
 			this.v6OnlyRow = this.row('', [
-				E('label', { class: 'pv-check' }, [ this.v6Only,
-					_('Only use gateways that forward IPv6') ]),
+				E('label', { class: 'pv-check' }, nodes([ this.v6Only,
+					_('Only use gateways that forward IPv6') ])),
 				this.v6OnlyNote
 			], _('Narrows the server list, rotation and the watchdog to gateways with IPv6. About two thirds of the fleet qualifies, and some countries have none — if your locations have none, the VPN will not connect rather than quietly give you a gateway without IPv6.'));
 			body.appendChild(this.ksRow);
@@ -2457,10 +2715,10 @@ return view.extend({
 			this.onRoutingToggle(true);
 		}
 
-		return E('fieldset', { class: 'cbi-section' }, [
-			E('legend', {}, _('Traffic routing')),
+		return E('fieldset', { class: 'cbi-section' }, nodes([
+			E('legend', {}, nodes(_('Traffic routing'))),
 			body
-		]);
+		]));
 	},
 
 	// Logical networks another instance already steers, mapped to its name.
@@ -2642,35 +2900,35 @@ return view.extend({
 		this.rotInterval = E('select', { class: 'cbi-input-select', change: L.bind(this.markDirty, this) });
 		[ [ '60', _('Every hour') ], [ '180', _('Every 3 hours') ], [ '360', _('Every 6 hours') ],
 		  [ '720', _('Every 12 hours') ], [ '1440', _('Every 24 hours') ] ].forEach(L.bind(function (o) {
-			this.rotInterval.appendChild(E('option', { value: o[0], selected: (o[0] === interval) || null }, o[1]));
+			this.rotInterval.appendChild(E('option', { value: o[0], selected: (o[0] === interval) || null }, nodes(o[1])));
 		}, this));
 
 		this.rotTime = E('input', { type: 'time', class: 'cbi-input-text', value: time, style: 'width:auto', change: L.bind(this.markDirty, this) });
 		this.refs.rotation_interval = this.rotInterval;
 		this.refs.rotation_time = this.rotTime;
 
-		this.rotFixedNote = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, _('Automatic rotation is unavailable while a specific server is selected.'));
+		this.rotFixedNote = E('div', { class: 'cbi-value-description pv-inline-note hidden' }, nodes(_('Automatic rotation is unavailable while a specific server is selected.')));
 		this.rotModeRow = this.row(_('Schedule'), [
-			E('div', { class: 'pv-radio-group' }, [
-				E('label', {}, [ this.rotModeInterval, _('Every N hours') ]),
-				E('label', {}, [ this.rotModeTime, _('At specific time') ])
-			])
+			E('div', { class: 'pv-radio-group' }, nodes([
+				E('label', {}, nodes([ this.rotModeInterval, _('Every N hours') ])),
+				E('label', {}, nodes([ this.rotModeTime, _('At specific time') ]))
+			]))
 		]);
 		this.rotIntervalRow = this.row(_('Rotation interval'), [ this.rotInterval ]);
 		this.rotTimeRow = this.row(_('Rotation time'), [ this.rotTime ], _('Router local time'));
-		this.rotNextSpan = E('span', {}, this.nextRotationText());
+		this.rotNextSpan = E('span', {}, nodes(this.nextRotationText()));
 		this.rotNextRow = this.row(_('Next rotation'), [ this.rotNextSpan ]);
 
-		var section = E('fieldset', { class: 'cbi-section', id: 'pv-rotation' }, [
-			E('legend', {}, _('Automatic rotation')),
-			E('div', { class: 'cbi-section-node' }, [
+		var section = E('fieldset', { class: 'cbi-section', id: 'pv-rotation' }, nodes([
+			E('legend', {}, nodes(_('Automatic rotation'))),
+			E('div', { class: 'cbi-section-node' }, nodes([
 				this.row(_('Automatic rotation'), [
-					E('label', { class: 'pv-check' }, [ this.rotEnable, _('Change server automatically on a schedule') ]),
+					E('label', { class: 'pv-check' }, nodes([ this.rotEnable, _('Change server automatically on a schedule') ])),
 					this.rotFixedNote
 				]),
 				this.rotModeRow, this.rotIntervalRow, this.rotTimeRow, this.rotNextRow
-			])
-		]);
+			]))
+		]));
 
 		this.onRotationToggle();
 		return section;
@@ -2735,7 +2993,7 @@ return view.extend({
 			return text ? text + ' ' + note : note;
 		};
 		var gm = function (o, d) { return uci.get('protonvpn', 'main', o) || d; };
-		this.cacheRow = E('span', {}, this.cacheSummary());
+		this.cacheRow = E('span', {}, nodes(this.cacheSummary()));
 
 		// MTU with a WAN-derived recommendation (backend computes WAN_MTU - 80).
 		var rtx = (this.status || {}).routing || {};
@@ -2748,14 +3006,14 @@ return view.extend({
 		if (atRec) {
 			mtuCtl.push(' ');
 			mtuCtl.push(E('span', { style: 'color:var(--success-color-medium,#3c8c3c);font-weight:600' },
-				_('✓ recommended value')));
+				nodes(_('✓ recommended value'))));
 		} else if (recMtu) {
 			mtuCtl.push(' ');
 			mtuCtl.push(E('button', { class: 'cbi-button', click: L.bind(function (ev) {
 				ev.preventDefault();
 				mtuInput.value = recMtu;
 				this.markDirty();
-			}, this) }, _('Use recommended')));
+			}, this) }, nodes(_('Use recommended'))));
 		}
 		var mtuDesc = atRec
 			? _('You are on the recommended MTU for your WAN (MTU %d). Empty = the netifd default (1420).').format(rtx.wan_mtu || 0)
@@ -2771,13 +3029,35 @@ return view.extend({
 		var dnsMode = g('vpn_dns', 'off');
 		if (dnsMode !== 'standard')
 			dnsMode = 'off';
-		this.dnsSel = E('select', { class: 'cbi-input-select', change: L.bind(this.markDirty, this) }, [
-			E('option', { value: 'off' }, _('Off — use system DNS')),
-			E('option', { value: 'standard' }, _('ProtonVPN — in-tunnel resolver (10.2.0.1)'))
-		]);
+		this.dnsSel = E('select', { class: 'cbi-input-select', change: L.bind(this.markDirty, this) }, nodes([
+			E('option', { value: 'off' }, nodes(_('Off — use system DNS'))),
+			E('option', { value: 'standard' }, nodes(_('ProtonVPN — in-tunnel resolver (10.2.0.1)')))
+		]));
 		this.dnsSel.value = dnsMode;
 
-		var body = E('div', { class: 'cbi-section-node' }, [
+		// The Proton client version (x-pm-appversion). Shared by every instance
+		// and read from the globals section when the config has one, so the
+		// field has to look where the backend looks. It lived in uci alone
+		// until now — which is the one setting a user needs exactly when they
+		// cannot sign in, and therefore the one that has to be reachable from
+		// the page in front of them.
+		this.appVerBtn = E('button', { class: 'cbi-button pv-appver-fetch',
+			click: L.bind(this.handleFetchClientVersions, this) },
+			nodes(_('Fetch available versions')));
+		this.appVerPick = E('div', { class: 'pv-appver-pick' });
+		this.appVerNote = E('div', { class: 'cbi-value-description pv-appver-note' }, nodes(''));
+		var appVerCtl = E('div', {}, nodes([
+			E('div', { class: 'pv-inline' }, nodes([
+				this.input('app_version', 'text',
+					uci.get('protonvpn', this.globalsSection(), 'app_version') || '',
+					{ placeholder: 'linux-vpn-gtk@…', style: 'min-width:15em' }),
+				this.appVerBtn
+			])),
+			this.appVerPick,
+			this.appVerNote
+		]));
+
+		var body = E('div', { class: 'cbi-section-node' }, nodes([
 			this.row(_('Interface name'), [ this.input('interface', 'text', g('interface', 'protonvpn')) ],
 				_('Name of the managed WireGuard interface. ⚠ Changing it after setup recreates the tunnel under the new name and orphans the old interface’s firewall/routing objects.')),
 			this.row(_('Routing table'), [ this.input('routing_table', 'text', g('routing_table', ''), { placeholder: 'main' }) ],
@@ -2788,19 +3068,21 @@ return view.extend({
 			this.maxRetriesRow = this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ],
 				_('How many candidate servers a rotation may try')),
 			this.wdRow = this.row(_('Auto-reconnect (watchdog)'), [
-				E('label', { class: 'pv-check' }, [ this.wdBox, _('Reconnect automatically when the tunnel goes stale') ])
+				E('label', { class: 'pv-check' }, nodes([ this.wdBox, _('Reconnect automatically when the tunnel goes stale') ]))
 			], _('Auto-reconnect when the tunnel goes stale (handshake-based; no external probe; off when a specific server is pinned)')),
 			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', gm('cache_dir', ''), { placeholder: '/tmp' }) ],
 				shared(_('Where to store the downloaded server list (leave empty for /tmp)'))),
 			this.row(_('Server cache'), [
-				E('div', { class: 'pv-inline' }, [
+				E('div', { class: 'pv-inline' }, nodes([
 					this.cacheRow,
-					E('button', { class: 'cbi-button', click: L.bind(this.refreshCache, this) }, _('Refresh server list'))
-				])
+					E('button', { class: 'cbi-button', click: L.bind(this.refreshCache, this) }, nodes(_('Refresh server list')))
+				]))
 			], shared('')),
 			this.row(_('DNS'), [ this.dnsSel ],
-				_('Which resolver to use while connected. Proton runs a single in-tunnel resolver (10.2.0.1); it only works through the tunnel.'))
-		]);
+				_('Which resolver to use while connected. Proton runs a single in-tunnel resolver (10.2.0.1); it only works through the tunnel.')),
+			this.row(_('Proton client version'), [ appVerCtl ],
+				_('Shared by all instances. Client version sent to Proton as x-pm-appversion. Empty = the version built into the package. Only set this when Proton answers a sign-in with Code 5003 "this version of the app is no longer supported" and no package update is available yet — Code 2028 is a temporary limit on your account and Code 8002 is a wrong username or password, and neither is fixed by changing this. "Fetch available versions" asks the official Linux client\'s repository what exists; it only fills the list, you pick a value and press Save.'))
+		]));
 
 		// The connection section is built (and may restore a pinned server)
 		// before this row exists — sync the initial visibility.
@@ -2809,10 +3091,124 @@ return view.extend({
 			this.wdRow.classList.add('hidden');
 		}
 
-		return E('details', { class: 'pv-advanced cbi-section' }, [
-			E('summary', {}, _('Advanced settings')),
+		return E('details', { class: 'pv-advanced cbi-section' }, nodes([
+			E('summary', {}, nodes(_('Advanced settings'))),
 			body
-		]);
+		]));
+	},
+
+	// The only shape the backend accepts — app_version() in protonvpn.api
+	// matches exactly this and falls back to the built-in constant for
+	// anything else. JS anchors ^ and $ to the whole string (ucode's anchor
+	// matches line boundaries, which is why the backend rejects CR/LF
+	// separately), so an embedded newline fails here too.
+	APP_VERSION_RE: /^linux-vpn-[a-z0-9-]+@[0-9]+\.[0-9]+\.[0-9]+$/,
+
+	// Why a malformed value must not be saved at all: the router would store
+	// it, ignore it, and stamp the built-in version instead. The page would
+	// then show an override that is not in force — the worst possible answer
+	// for a setting somebody is editing precisely because sign-ins are
+	// failing. It looks applied, it changes nothing, and the next sign-in
+	// fails the same way.
+	//
+	// Returns the sentence to show, or null when there is nothing to say.
+	appVersionError: function () {
+		if (!this.refs || !this.refs.app_version)
+			return null;
+		var v = (this.refs.app_version.value || '').trim();
+		if (v === '' || this.APP_VERSION_RE.test(v))
+			return null;
+		return _('The Proton client version must look like linux-vpn-gtk@4.18.2, or be empty to use the version built into the package. The router would ignore "%s" and keep stamping the built-in version, so it was not saved.')
+			.format(v);
+	},
+
+	// Where the shared options live: the 'globals' section when the config has
+	// one, 'main' otherwise. Same rule the backend reads by (globals_section()
+	// in protonvpn.common) — writing anywhere else stores a value the router
+	// never stamps.
+	globalsSection: function () {
+		var found = null;
+		uci.sections('protonvpn', 'globals', function (s) {
+			if (!found)
+				found = s['.name'];
+		});
+		return found || 'main';
+	},
+
+	// Ask upstream which client versions the official Linux app has released.
+	// Only ever reached from the button: this leaves the router's network,
+	// which has no business happening while a page loads or a sign-in runs.
+	//
+	// It fills a list and nothing more. The field is not touched here, on
+	// success or on failure — a page that restamps the version by itself
+	// breaks sign-ins for a reason its owner cannot see.
+	handleFetchClientVersions: function (ev) {
+		var self = this;
+		if (ev && ev.preventDefault)
+			ev.preventDefault();
+		if (this.appVerBusy)
+			return Promise.resolve();
+		this.appVerBusy = true;
+		var btn = this.appVerBtn;
+		if (btn) {
+			btn.disabled = true;
+			dom.content(btn, nodes([ E('span', { class: 'spinning' }), ' ', _('Fetching…') ]));
+		}
+		dom.content(this.appVerNote, nodes(_('Asking the official client\'s repository…')));
+		var done = function () {
+			self.appVerBusy = false;
+			if (btn) {
+				btn.disabled = false;
+				dom.content(btn, nodes(_('Fetch available versions')));
+			}
+		};
+		return callClientVersions().then(function (res) {
+			done();
+			self.renderClientVersions(res || {});
+		}).catch(function (err) {
+			done();
+			self.renderClientVersions({ versions: [],
+				error: (err && err.message) ? err.message : ('' + err) });
+		});
+	},
+
+	// Draw what came back. A list that could not be retrieved is said plainly
+	// — the alternative is a button that looks as if it did nothing, which is
+	// the same defect this page already had on the Continue button.
+	renderClientVersions: function (res) {
+		var self = this;
+		var list = res.versions || [];
+		dom.content(this.appVerPick, nodes(''));
+		if (!list.length) {
+			dom.content(this.appVerNote, nodes(E('span', { class: 'pv-err' },
+				nodes(res.error
+					? _('Could not retrieve the version list: %s').format(res.error)
+					: _('Could not retrieve the version list.')))));
+			return;
+		}
+
+		// The first entry is a placeholder rather than a version, so opening
+		// the list cannot pick one by accident.
+		var sel = E('select', { class: 'cbi-input-select pv-appver-list' },
+			nodes([ E('option', { value: '' }, nodes(_('— choose a version —'))) ]));
+		list.forEach(function (v) {
+			sel.appendChild(E('option', { value: v },
+				nodes(v === res.current ? _('%s — current release').format(v) : v)));
+		});
+		sel.addEventListener('change', function () {
+			if (!sel.value)
+				return;
+			self.refs.app_version.value = sel.value;
+			self.markDirty();
+		});
+		dom.append(this.appVerPick, nodes(sel));
+
+		var note = res.current
+			? _('The official client currently ships %s. Pick a version and press Save — nothing is changed until you do.').format(res.current)
+			: _('Pick a version and press Save — nothing is changed until you do.');
+		if (res.error)
+			note += ' ' + _('Part of the list could not be retrieved: %s').format(res.error);
+		dom.content(this.appVerNote, nodes(note));
 	},
 
 	cacheSummary: function () {
@@ -2834,15 +3230,15 @@ return view.extend({
 	refreshCache: function (ev) {
 		var btn = ev.target;
 		btn.disabled = true;
-		dom.content(this.cacheRow, _('Refreshing…'));
+		dom.content(this.cacheRow, nodes(_('Refreshing…')));
 		return this.handleRefreshLocations().then(L.bind(function () {
 			btn.disabled = false;
 			if (this.cacheRow)
-				dom.content(this.cacheRow, this.cacheSummary());
+				dom.content(this.cacheRow, nodes(this.cacheSummary()));
 		}, this)).catch(L.bind(function (e) {
 			btn.disabled = false;
 			if (this.cacheRow)
-				dom.content(this.cacheRow, this.cacheSummary());
+				dom.content(this.cacheRow, nodes(this.cacheSummary()));
 			this.notice(_('Refresh failed: %s').format(e), 'error');
 		}, this));
 	},
@@ -2852,13 +3248,13 @@ return view.extend({
 			class: 'cbi-button cbi-button-save',
 			disabled: true,
 			click: L.bind(this.save, this)
-		}, _('Save and reconnect'));
+		}, nodes(_('Save and reconnect')));
 		this.discardBtn = E('button', {
 			class: 'cbi-button',
 			disabled: true,
 			click: L.bind(this.discard, this)
-		}, _('Discard changes'));
-		return E('div', { class: 'cbi-page-actions' }, [ this.saveBtn, ' ', this.discardBtn ]);
+		}, nodes(_('Discard changes')));
+		return E('div', { class: 'cbi-page-actions' }, nodes([ this.saveBtn, ' ', this.discardBtn ]));
 	},
 
 	discard: function () {
@@ -2866,7 +3262,7 @@ return view.extend({
 		// very changes that are being discarded.
 		uci.unload('protonvpn');
 		return uci.load('protonvpn').then(L.bind(function () {
-			dom.content(this.formNode, this.buildFormSections());
+			dom.content(this.formNode, nodes(this.buildFormSections()));
 			this._dirty = false;
 			if (this.saveBtn) this.saveBtn.disabled = true;
 			if (this.discardBtn) this.discardBtn.disabled = true;
@@ -2890,6 +3286,11 @@ return view.extend({
 		// The cache directory is shared and lives on the 'main' section.
 		if (this.refs.cache_dir)
 			setv('cache_dir', (this.refs.cache_dir.value || '').trim(), 'main');
+		// The client version is shared too, and the backend reads it from the
+		// globals section when the config has one.
+		if (this.refs.app_version)
+			setv('app_version', (this.refs.app_version.value || '').trim(),
+				this.globalsSection());
 
 		uci.set('protonvpn', inst, 'hop_mode', this.hopMode());
 
@@ -2971,6 +3372,16 @@ return view.extend({
 			this.notice(_('Pick at least one location that has servers in this mode.'), 'warning');
 			return;
 		}
+		// Said twice on purpose: the notice is at the top of the page and the
+		// field is inside a <details> the user may well be looking at instead.
+		var appVerErr = this.appVersionError();
+		if (appVerErr) {
+			this.notice(appVerErr, 'warning');
+			if (this.appVerNote)
+				dom.content(this.appVerNote,
+					[ E('span', { class: 'pv-err' }, nodes(appVerErr)) ]);
+			return;
+		}
 		this.collectIntoUci();
 		if (this.saveBtn)
 			this.saveBtn.disabled = true;
@@ -3005,7 +3416,7 @@ return view.extend({
 			// Rebuild the whole form, not just the status band: a saved change
 			// can flip the detected routing mode, and the panel's shape follows it.
 			return self.refreshStatus().then(function () {
-				dom.content(self.formNode, self.buildFormSections());
+				dom.content(self.formNode, nodes(self.buildFormSections()));
 			});
 		}).catch(function (e) {
 			self.dismiss(p);
@@ -3036,17 +3447,17 @@ return view.extend({
 		this.stateEl = E('div', { class: 'pv-state', 'aria-live': 'polite' });
 		this.instancesNode = E('div', {});
 		this.formNode = E('div', {});
-		dom.content(this.formNode, this.buildFormSections());
+		dom.content(this.formNode, nodes(this.buildFormSections()));
 
-		var body = E('div', {}, [
-			E('style', { type: 'text/css' }, STYLE),
-			E('h2', {}, _('ProtonVPN')),
+		var body = E('div', {}, nodes([
+			E('style', { type: 'text/css' }, nodes(STYLE)),
+			E('h2', {}, nodes(_('ProtonVPN'))),
 			this.bandEl,
 			this.stateEl,
 			this.instancesNode,
 			this.formNode,
 			this.buildActions()
-		]);
+		]));
 
 		this.bindOutsideClose();
 		this.renderBand();

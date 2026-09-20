@@ -44,18 +44,104 @@ if (!String.prototype.format)
 // builds panels inline: appends after dom.content(), listeners recorded per
 // event (so a test can fire what a click would), and a class list backed by
 // attrs.class so visibility toggles stay inspectable.
-// dom.content(el, '') resets children to a string, and a real DOM node would
-// still accept appends afterwards — coerce instead of letting String.concat
-// turn the appended elements into one opaque string (which is what made
-// rendered chips uninspectable: findAllClass saw "0 chips").
 function childList(el) {
 	if (Array.isArray(el.children))
 		return el.children;
 	return (el.children == null || el.children === '') ? [] : [ el.children ];
 }
 
+// ── how LuCI actually puts children into a node ──────────────────────────
+//
+// luci.js DOM.append() has two branches and they are NOT interchangeable:
+//
+//   ARRAY   -> each non-element member becomes document.createTextNode(...)
+//   SCALAR  -> node.innerHTML = `${children}`
+//
+// So a bare string is parsed as HTML. A message containing the literal
+// `linux-vpn-gtk@<version>` loses `<version>` to a phantom tag, and remote
+// text — Proton's own `Error` string — is injected as markup. dom.content()
+// delegates to append(), and E()/DOM.create() calls append() with its third
+// argument, so `E('p', {}, someString)` is an innerHTML assignment too.
+//
+// This harness used to treat a scalar as literal children, which made the two
+// branches look identical and hid the defect from every test in this suite.
+// A scalar is now recorded as an HTML assignment and `text()` renders it the
+// way a browser would — through the parser — so the difference is visible.
+function htmlAssign(value) {
+	return { __html: String(value) };
+}
+
+// LuCI's own test for "is this an element", verbatim (luci.js dom.elem):
+// it is what DOM.append() uses to choose its branch, so the harness has to
+// use the same one or it models a different function. Note what it excludes:
+// a boxed `new String(...)` is an object but has no nodeType, so it lands in
+// the innerHTML branch like any other scalar.
+export function isElem(v) {
+	return v != null && typeof v === 'object' && 'nodeType' in v;
+}
+
+// What a browser shows for a string assigned to innerHTML: tags are consumed
+// (an unknown one like <version> simply disappears) and entities decode.
+function renderHtml(src) {
+	const stripped = String(src).replace(/<[^>]*>/g, '');
+	return stripped
+		.replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+		.replace(/&amp;/g, '&');
+}
+
+// The append() branches, modelled. `replace` is what dom.content() does
+// first; note that the SCALAR branch replaces the children even on a plain
+// append, because innerHTML is an assignment — that quirk is upstream's, not
+// ours.
+function appendInto(el, children, replace) {
+	if (replace)
+		el.children = [];
+	if (Array.isArray(children)) {
+		// A non-element member becomes a text node, verbatim. Upstream would
+		// stringify a null member into the literal "null"; the harness is
+		// lenient about that one case rather than reproducing a bug no test
+		// here exercises — do not pass null inside an array.
+		el.children = childList(el).concat(children.map(
+			(c) => (isElem(c) || c == null || c === false) ? c : String(c)));
+	} else if (typeof children === 'function') {
+		return appendInto(el, children(el), false);
+	} else if (isElem(children)) {
+		el.children = childList(el).concat([ children ]);
+	} else if (children != null) {
+		el.children = [ htmlAssign(children) ];
+	}
+	return el;
+}
+
+// Every string this node tree had assigned to innerHTML, depth first. A test
+// that must not touch innerHTML on a path asserts this is empty; one that
+// checks a message survived rendering asserts on text() instead.
+export function htmlAssignments(node) {
+	const out = [];
+	const walk = (n) => {
+		if (n == null || typeof n !== 'object')
+			return;
+		if (Array.isArray(n))
+			return n.forEach(walk);
+		if (typeof n.__html === 'string')
+			return out.push(n.__html);
+		walk(n.children);
+	};
+	walk(node);
+	return out;
+}
+
 export function El(tag, attrs, children) {
-	const el = { tag, attrs: attrs || {}, children: children == null ? [] : children };
+	// nodeType is what makes this record an element to dom.elem() — real
+	// elements are nodeType 1.
+	const el = { tag, nodeType: 1, attrs: attrs || {}, children: [] };
+	// A real input/select reflects its value ATTRIBUTE into the .value
+	// property once, at creation; later writes to .value leave the attribute
+	// alone. Mirroring it here is what lets a test read back what the view
+	// rendered a field with, the same way the view's own code does.
+	if (el.attrs.value !== undefined && el.value === undefined)
+		el.value = el.attrs.value;
 	const current = () => String(el.attrs.class || '').split(/\s+/).filter(Boolean);
 	const set = (cls, on) => {
 		const parts = current();
@@ -65,6 +151,8 @@ export function El(tag, attrs, children) {
 		el.attrs.class = parts.join(' ');
 	};
 	el.appendChild = (c) => { el.children = childList(el).concat([c]); return c; };
+	// DOM.create() ends in DOM.append(elem, data) — same two branches.
+	appendInto(el, children, false);
 	// The one selector shape the view uses: an option lookup inside a select.
 	el.querySelector = (sel) => {
 		const m = /^([a-z]+)\[value="(.*)"\]$/.exec(sel);
@@ -93,6 +181,10 @@ export function text(node) {
 		return String(node);
 	if (Array.isArray(node))
 		return node.map(text).join('');
+	// A string that went in through the scalar branch was parsed as HTML, so
+	// this is what the user actually reads — not what the view passed.
+	if (typeof node.__html === 'string')
+		return renderHtml(node.__html);
 	let out = '';
 	if (node.children !== undefined)
 		out += text(node.children);
@@ -148,6 +240,9 @@ export function loadView(opts) {
 	const uciData = opts.uci || {};
 	const notices = [];
 	const rpcCalls = [];
+	// What ui.showModal() was handed, so a test can reach the buttons the view
+	// builds outside the panel body — the sign-in Continue button lives there.
+	const modals = [];
 
 	const globals = {
 		// `view.extend` returning the spec is the whole trick: the tests get
@@ -193,13 +288,20 @@ export function loadView(opts) {
 				notices.push(rec);
 				return rec;
 			},
-			showModal: () => {}, hideModal: () => {},
+			showModal: (title, children) => {
+				modals.push({ title, children, open: true });
+				return children;
+			},
+			hideModal: () => {
+				if (modals.length)
+					modals[modals.length - 1].open = false;
+			},
 			addValidator: () => {}, createHandlerFn: (_s, fn) => fn
 		},
 		poll: { add: () => {}, remove: () => {}, start: () => {}, stop: () => {} },
 		dom: {
-			content: (el, children) => { el.children = children; return el; },
-			append: (el, children) => { el.children = childList(el).concat(children); },
+			content: (el, children) => appendInto(el, children, true),
+			append: (el, children) => appendInto(el, children, false),
 			create: El, parse: (s) => s, isEmpty: () => false
 		},
 		E: El,
@@ -227,7 +329,7 @@ export function loadView(opts) {
 	// The stylesheet is a plain string constant inside the view, injected by
 	// render(); tests that assert on it (theme variables, panel width) read
 	// the source rather than standing up the whole form.
-	return { spec, globals, notices, rpcCalls, uciData, src };
+	return { spec, globals, notices, rpcCalls, uciData, modals, src };
 }
 
 // A view context with the real methods on its prototype and only the state a

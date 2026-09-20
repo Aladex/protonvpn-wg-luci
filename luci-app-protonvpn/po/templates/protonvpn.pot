@@ -1,164 +1,1220 @@
 msgid ""
-msgstr "Content-Type: text/plain; charset=UTF-8\n"
+msgstr "Content-Type: text/plain; charset=UTF-8"
 
 # This template is regenerated from the sources with:
 #   ./build/i18n-scan.pl applications/luci-app-protonvpn \
 #       > applications/luci-app-protonvpn/po/templates/protonvpn.pot
-# Do not hand-edit translated .po files; upstream translations use Weblate.
+# run from a LuCI tree with this package at applications/luci-app-protonvpn.
+# Do not hand-edit it, and do not hand-edit translated .po files either;
+# upstream translations use Weblate.
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1784
-msgid "IPv6 through the tunnel"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1747
+msgid "%d cities hidden — no IPv6 gateways"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1795
-msgid "IPv6 blocked — this server does not forward it"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1742
+msgid "%d countries hidden — no IPv6 gateways"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2256
-msgid "Block — no IPv6 past the router"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2599
+msgid "%d custom route(s)/rule(s)"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2257
-msgid "Automatic — through the tunnel where the server supports it"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3204
+msgid "%d servers"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2258
-msgid "Off — leave IPv6 alone"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:650
+msgid "%d/%d IPv6"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2310
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2850
+msgid "%s does not forward IPv6 and is no longer pinned."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2204
+msgid "%s · %s WireGuard configurations · up to %s devices"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3180
+msgid "%s — current release"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1983
+msgid "(does not forward IPv6)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1822
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1984
+msgid "(not in the set)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2675
+msgid "(steered by %s)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1746
+msgid "1 city hidden — no IPv6 gateways"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1741
+msgid "1 country hidden — no IPv6 gateways"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:453
 msgid ""
-"ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through "
-"the tunnel on those and keeps blocking it on the rest, so it can never fall "
-"back to your provider."
+"A new instance runs its own tunnel on its own WireGuard interface, with its "
+"own locations and schedule. It uses the same Proton account — no separate "
+"credentials — but registers a certificate of its own."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2372
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:914
+msgid "A wrong code can simply be retyped — the password step is not repeated."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:460
+msgid "Add"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:452
+msgid "Add VPN instance"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1598
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2516
+msgid "Add a location"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1494
+msgid "Add at least one country or city."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:422
+msgid "Add instance"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3079
+msgid "Advanced settings"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3390
+msgid "Apply failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3382
+msgid "Applying and reconnecting…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3141
+msgid "Asking the official client's repository…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2898
+msgid "At specific time"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3054
+msgid "Auto-reconnect (watchdog)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3056
+msgid ""
+"Auto-reconnect when the tunnel goes stale (handshake-based; no external "
+"probe; off when a specific server is pinned)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1891
+msgid "Automatic (rotation picks)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2792
+msgid ""
+"Automatic IPv6 needs a routing table to steer into — set one under Advanced "
+"settings; until it exists, IPv6 stays blocked."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2790
 msgid ""
 "Automatic IPv6 needs steered networks; while all LAN traffic goes through "
 "the VPN, IPv6 is blocked."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2376
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2785
 msgid ""
-"This server does not forward IPv6, so it stays blocked until the next one "
-"that does."
+"Automatic IPv6 works only with at least one steered network — with none "
+"ticked, the mode is set to Block."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2381
-msgid "IPv6 is going through the tunnel on this server."
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2546
+msgid ""
+"Automatic picks a server from the set (rotation-friendly). Pin a specific "
+"one to lock it; pinning disables automatic rotation."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2295
-msgid "(steered by %s)"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2907
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2909
+msgid "Automatic rotation"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1594
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2189
+msgid "Automatic rotation is on"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2894
+msgid "Automatic rotation is unavailable while a specific server is selected."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1808
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2525
+msgid "Automatic server"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2637
+msgid "Automatic — through the tunnel where the server supports it"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1652
+msgid "Average load of these gateways"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2687
+msgid "Block LAN internet access while the VPN is down"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2636
+msgid "Block — no IPv6 past the router"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3057
+msgid "Cache directory"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:457
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:502
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:981
+msgid "Cancel"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2910
+msgid "Change server automatically on a schedule"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1824
+msgid "Clear (back to automatic)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1602
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1862
+msgid "Close"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2419
+msgid "Connect failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:334
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2120
+msgid "Connected"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2408
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3392
+msgid "Connected via %s."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:335
+msgid "Connecting"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2121
+msgid "Connecting…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2391
+msgid ""
+"Connecting… this verifies a real WireGuard handshake and can take a few "
+"seconds."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2536
+msgid "Connection"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3050
+msgid "Connection wait (seconds)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:973
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1108
+msgid "Continue"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3398
+msgid "Could not connect: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3170
+msgid "Could not retrieve the version list."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3169
+msgid "Could not retrieve the version list: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2543
+msgid ""
+"Countries this instance connects between. Picking a country adds the whole "
+"country; the arrow at its right end expands its cities to narrow the set. "
+"The initial connect and the rotation both pick within this set."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2681
+msgid ""
+"Creates a firewall zone and a default route via the tunnel; disabling "
+"removes exactly what was created."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3048
+msgid ""
+"Custom routing table (empty = the interface name when steering, otherwise "
+"the main table)."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3065
+msgid "DNS"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:336
+msgid "Degraded"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2122
+msgid "Degraded — no recent handshake"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:410
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:506
+msgid "Delete"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:517
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:539
+msgid "Delete failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:497
+msgid "Delete instance \"%s\"?"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:513
+msgid "Deleting instance \"%s\"…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2105
+msgid "Disable"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:338
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2124
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2924
+msgid "Disabled"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3240
+msgid "Discard changes"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:431
+msgid "Discard unsaved changes?"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2430
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2439
+msgid "Disconnect failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:337
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2123
+msgid "Disconnected"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2425
+msgid "Disconnecting…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1278
+msgid "Downloading the server list…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1476
+msgid "Edit or remove"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2087
+msgid "Enable"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2027
+msgid "Enter code"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1194
+msgid "Enter the 6-digit code from your authenticator"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1146
+msgid "Enter the username and password"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:339
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2125
+msgid "Error"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2886
+msgid "Every 12 hours"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2886
+msgid "Every 24 hours"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2885
+msgid "Every 3 hours"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2885
+msgid "Every 6 hours"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2897
+msgid "Every N hours"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2885
+msgid "Every hour"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3030
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3146
+msgid "Fetch available versions"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3139
+msgid "Fetching…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1606
+msgid "Filter"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1866
+msgid "Filter servers"
+msgstr ""
+
+#: applications/luci-app-protonvpn/root/usr/share/rpcd/acl.d/luci-app-protonvpn.json:3
+msgid "Grant access to ProtonVPN status, configuration and control"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:358
+msgid "Handshake %d minutes ago"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:355
+msgid "Handshake %d seconds ago"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:357
+msgid "Handshake 1 minute ago"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:354
+msgid "Handshake 1 second ago"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2538
+msgid "Hop mode"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3051
+msgid "How long to wait for a WireGuard handshake before giving up on a server"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3053
+msgid "How many candidate servers a rotation may try"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1974
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2689
 msgid "IPv6"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1594
-msgid "This server forwards IPv6 through the tunnel"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2175
+msgid "IPv6 blocked — this server does not forward it"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:559
-msgid "%d/%d IPv6"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2801
+msgid "IPv6 is going through the tunnel on this server."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:559
-msgid "no IPv6"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1636
+msgid "IPv6 only"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1611
-msgid "No gateways in these locations forward IPv6."
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:689
+msgid "IPv6 required — no IPv6 gateway is available"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1603
-msgid "(does not forward IPv6)"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:676
+msgid "IPv6 required — none of the gateways in these locations support it"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2313
-msgid "Only use gateways that forward IPv6"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:680
+msgid "IPv6 required — the IPv6 gateways here could not be reached"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2315
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:684
+msgid "IPv6 required — the pinned server does not support it"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2164
+msgid "IPv6 through the tunnel"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:483
+msgid "Instance \"%s\" created. Pick its locations, then save."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:522
+msgid "Instance \"%s\" deleted."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:521
+msgid "Instance \"%s\" was reset to defaults."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2435
 msgid ""
-"Narrows the server list, rotation and the watchdog to gateways with "
-"IPv6. About two thirds of the fleet qualifies, and some countries "
-"have none — if your locations have none, the VPN will not connect "
-"rather than quietly give you a gateway without IPv6."
+"Instance disabled: its networks are back on normal routing (IPv6 included). "
+"Reconnect restores the VPN."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2412
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2593
+msgid "Interface %s · routing table %s — edit under Advanced settings."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2591
+msgid "Interface / table"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3045
+msgid "Interface name"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2686
+msgid "Kill switch"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2180
+msgid "Kill switch is blocking LAN traffic"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1492
 msgid ""
-"No Secure Core gateway forwards IPv6, so this cannot be applied in "
-"this mode."
+"Loading server list… use \"Refresh server list\" in Advanced settings if it "
+"does not appear."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2413
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2539
+msgid "Locations"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1899
+msgid "Lowest load"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3049
+msgid "MTU"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2605
+msgid "Manual — %s detected. The app leaves routing and firewall untouched."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3052
+msgid "Max server attempts"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2603
+msgid "Mode"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3046
 msgid ""
-"No Tor gateway forwards IPv6, so this cannot be applied in this "
-"mode."
+"Name of the managed WireGuard interface. ⚠ Changing it after setup recreates "
+"the tunnel under the new name and orphans the old interface’s firewall/"
+"routing objects."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2415
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2695
+msgid ""
+"Narrows the server list, rotation and the watchdog to gateways with IPv6. "
+"About two thirds of the fleet qualifies, and some countries have none — if "
+"your locations have none, the VPN will not connect rather than quietly give "
+"you a gateway without IPv6."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2835
 msgid ""
 "Needs the Automatic IPv6 mode — in Block and Off, IPv6 is not routed "
 "whichever gateway is picked."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2430
-msgid "%s does not forward IPv6 and is no longer pinned."
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2904
+msgid "Next rotation"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2832
+msgid ""
+"No Secure Core gateway forwards IPv6, so this cannot be applied in this mode."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1629
+msgid "No Secure Core gateway forwards IPv6, so this would empty the list."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2833
+msgid "No Tor gateway forwards IPv6, so this cannot be applied in this mode."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1631
+msgid "No Tor gateway forwards IPv6, so this would empty the list."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1991
+msgid "No gateways in these locations forward IPv6."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1732
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1992
+msgid "No matches"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2223
+msgid "No tunnel yet."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:677
+msgid ""
+"None of the gateways in the selected locations forward IPv6, and this "
+"instance requires it. Add a location that has IPv6 gateways, or turn the "
+"requirement off."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:340
+msgid "Not configured"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2126
+msgid "Not set up yet"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2043
+msgid "Not signed in"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2638
+msgid "Off — leave IPv6 alone"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3017
+msgid "Off — use system DNS"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2926
+msgid "On schedule"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2693
+msgid "Only use gateways that forward IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2683
+msgid ""
+"Or route only these networks through this instance — policy rules send their "
+"traffic into its routing table."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3194
+msgid "Part of the list could not be retrieved: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:926
+msgid "Password"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:910
+msgid "Password accepted for %s. This account has two-factor authentication."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1861
+msgid "Pick a server"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3192
+msgid "Pick a version and press Save — nothing is changed until you do."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3356
+msgid "Pick at least one location that has servers in this mode."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1106
+msgid "Please wait…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3067
+msgid "Proton client version"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2032
+msgid "Proton session expired"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:925
+msgid "Proton username"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3438
+#: applications/luci-app-protonvpn/root/usr/share/luci/menu.d/luci-app-protonvpn.json:15
+msgid "ProtonVPN"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2690
+msgid ""
+"ProtonVPN forwards IPv6 only on some gateways. Automatic routes it through "
+"the tunnel on those and keeps blocking it on the rest, so it can never fall "
+"back to your provider. Block is the default: a fresh install lets no IPv6 "
+"past the router at all, because an IPv6 path around the tunnel would expose "
+"your address just as plainly as no VPN."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2044
+msgid ""
+"ProtonVPN needs your account to fetch the server list and register this "
+"router as a device."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3018
+msgid "ProtonVPN — in-tunnel resolver (10.2.0.1)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3005
+msgid ""
+"Recommended %d for your WAN (MTU %d). Empty = the default (1420). Lower it "
+"if sites hang or throughput is poor — LTE/5G often need less."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2092
+msgid "Reconnect"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3055
+msgid "Reconnect automatically when the tunnel goes stale"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2080
+msgid "Refresh"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3226
+msgid "Refresh failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3062
+msgid "Refresh server list"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3217
+msgid "Refreshing…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1759
+msgid "Remove this country"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2608
+msgid ""
+"Remove your own routes/rules that reference this interface to manage routing "
+"from here."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:410
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:506
+msgid "Reset"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:496
+msgid "Reset \"main\" to defaults?"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2101
+msgid "Rotate now"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2453
+msgid "Rotated to %s."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2445
+msgid "Rotating…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2458
+msgid "Rotation failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2901
+msgid "Rotation interval"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2902
+msgid "Rotation time"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2680
+msgid "Route all LAN traffic through the VPN"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2902
+msgid "Router local time"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3047
+msgid "Routing table"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3235
+msgid "Save and reconnect"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3407
+msgid "Save failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3374
+msgid "Saving configuration…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2895
+msgid "Schedule"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2495
+msgid "Secure Core"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2544
+msgid "Server"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2141
+msgid "Server %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3059
+msgid "Server cache"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3201
+msgid "Server list not loaded"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1288
+msgid "Server list updated: %d servers."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2011
+msgid ""
+"Session valid until %s. The router keeps it alive on its own — you will not "
+"be asked again unless it stays offline for weeks."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3396
+msgid ""
+"Settings saved, but the server never answered the handshake. The interface "
+"is up — try reconnecting or pick another location."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2976
+msgid "Shared by all instances (stored on \"main\")."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3068
+msgid ""
+"Shared by all instances. Client version sent to Proton as x-pm-appversion. "
+"Empty = the version built into the package. Only set this when Proton "
+"answers a sign-in with Code 5003 \"this version of the app is no longer "
+"supported\" and no package update is available yet — Code 2028 is a "
+"temporary limit on your account and Code 8002 is a wrong username or "
+"password, and neither is fixed by changing this. \"Fetch available "
+"versions\" asks the official Linux client's repository what exists; it only "
+"fills the list, you pick a value and press Save."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1632
+msgid "Show only locations whose gateways forward IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2047
+msgid "Sign in"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2038
+msgid "Sign in again"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:977
+msgid "Sign in to Proton"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2018
+msgid "Sign out"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1250
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1267
+msgid "Sign-out failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2008
+msgid "Signed in to Proton"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1219
+msgid "Signed in, but loading the server list failed: %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1182
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1203
+msgid "Signed in."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1255
+msgid ""
+"Signed out. Every tunnel was taken down and its networks are back on normal "
+"routing — sign in again to restore them."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1104
+msgid "Signing in…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1246
+msgid "Signing out…"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2494
+msgid "Standard"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2682
+msgid "Steered networks"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:681
+msgid ""
+"The IPv6 gateways in the selected locations could not be reached. They do "
+"forward IPv6, so this may simply work on the next attempt — reconnect rather "
+"than changing the locations."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3105
+msgid ""
+"The Proton client version must look like linux-vpn-gtk@4.18.2, or be empty "
+"to use the version built into the package. The router would ignore \"%s\" "
+"and keep stamping the built-in version, so it was not saved."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2412
+msgid ""
+"The interface came up on %s, but the server never answered the handshake. "
+"Traffic may not pass — try reconnecting or pick another location."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3191
+msgid ""
+"The official client currently ships %s. Pick a version and press Save — "
+"nothing is changed until you do."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:928
+msgid ""
+"The password is turned into a proof in this page and never reaches the "
+"router."
 msgstr ""
 
 #: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2024
+msgid ""
+"The password was accepted; enter the code from your authenticator to finish."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:685
+msgid ""
+"The pinned server does not forward IPv6 and this instance requires it. Pick "
+"a different server, or turn the requirement off."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1294
+msgid "The server list did not arrive in time."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1173
+msgid "The server proof did not verify — aborting."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1033
+msgid "The sign-in did not finish and it is not clear why. Please try again."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:500
+msgid ""
+"The tunnel is taken down, its certificate is revoked, and its interface, "
+"firewall objects and settings are removed. Networks routed through it fall "
+"back to your other routes."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:499
+msgid ""
+"The tunnel is taken down, its certificate is revoked, the key, interface and "
+"firewall objects are removed, and every setting returns to its default. "
+"Other instances are not affected."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2034
+msgid ""
+"The tunnel keeps running, but the server list cannot be updated and the "
+"certificate cannot be renewed. Sign in again to restore that."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:690
+msgid ""
+"This instance requires IPv6 and no gateway providing it is available, so the "
+"tunnel stays down."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2796
+msgid ""
+"This server does not forward IPv6, so it stays blocked until the next one "
+"that does."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1974
+msgid "This server forwards IPv6 through the tunnel"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2496
+msgid "Tor"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:762
+msgid ""
+"Traffic enters through a Proton-owned server in a privacy-friendly country "
+"before exiting in the country you pick. Slower, fewer servers."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:763
+msgid ""
+"Traffic leaves the VPN server through the Tor network. Noticeably slower, "
+"and some sites block Tor exits."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2679
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2703
+msgid "Traffic routing"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1134
+msgid "Try again in %ds"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:912
+msgid "Two-factor code"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2023
+msgid "Two-factor code required"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:342
+msgid "Unknown"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2016
+msgid "Update server list"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:469
+msgid "Use 1-12 letters, digits or underscores."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3000
+msgid "Use recommended"
+msgstr ""
+
+#: applications/luci-app-protonvpn/root/usr/share/luci/menu.d/luci-app-protonvpn.json:3
+msgid "VPN"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:415
+msgid "VPN instances"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3058
+msgid "Where to store the downloaded server list (leave empty for /tmp)"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3066
+msgid ""
+"Which resolver to use while connected. Proton runs a single in-tunnel "
+"resolver (10.2.0.1); it only works through the tunnel."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3006
+msgid "WireGuard interface MTU. Empty = the netifd default (1420)."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3003
+msgid ""
+"You are on the recommended MTU for your WAN (MTU %d). Empty = the netifd "
+"default (1420)."
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2406
+msgid "apply failed"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2191
+msgid "certificate %d days left"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1975
+msgid "current"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2606
+msgid "custom configuration"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2930
+msgid "due now"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:449
+msgid "e.g. media"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2184
+msgid "external IP %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1969
+msgid "free"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2932
+msgid "in %dh %dm"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2932
+msgid "in %dm"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:650
+msgid "no IPv6"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1155
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1168
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1198
+msgid "no response"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2451
+msgid "nothing to rotate to"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:395
+msgid "on schedule"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2602
+msgid "routing table \"%s\""
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1484
+msgid "set: %d countries"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1483
+msgid "set: %d countries, ~%d servers"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3208
+msgid "stale"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:705
+msgid ""
+"steered traffic is leaving through your provider — turn the kill switch on "
+"to block it instead"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2404
 msgid "the IPv6 requirement could not be met"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:585
-msgid "IPv6 required — none of the gateways in these locations support it"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2367
+msgid "the apply finished without reporting a result"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:586
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2373
+msgid "the apply is still running after %d seconds — check the system log"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2371
+msgid "the apply stopped reporting progress"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2415
+msgid "the tunnel did not come up"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3399
+msgid "unknown error"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3206
+msgid "updated %s"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3177
+msgid "— choose a version —"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2613
 msgid ""
-"None of the gateways in the selected locations forward IPv6, and "
-"this instance requires it. Add a location that has IPv6 gateways, or "
-"turn the requirement off."
+"⚠ IPv6 is active on the WAN and bypasses the VPN unless your rules cover it."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:589
-msgid "IPv6 required — the IPv6 gateways here could not be reached"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2642
+msgid "⚠ IPv6 stays outside the tunnel and can leak your address."
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:590
-msgid ""
-"The IPv6 gateways in the selected locations could not be reached. "
-"They do forward IPv6, so this may simply work on the next attempt — "
-"reconnect rather than changing the locations."
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2993
+msgid "✓ recommended value"
 msgstr ""
 
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:593
-msgid "IPv6 required — the pinned server does not support it"
-msgstr ""
-
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:594
-msgid ""
-"The pinned server does not forward IPv6 and this instance requires "
-"it. Pick a different server, or turn the requirement off."
-msgstr ""
-
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:598
-msgid "IPv6 required — no IPv6 gateway is available"
-msgstr ""
-
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:599
-msgid ""
-"This instance requires IPv6 and no gateway providing it is "
-"available, so the tunnel stays down."
-msgstr ""
-
-#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:614
-msgid ""
-"steered traffic is leaving through your provider — turn the kill "
-"switch on to block it instead"
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2157
+msgid "🧅 Tor over VPN"
 msgstr ""
