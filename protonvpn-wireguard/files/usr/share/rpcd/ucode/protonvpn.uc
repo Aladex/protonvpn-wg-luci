@@ -439,6 +439,17 @@ methods.refresh_locations = {
 	}
 };
 
+// The client versions the official Linux app has released, for the
+// app_version override in Advanced settings. Reaches out to the upstream
+// repository, so it runs ONLY when the user presses the button — never on
+// page load and never as part of a sign-in. It reports; the user picks a
+// value and saves it like any other setting.
+methods.client_versions = {
+	call: function(request) {
+		return _api.client_versions();
+	}
+};
+
 // Cache-refresh progress for the UI.
 methods.refresh_status = {
 	call: function(request) {

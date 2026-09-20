@@ -12,8 +12,33 @@
 #   the body goes to that file and only the status to stdout, matching
 #   api_call()'s -w contract. Remove the file afterwards, same opt-in
 #   convention as the ifup stub.
+#
+# A test that needs two DIFFERENT answers in one code path (the client-version
+# picker fetches versions.yml and then the repository tags) drops files into
+#   $PROTONVPN_RUN_DIR/curl-responses/
+# named after a distinctive piece of the URL — 'versions.yml', 'tags'. The
+# first file whose name occurs in the requested URL wins; a request matching
+# none of them fails the way an unreachable host does, which is what lets a
+# test fail exactly one of the two sources.
 resp="${PROTONVPN_RUN_DIR:-/tmp}/curl-response"
-[ -f "$resp" ] || exit 7
+
+# The URL is the last argument api_call() pushes onto the curl command line.
+url=''
+for a in "$@"; do url="$a"; done
+
+dir="${PROTONVPN_RUN_DIR:-/tmp}/curl-responses"
+if [ -d "$dir" ]; then
+	resp=''
+	for f in "$dir"/*; do
+		[ -f "$f" ] || continue
+		key=${f##*/}
+		case "$url" in
+			*"$key"*) resp="$f"; break ;;
+		esac
+	done
+fi
+
+[ -n "$resp" ] && [ -f "$resp" ] || exit 7
 
 code=$(sed -n '1p' "$resp")
 out=''

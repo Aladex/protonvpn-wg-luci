@@ -65,8 +65,8 @@ jobs:
           (`versions.yml` at the root of ProtonVPN/proton-vpn-gtk-app).
 
           Proton gates sign-ins on the `x-pm-appversion` header; once it stops
-          accepting the committed value, new logins fail with Code 2028 (or a
-          misleading Code 8002 before any two-factor code is submitted).
+          accepting the committed value, new logins fail with Code 5003
+          ("this version of the app is no longer supported").
 
           Action: bump the constant (and its pinned value in
           `protonvpn-wireguard/tests/test_api.uc`) to the upstream value shown

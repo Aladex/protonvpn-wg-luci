@@ -37,8 +37,9 @@ const API_BASE = _common.API_BASE,
 // ── Constants ────────────────────────────────────────────────────────────
 
 // REQUIRED on every request: Proton rejects outdated app versions at sign-in
-// (HTTP 422 / Code 2028 "app no longer supported", or a misleading Code 8002
-// before any two-factor code was submitted; the legacy gate is Code 5003).
+// with HTTP 422 / Code 5003 "this version of the app is no longer supported".
+// A missing header is Code 5002 and a malformed value is Code 2064; neither
+// 2028 (an account lockout) nor 8002 (bad credentials) is a version problem.
 // The format follows the official Linux client: 'linux-vpn-<type>@<version>'
 // (python-proton-vpn-api-core, proton/vpn/core/session_holder.py); the value
 // is the current release from versions.yml at the root of
@@ -73,6 +74,20 @@ function app_version() {
 		return PM_APPVERSION;
 	return v;
 }
+
+// Where the client-version picker looks. Both are public files in the
+// official Linux client's repository — the same versions.yml the build-time
+// stamper reads, plus the repository's tags for the releases behind it. They
+// are NOT Proton API endpoints: they are fetched without Proton's headers
+// (api_call's `plain`), only when the user presses the button in LuCI, and
+// never as part of a sign-in.
+const CLIENT_VERSIONS_YML_URL =
+	'https://raw.githubusercontent.com/ProtonVPN/proton-vpn-gtk-app/master/versions.yml';
+const CLIENT_TAGS_URL =
+	'https://api.github.com/repos/ProtonVPN/proton-vpn-gtk-app/tags?per_page=50';
+// x-pm-appversion is 'linux-vpn-<type>@<version>' and the gtk app is the
+// client this package impersonates, so the offered values carry its prefix.
+const CLIENT_PREFIX = 'linux-vpn-gtk@';
 
 const AUTH_INFO_URL = API_BASE + '/auth/info';
 const AUTH_URL = API_BASE + '/auth';
@@ -158,8 +173,18 @@ function api_call(opts) {
 	}
 
 	let conf = '';
-	conf += 'header = "x-pm-appversion: ' + app_version() + '"\n';
-	conf += 'header = "Accept: application/vnd.protonmail.v1+json"\n';
+	// `plain` is for the one call that does not go to Proton: fetching the
+	// public client-version list. Stamping Proton's headers on a request to a
+	// third party would tell it which client version this router claims, and
+	// the protonmail Accept type would make it answer something we did not
+	// ask for.
+	if (opts.plain) {
+		conf += 'header = "Accept: application/vnd.github+json"\n';
+		conf += 'header = "User-Agent: protonvpn-wireguard"\n';
+	} else {
+		conf += 'header = "x-pm-appversion: ' + app_version() + '"\n';
+		conf += 'header = "Accept: application/vnd.protonmail.v1+json"\n';
+	}
 	if (opts.token && opts.uid) {
 		conf += 'header = "x-pm-uid: ' + opts.uid + '"\n';
 		conf += 'header = "Authorization: Bearer ' + opts.token + '"\n';
@@ -254,47 +279,187 @@ function api_call(opts) {
 	return { code: status, data: data, raw: body };
 }
 
-// Turn a Proton error response into one readable message. Codes 5003 and
-// 2028 both mean the stamped client version is no longer accepted.
-// `ctx` tells 8002 apart: only the 'totp' caller has actually submitted a
-// two-factor code, so only there may the message blame one.
-function api_error(res, ctx) {
+// Turn a Proton error response into one readable message.
+//
+// Proton answers every failure with a ready, human-readable `Error` string,
+// and it is the only part of the response that knows what actually went
+// wrong: the same code carries different texts (8002 is "incorrect login
+// credentials" for one account and "this username does not exist" for
+// another). So the `Error` is shown verbatim, with the numeric code and the
+// HTTP status appended so a bug report carries both. Our own wording may
+// only be added AFTER it, and only for codes whose meaning is settled —
+// never in place of it. Guessing at codes here once told a locked-out user
+// to update the client version, and cost them three days of doing so.
+function api_error(res) {
 	if (res.error)
 		return res.error;
 	let d = res.data;
-	if (d && d.Code == 5003)
-		return 'Proton rejected the client version (Code 5003) — PM_APPVERSION needs updating';
-	if (d && d.Code == 2028)
-		return 'Proton no longer accepts the client version this package stamps ' +
-			'(Code 2028, HTTP 422). Update the protonvpn-wireguard package; if no ' +
-			'update is available yet, set the current official client string in uci: ' +
-			"option app_version 'linux-vpn-gtk@<version>' in the protonvpn globals " +
-			'section (in main when there is no globals section) — takes effect ' +
-			'immediately, see README.';
-	// Anti-abuse gate: Proton demands a CAPTCHA, which cannot be solved from
-	// LuCI. Seen after several login attempts in quick succession from one IP.
-	// Retrying immediately makes it worse; the message tells the user what to do.
-	if (d && d.Code == 9001)
-		return 'Proton requires a CAPTCHA for this login (Code 9001). ' +
-			'Wait a while before retrying — repeated attempts prolong it. ' +
-			'An existing session keeps working; if you have none, sign in with an ' +
+	if (!d || !d.Error)
+		return (d && d.Code != null ? 'Code ' + d.Code + ', ' : '') +
+			'HTTP ' + res.code;
+
+	let msg = d.Error + ' (Code ' + (d.Code != null ? d.Code : '?') +
+		', HTTP ' + res.code + ')';
+
+	// 5003 is the version gate: Proton says the app is too old, and the
+	// package stamps that version, so the override is the actionable step.
+	if (d.Code == 5003)
+		msg += ' — the client version this package stamps is what Proton ' +
+			'rejects here. Update the protonvpn-wireguard package; if no ' +
+			'update is available yet, set the current official client ' +
+			"string in uci: option app_version 'linux-vpn-gtk@<version>' in " +
+			'the protonvpn globals section (in main when there is no globals ' +
+			'section) — takes effect immediately, see README.';
+	// 9001 is the anti-abuse CAPTCHA, which cannot be solved from LuCI.
+	// Retrying immediately prolongs it, which is worth saying out loud.
+	if (d.Code == 9001)
+		msg += ' — the CAPTCHA cannot be solved from LuCI. Wait a while ' +
+			'before retrying; repeated attempts prolong it. An existing ' +
+			'session keeps working; if you have none, sign in with an ' +
 			'official Proton client once and import that session (see README).';
-	if (d && d.Code == 8002) {
-		if (ctx == 'totp')
-			return 'Wrong or already-used two-factor code (Code 8002)';
-		// 8002 on the sign-in path — before any two-factor code was submitted —
-		// is the version gate wearing a misleading message, observed live: the
-		// login "reached the second factor" only in the error text. Do not send
-		// the user hunting for a TOTP they never typed.
-		return 'Proton rejected the sign-in with Code 8002 before a two-factor ' +
-			'code was submitted — not a 2FA problem: the client version this ' +
-			'package stamps is likely no longer accepted. Update the ' +
-			'protonvpn-wireguard package or override the version ' +
-			'(uci option app_version, see README).';
-	}
+	return msg;
+}
+
+// Longest remote message we put in one syslog line.
+const LOG_MSG_MAX = 240;
+
+// Prepare remote text for syslog. Proton's `Error` is the one thing in a log
+// line that we did not write: a newline in it would forge a second
+// 'protonvpn:' line that a reader — or a log parser — would take for ours,
+// and an unbounded one would push everything around it out of a logread
+// window. Control characters become spaces and the rest is cut.
+function log_safe(str) {
+	let s = replace('' + str, /[[:cntrl:]]/g, ' ');
+	return (length(s) > LOG_MSG_MAX) ? substr(s, 0, LOG_MSG_MAX) + '…' : s;
+}
+
+// Record a failed API call in syslog. Sign-in failures used to leave
+// `logread -e protonvpn` completely empty, so a report depended on the user
+// photographing a red line in the browser. One line per failure: the
+// endpoint path, the HTTP status, Proton's numeric code and Proton's own
+// message — and deliberately nothing else. The username, the password, the
+// SRP material and the session tokens are never arguments to this function,
+// so they cannot reach syslog through it.
+//
+// Only the interactive sign-in calls use this. The background refresh runs
+// on a timer and a dead WAN would turn a log line per failure into a flood.
+function log_api_failure(url, res) {
+	let endpoint = replace('' + url, API_BASE, '');
+	let d = res.data;
+	let detail = 'HTTP ' + (res.code || 0);
+	if (d && d.Code != null)
+		detail += ', Code ' + d.Code;
 	if (d && d.Error)
-		return d.Error + ' (Code ' + (d.Code || '?') + ', HTTP ' + res.code + ')';
-	return 'HTTP ' + res.code;
+		detail += ': ' + log_safe(d.Error);
+	else if (res.error)
+		detail += ': ' + log_safe(res.error);
+	log('sign-in failed: ' + endpoint + ' — ' + detail);
+}
+
+// ── Client-version picker ────────────────────────────────────────────────
+
+// The current release out of versions.yml. Upstream ships a stream of YAML
+// documents, newest first, and the first one describes the current release.
+// This is deliberately not a YAML parser: it accepts exactly one shape —
+// a single line 'version: X.Y.Z' in the first document — and answers null
+// for everything else. The value ends up in a request header that Proton
+// gates sign-ins on, and the button exists to offer a choice, not to guess
+// one; two version keys, a continuation line or a decorated value are
+// ambiguous, and an ambiguous answer here is worse than none.
+function parse_versions_yml(body) {
+	let found = null;
+	for (let line in split('' + body, '\n')) {
+		let s = replace(line, /\r$/, '');
+		if (s == '---')
+			break;
+		if (match(s, /^[ \t]*version[ \t]*:/)) {
+			let m = match(s, /^version: ([0-9]+\.[0-9]+\.[0-9]+)$/);
+			if (!m || found)
+				return null;
+			found = m[1];
+		}
+	}
+	return found;
+}
+
+// The X.Y.Z releases out of the repository's tag listing, de-duplicated.
+// Upstream tags them 'v4.18.2'; anything that is not a plain three-part
+// version (release candidates, moved branches) is dropped rather than
+// offered, because app_version() would refuse it anyway.
+function parse_client_tags(data) {
+	if (type(data) != 'array')
+		return [];
+	let out = [], seen = {};
+	for (let t in data) {
+		if (type(t) != 'object' || type(t.name) != 'string')
+			continue;
+		let m = match(t.name, /^v?([0-9]+\.[0-9]+\.[0-9]+)$/);
+		if (!m || seen[m[1]])
+			continue;
+		seen[m[1]] = true;
+		push(out, m[1]);
+	}
+	return out;
+}
+
+// Sort key for X.Y.Z, so 4.9.0 sorts below 4.17.0 instead of above it the way
+// a string comparison would.
+function version_rank(v) {
+	let p = split(v, '.');
+	return (+p[0] || 0) * 1000000 + (+p[1] || 0) * 1000 + (+p[2] || 0);
+}
+
+// The client versions the official Linux app has released, newest first, plus
+// the one upstream currently calls current and the one this router stamps
+// today.
+//
+// It only ever REPORTS. Nothing here writes uci, and nothing here changes the
+// stamped version: the user picks a value in LuCI and saves it like any other
+// setting. That is the whole point — the setting is a header Proton gates
+// sign-ins on, and a router that changes it by itself is a router whose
+// sign-ins break for a reason its owner cannot see.
+//
+// Either source may be unreachable, and that is reported as a failure rather
+// than papered over: `error` is a sentence for the UI, and whatever was
+// retrieved is still returned alongside it.
+function client_versions() {
+	let problems = [];
+	let current = null;
+
+	let yml = api_call({ url: CLIENT_VERSIONS_YML_URL, plain: true, timeout: 20 });
+	if (yml.code == 200)
+		current = parse_versions_yml(yml.raw);
+	if (!current)
+		push(problems, yml.code == 200
+			? 'versions.yml did not name a current release in the shape this ' +
+				'reader accepts'
+			: 'the current release could not be fetched (versions.yml: ' +
+				(yml.error || ('HTTP ' + yml.code)) + ')');
+
+	let tags = api_call({ url: CLIENT_TAGS_URL, plain: true, timeout: 20 });
+	let versions = (tags.code == 200) ? parse_client_tags(tags.data) : [];
+	if (!length(versions))
+		push(problems, tags.code == 200
+			? 'the repository tags carried no usable version'
+			: 'the released versions could not be fetched (tags: ' +
+				(tags.error || ('HTTP ' + tags.code)) + ')');
+
+	// A release is published before it is tagged, and that value is the one
+	// most users are after, so it belongs in the list either way.
+	if (current && index(versions, current) < 0)
+		push(versions, current);
+	sort(versions, function (a, b) { return version_rank(b) - version_rank(a); });
+
+	let offered = [];
+	for (let v in versions)
+		push(offered, CLIENT_PREFIX + v);
+
+	return {
+		versions: offered,
+		current: current ? CLIENT_PREFIX + current : '',
+		configured: app_version(),
+		error: length(problems) ? join('; ', problems) : null
+	};
 }
 
 // ── Session state ────────────────────────────────────────────────────────
@@ -363,8 +528,10 @@ function auth_info(username) {
 		return { error: 'invalid username' };
 
 	let res = api_call({ url: AUTH_INFO_URL, body: { Username: username } });
-	if (res.code != 200)
+	if (res.code != 200) {
+		log_api_failure(AUTH_INFO_URL, res);
 		return { error: api_error(res) };
+	}
 	let d = res.data;
 	if (!d || !d.Modulus || !d.ServerEphemeral || !d.SRPSession)
 		return { error: 'incomplete SRP parameters in the /auth/info response' };
@@ -395,8 +562,10 @@ function auth_finish(proof) {
 		ClientEphemeral: proof.client_ephemeral,
 		ClientProof: proof.client_proof
 	} });
-	if (res.code != 200)
+	if (res.code != 200) {
+		log_api_failure(AUTH_URL, res);
 		return { error: api_error(res) };
+	}
 	let d = res.data;
 	if (!d || !d.UID || !d.AccessToken || !d.RefreshToken)
 		return { error: 'incomplete session in the /auth response' };
@@ -445,10 +614,10 @@ function totp_submit(code) {
 
 	let res = api_call({ url: TOTP_URL, uid: s.uid, token: s.access_token,
 		body: { TwoFactorCode: '' + code } });
-	if (res.code != 200)
-		// 'totp': the only call site where an 8002 can honestly mean a wrong
-		// two-factor code, because a code was actually submitted here.
-		return { error: api_error(res, 'totp') };
+	if (res.code != 200) {
+		log_api_failure(TOTP_URL, res);
+		return { error: api_error(res) };
+	}
 
 	// Scope is upgraded server-side; reflect that locally so the UI stops
 	// asking. The wrong-code path leaves the session alone on purpose, so the
@@ -846,7 +1015,8 @@ function access_token_stale(session, now) {
 
 return {
 	PM_APPVERSION, SESSION_FILE, ACCESS_TOKEN_TTL, ACCESS_REFRESH_MARGIN,
-	api_call, api_error, app_version, auth_headers, access_token_stale,
+	api_call, api_error, app_version, client_versions,
+	auth_headers, access_token_stale,
 	generate_keypair, pem_from_seed, wg_key_from_seed,
 	session_load, session_store,
 	auth_info, auth_finish, totp_submit, auth_refresh, logout,

@@ -1,9 +1,8 @@
 #!/usr/bin/ucode -S
 // SPDX-License-Identifier: MIT
-// Tests for the client-version gate: the stamped x-pm-appversion value, its
-// uci override, and the messages for the codes the gate produces — 2028
-// ("app no longer supported") and 8002 surfacing during sign-in, before any
-// two-factor code was submitted. Run via tests/run.sh.
+// Tests for the client-version gate (the stamped x-pm-appversion value and
+// its uci override), for what a failed API call tells the user, and for what
+// it leaves in syslog. Run via tests/run.sh.
 
 'use strict';
 
@@ -32,7 +31,13 @@ check('PM_APPVERSION uses the linux-vpn-<type>@<version> format',
 check('PM_APPVERSION is the current official client',
 	api.PM_APPVERSION == 'linux-vpn-gtk@4.18.2');
 
-// ── api_error(): the version-gate codes ──────────────────────────────────
+// ── api_error(): Proton's own message, verbatim ──────────────────────────
+// Every error response from Proton carries a ready, human-readable `Error`
+// string. Replacing it with a guess cost a forum user three days of changing
+// client versions while Proton was telling them their account had been
+// temporarily locked. So: show the `Error` as Proton wrote it, with the code
+// and the HTTP status, and append our own wording only where it is certainly
+// correct — never instead of Proton's.
 function res(http, proton_code, err) {
 	let d = {};
 	if (proton_code != null)
@@ -42,27 +47,70 @@ function res(http, proton_code, err) {
 	return { code: http, data: d, raw: '' };
 }
 
-let e2028 = api.api_error(res(422, 2028, 'This version of the app is no longer supported'));
-check('Code 2028 names the rejected client version',
-	index(e2028, '2028') >= 0 && match(e2028, /client version/i) != null);
-check('Code 2028 points at the uci override', index(e2028, 'app_version') >= 0);
-// Config-file option syntax has no '=': 'option name value', matching the
-// watcher issue text.
-check('Code 2028 shows valid option syntax',
-	index(e2028, "option app_version 'linux-vpn-gtk@") >= 0);
+// The texts below are what the live API answered when the codes were
+// measured; they are fixtures, not assertions about Proton's wording.
+const LOCKOUT = 'Our systems detected unusual activity targeting your ' +
+	'account. To protect you from potential compromise, we have temporarily ' +
+	'limited access to it.';
+const BADCREDS = 'Incorrect login credentials. Please try again.';
+const NOSUCHUSER = 'This username does not exist. Please try again.';
+const OLDAPP = 'This version of the app is no longer supported.';
+const CAPTCHA = 'Human verification required.';
 
-// 8002 is overloaded: after a submitted TOTP it means a wrong code, but the
-// version gate also answers 8002 during sign-in, before any code exists.
-let e_totp = api.api_error(res(422, 8002), 'totp');
-check('8002 after a submitted code is a wrong-code message',
-	index(e_totp, 'Wrong or already-used two-factor code') >= 0);
-let e_gate = api.api_error(res(422, 8002));
-check('8002 before any code is not called a wrong code',
-	index(e_gate, 'Wrong or already-used') < 0);
-check('8002 before any code points at the client version',
-	match(e_gate, /version/i) != null);
-check('Code 5003 still means the version gate',
-	index(api.api_error(res(422, 5003)), '5003') >= 0);
+let e2028 = api.api_error(res(422, 2028, LOCKOUT));
+check('Code 2028 shows the lockout text Proton sent, verbatim',
+	index(e2028, LOCKOUT) >= 0);
+check('Code 2028 carries the code and the HTTP status',
+	index(e2028, '2028') >= 0 && index(e2028, '422') >= 0);
+// The old message told a locked-out user to update the package. It was wrong
+// and it is what sent them version-hunting for three days.
+check('Code 2028 invents no client-version problem',
+	match(e2028, /version/i) == null && index(e2028, 'app_version') < 0);
+
+let e8002 = api.api_error(res(422, 8002, BADCREDS));
+check('Code 8002 shows the credentials text Proton sent, verbatim',
+	index(e8002, BADCREDS) >= 0);
+check('Code 8002 carries the code and the HTTP status',
+	index(e8002, '8002') >= 0 && index(e8002, '422') >= 0);
+check('Code 8002 invents no client-version problem',
+	match(e8002, /version/i) == null);
+check('Code 8002 invents no two-factor problem',
+	match(e8002, /two-factor|2fa/i) == null);
+
+// 8002 is also what an unknown username gets. Proton distinguishes the two in
+// the text, so the text has to survive to the user.
+let e8002u = api.api_error(res(422, 8002, NOSUCHUSER));
+check('the same code with another Error says what Proton actually said',
+	index(e8002u, NOSUCHUSER) >= 0 && index(e8002u, BADCREDS) < 0);
+
+// 5003 is the real version gate, so here the hint is certainly correct — but
+// it is appended, not substituted.
+let e5003 = api.api_error(res(422, 5003, OLDAPP));
+check('Code 5003 shows Proton\'s text verbatim', index(e5003, OLDAPP) >= 0);
+check('Code 5003 carries the code and the HTTP status',
+	index(e5003, '5003') >= 0 && index(e5003, '422') >= 0);
+// Config-file option syntax has no '=': 'option name value'.
+check('Code 5003 appends the uci override hint',
+	index(e5003, "option app_version 'linux-vpn-gtk@") >= 0);
+
+let e9001 = api.api_error(res(422, 9001, CAPTCHA));
+check('Code 9001 shows Proton\'s text verbatim', index(e9001, CAPTCHA) >= 0);
+check('Code 9001 appends the wait-rather-than-retry hint',
+	match(e9001, /wait/i) != null);
+
+let eunknown = api.api_error(res(429, 2001, 'Too many recent requests.'));
+check('an unrecognised code is shown exactly as Proton wrote it',
+	index(eunknown, 'Too many recent requests.') >= 0 &&
+	index(eunknown, '2001') >= 0 && index(eunknown, '429') >= 0);
+
+let ebare = api.api_error({ code: 503, data: { Code: 2000 }, raw: '' });
+check('a response with no Error text still carries the code and the status',
+	index(ebare, '2000') >= 0 && index(ebare, '503') >= 0);
+check('a response with no body at all still carries the status',
+	index(api.api_error({ code: 502, data: null, raw: '' }), '502') >= 0);
+check('a transport failure is passed through unchanged',
+	api.api_error({ code: 0, data: null, raw: '', error: 'failed to start curl' }) ==
+		'failed to start curl');
 
 // ── the uci override ─────────────────────────────────────────────────────
 function seed_uci(appver) {
@@ -124,7 +172,7 @@ if (type(api.app_version) != 'function') {
 		hdrs != null && index(join('|', hdrs), 'x-pm-appversion: linux-vpn-gtk@8.8.8') >= 0);
 }
 
-// ── the wiring: which caller has a submitted code ────────────────────────
+// ── the wiring: the callers relay Proton, they do not rewrite it ─────────
 // api_call() ends in curl; tests/stubs/curl answers from
 // $PROTONVPN_RUN_DIR/curl-response (first line the HTTP code, rest the body).
 let resp = getenv('PROTONVPN_RUN_DIR') + '/curl-response';
@@ -134,28 +182,121 @@ function stub_response(code, obj) {
 	f.close();
 }
 
-api.session_store({ uid: 'u', access_token: 'a', refresh_token: 'r',
-	access_expires_at: time() + 1800, session_expires_at: time() + 86400,
-	scope: 'vpn', twofa: true });
+const ACCESS = 'ACCESS-TOKEN-SECRET';
+const REFRESH = 'REFRESH-TOKEN-SECRET';
+function seed_session() {
+	api.session_store({ uid: 'UID-SECRET', access_token: ACCESS,
+		refresh_token: REFRESH, access_expires_at: time() + 1800,
+		session_expires_at: time() + 86400, scope: 'vpn', twofa: true });
+}
+seed_session();
 
-stub_response(422, { Code: 8002, Error: 'Invalid or already used two factor code' });
+const WRONGCODE = 'Invalid or already used two factor code';
+stub_response(422, { Code: 8002, Error: WRONGCODE });
 let t = api.totp_submit('123456');
-check('totp_submit reports 8002 as a wrong code',
-	index(t.error || '', 'Wrong or already-used two-factor code') >= 0);
+check('totp_submit relays the two-factor message Proton sent',
+	index(t.error || '', WRONGCODE) >= 0);
+check('totp_submit substitutes no wording of its own',
+	index(t.error || '', 'Wrong or already-used') < 0);
 
-stub_response(422, { Code: 8002, Error: 'Invalid or already used two factor code' });
+stub_response(422, { Code: 8002, Error: BADCREDS });
 let af = api.auth_finish({ username: 'u', srp_session: 's',
 	client_ephemeral: 'e', client_proof: 'p' });
-check('auth_finish does not blame 2FA before a code was submitted',
-	index(af.error || '', 'Wrong or already-used') < 0);
-check('auth_finish points at the client version on 8002',
-	match(af.error || '', /version/i) != null);
+check('auth_finish relays the credentials message Proton sent',
+	index(af.error || '', BADCREDS) >= 0);
+check('auth_finish no longer blames the client version on 8002',
+	match(af.error || '', /version/i) == null);
 
-stub_response(422, { Code: 2028, Error: 'This version of the app is no longer supported' });
+stub_response(422, { Code: 2028, Error: LOCKOUT });
 let ai = api.auth_info('user@example.com');
-check('auth_info explains Code 2028 and the override',
-	index(ai.error || '', '2028') >= 0 && index(ai.error || '', 'app_version') >= 0);
+check('auth_info relays the lockout instead of a version guess',
+	index(ai.error || '', LOCKOUT) >= 0 && index(ai.error || '', 'app_version') < 0);
 
+// ── failed sign-ins reach syslog ─────────────────────────────────────────
+// The user who reported this had an empty `logread -e protonvpn` after
+// repeated failed sign-ins, so the only evidence was a photograph of a red
+// line in a browser. Each failed sign-in call now leaves one line — endpoint,
+// HTTP status, Proton's code, Proton's message — and nothing else: no
+// username, no password proof, no SRP material, no tokens.
+let logged = [];
+let real_warn = warn;
+global.warn = function (m) { push(logged, '' + m); };
+
+stub_response(422, { Code: 8002, Error: BADCREDS });
+logged = [];
+api.auth_info('user@example.com');
+let line = join('\n', logged);
+check('a failed /auth/info leaves a line in the log', length(logged) > 0);
+check('the /auth/info log line names the endpoint', index(line, '/auth/info') >= 0);
+check('the /auth/info log line carries the HTTP status', index(line, '422') >= 0);
+check('the /auth/info log line carries Proton\'s code', index(line, '8002') >= 0);
+check('the /auth/info log line carries Proton\'s message', index(line, BADCREDS) >= 0);
+check('the /auth/info log line never carries the username',
+	index(line, 'user@example.com') < 0);
+
+stub_response(422, { Code: 2028, Error: LOCKOUT });
+logged = [];
+api.auth_finish({ username: 'user@example.com', srp_session: 'SRP-SESSION-SECRET',
+	client_ephemeral: 'EPHEMERAL-SECRET', client_proof: 'PROOF-SECRET' });
+line = join('\n', logged);
+check('a failed /auth leaves a line in the log', length(logged) > 0);
+check('the /auth log line names the endpoint and the code',
+	index(line, '/auth') >= 0 && index(line, '2028') >= 0);
+check('the /auth log line carries Proton\'s message', index(line, LOCKOUT) >= 0);
+check('the /auth log line never carries the username or the SRP material',
+	index(line, 'user@example.com') < 0 && index(line, 'SRP-SESSION-SECRET') < 0 &&
+	index(line, 'EPHEMERAL-SECRET') < 0 && index(line, 'PROOF-SECRET') < 0);
+
+seed_session();
+stub_response(422, { Code: 8002, Error: WRONGCODE });
+logged = [];
+api.totp_submit('123456');
+line = join('\n', logged);
+check('a failed two-factor step leaves a line in the log', length(logged) > 0);
+check('the two-factor log line names the endpoint and the code',
+	index(line, '/auth/2fa') >= 0 && index(line, '8002') >= 0);
+check('the two-factor log line carries Proton\'s message',
+	index(line, WRONGCODE) >= 0);
+check('the two-factor log line never carries the code the user typed',
+	index(line, '123456') < 0);
+check('the two-factor log line never carries the session tokens',
+	index(line, ACCESS) < 0 && index(line, REFRESH) < 0);
+
+function long_tail() {
+	let s = '';
+	for (let i = 0; i < 400; i++)
+		s += 'x';
+	return s;
+}
+
+// Proton's Error is remote text on its way into syslog. A newline in it would
+// forge a second 'protonvpn:' line that a reader — or a log parser — would
+// take for ours, and an unbounded one would push everything else out of a
+// logread window. Neither goes through.
+seed_session();
+stub_response(422, { Code: 8002,
+	Error: 'bad\nprotonvpn: rotated main to XX#1\nand ' + long_tail() });
+logged = [];
+api.auth_info('user@example.com');
+line = join('\n', logged);
+check('a failure leaves exactly one log line', length(logged) == 1);
+check('a newline in Proton\'s message cannot forge a second line',
+	index(line, '\nprotonvpn: rotated') < 0);
+check('an overlong message is cut rather than flooding the log',
+	length(line) < 400);
+check('the beginning of the message still survives the cut',
+	index(line, 'bad') >= 0 && index(line, '8002') >= 0);
+
+// A successful call must stay quiet: a log line per API call would bury the
+// failures this section exists to surface.
+seed_session();
+stub_response(200, { Code: 1000, Scope: 'full' });
+logged = [];
+api.totp_submit('123456');
+check('a successful call logs no failure',
+	match(join('\n', logged), /failed/i) == null);
+
+global.warn = real_warn;
 unlink(resp);
 api.session_store(null);
 
