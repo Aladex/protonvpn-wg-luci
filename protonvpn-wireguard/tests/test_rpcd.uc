@@ -16,7 +16,7 @@
 // two suites can execute concurrently); never the shared /tmp.
 const RUN = getenv('PROTONVPN_RUN_DIR') || '/tmp';
 
-import { readfile, mkdir, unlink } from 'fs';
+import { readfile, mkdir, unlink, open } from 'fs';
 const _common = require('protonvpn.common');
 const _cache = require('protonvpn.cache');
 const _api = require('protonvpn.api');
@@ -441,6 +441,36 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 	for (let i = 0; i < 10; i++)
 		m.status.call({});
 	eq('rpcd status leaves no ubus connection open', global.MOCK_UBUS_OPEN, 0);
+}
+
+// ── the external-IP probe reads a third party's HTTP response ───────────
+//
+// This is the one input in the package an outsider controls, and its shape
+// test is all that stands between the response and the page. Anchored, `^`
+// and `$` match a LINE under REG_NEWLINE, so anything at all was accepted as
+// long as the FIRST line looked like an address — the probe would then report
+// that whole string as the router's external IP.
+{
+	const resp = RUN + '/curl-response';
+	function probe(body) {
+		let f = open(resp, 'w');
+		// The probe calls curl without -w, so the stub answers with the body
+		// alone, exactly as the real curl does.
+		f.write('200\n' + body + '\n');
+		f.close();
+		let r = m.external_ip.call({ args: { instance: 'main' } });
+		unlink(resp);
+		return r;
+	}
+
+	eq('a plain address is reported', probe('203.0.113.7').ip, '203.0.113.7');
+	eq('and an IPv6 one', probe('2001:db8::1').ip, '2001:db8::1');
+	ok('an address with anything after it is refused',
+		probe('203.0.113.7\n<script>alert(1)</script>').ip == null);
+	ok('and the refusal is reported as one',
+		index(probe('203.0.113.7\nrubbish').error || '', 'could not determine') >= 0);
+	ok('a response that is not an address at all is refused',
+		probe('not an address').ip == null);
 }
 
 unlink(RUN + '/protonvpn_rotate_state.json');

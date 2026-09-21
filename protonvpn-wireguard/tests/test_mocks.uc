@@ -16,6 +16,12 @@
 
 import { cursor } from 'uci';
 import { connect } from 'ubus';
+import { lsdir, writefile, unlink, popen } from 'fs';
+
+// Where the two kinds of stand-in live, relative to this suite.
+const HERE = replace(sourcepath(), /\/[^\/]+$/, '');
+const MOCKS = HERE + '/mocks';
+const COMPILE_MOCKS = HERE + '/compile-mocks';
 
 let fails = 0;
 function ok(l, c) { if (c) printf('ok   %s\n', l); else { fails++; printf('FAIL %s\n', l); } }
@@ -195,6 +201,59 @@ function seed() {
 	eq('exception: an unknown object reports the unknown-method error',
 		v.error(), 'Method not found');
 	v.disconnect();
+}
+
+// ── what belongs in mocks/, and what must not ───────────────────────────
+//
+// Everything in tests/mocks is on the RUNTIME search path of every suite:
+// run.sh passes `-L <mocks>/*.uc` to each one. So a file dropped in there is
+// importable by any test, and a stand-in that models no behaviour would let an
+// import-only test pass against nothing.
+//
+// protonvpn-service imports uloop, and the offline interpreter is built
+// without it (ULOOP_SUPPORT=OFF — it needs libubox), while `ucode -c` resolves
+// imports as it compiles. A stand-in is therefore needed for that program to
+// be syntax-checked at all, but it is needed ONLY by the compiler, so it lives
+// in tests/compile-mocks — a directory the CI compile step puts on its search
+// path and run.sh does not.
+//
+// This is the contract, asserted rather than merely written down: a
+// compile-only stand-in must not be reachable from a running test.
+{
+	let mocks = lsdir(MOCKS) || [];
+	let compile = lsdir(COMPILE_MOCKS) || [];
+	ok('the compile-only stand-in is where the compiler looks',
+		index(compile, 'uloop.uc') >= 0);
+	ok('and not where the tests look', index(mocks, 'uloop.uc') < 0);
+
+	// The general form, so the next compile-only stand-in is covered without
+	// anyone remembering this test: nothing in compile-mocks may also sit in
+	// mocks, or the separation is decorative.
+	let both = [];
+	for (let f in compile)
+		if (index(mocks, f) >= 0)
+			push(both, f);
+	eq('nothing is in both directories', both, []);
+
+	// And the property the split exists to produce, asked directly.
+	//
+	// Resolution is a COMPILE-time question — `import` is static, so a running
+	// test cannot ask it of itself, and `require()` answers a different one
+	// (it refuses an ES module outright, so it would report "unreachable" even
+	// with the stand-in sitting right there on the path). So a child
+	// interpreter is asked, with the very -L flags run.sh hands every suite:
+	// if `import ... from 'uloop'` compiles there, a test could have imported
+	// it after all.
+	let probe = (getenv('PROTONVPN_RUN_DIR') || '/tmp') + '/uloop_probe.uc';
+	writefile(probe, "import * as uloop from 'uloop';\n");
+	let pr = popen(sprintf('%s %s -o /dev/null -c %s 2>&1',
+		getenv('UCODE') || 'ucode', getenv('PVT_UCODE_L') || '', probe), 'r');
+	let out = pr ? pr.read('all') : '';
+	let code = pr ? pr.close() : -1;
+	unlink(probe);
+	ok('a suite search path does not resolve uloop', code != 0);
+	ok('and says so because the module is not there',
+		index(out, "Unable to resolve path for module 'uloop'") >= 0);
 }
 
 global.MOCK_UCI = {};

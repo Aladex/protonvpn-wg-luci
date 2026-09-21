@@ -21,12 +21,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: sh -n on shell scripts
         run: |
-          for f in \
-            protonvpn-wireguard/files/etc/init.d/protonvpn \
-            protonvpn-wireguard/files/etc/uci-defaults/90-protonvpn-migrate \
-            protonvpn-wireguard/stamp-appversion.sh \
-            protonvpn-wireguard/tests/run.sh \
-            protonvpn-wireguard/tests/test_stamp.sh; do
+          # The set is derived, and checked against a floor that is stated
+          # independently of the derivation, so a predicate that stops matching
+          # a category fails by name instead of quietly covering less. Both
+          # live in list-sources.sh, which is also the ucode step's source —
+          # the rule is stated once. It exits non-zero when it cannot produce a
+          # set it trusts, which fails this step.
+          files=$(sh protonvpn-wireguard/list-sources.sh shell)
+          echo "$(printf '%s\n' "$files" | grep -c .) shell script(s) to check"
+          for f in $files; do
             echo "sh -n $f"; sh -n "$f"
           done
       - name: Stamper parser regression tests
@@ -89,18 +92,29 @@ jobs:
             -DRTNL_SUPPORT=OFF -DNL80211_SUPPORT=OFF -DRESOLV_SUPPORT=OFF \
             -DDEBUG_SUPPORT=OFF -DLOG_SUPPORT=OFF
           cmake --build build -j"$(nproc)"
-      - name: Compile-check standalone ucode programs
+      - name: Compile-check every ucode source the package ships
         run: |
           UC=/tmp/ucode/build/ucode
           LIB="$PWD/protonvpn-wireguard/files/usr/share/ucode"
           MOCKS="$PWD/protonvpn-wireguard/tests/mocks"
+          # Stand-ins that exist only so the compiler can resolve an import —
+          # today, uloop, which this interpreter is built without. Deliberately
+          # a separate directory from tests/mocks: run.sh puts that one on
+          # every suite's RUNTIME path, and a stand-in that models no behaviour
+          # has no business being importable by a test. tests/test_mocks.uc
+          # asserts the separation from both sides.
+          CMOCKS="$PWD/protonvpn-wireguard/tests/compile-mocks"
           B=/tmp/ucode/build
-          for f in \
-            protonvpn-wireguard/files/usr/share/rpcd/ucode/protonvpn.uc \
-            protonvpn-wireguard/files/usr/bin/protonvpn-cache-update \
-            protonvpn-wireguard/files/usr/bin/protonvpn-rotate; do
+          # Derived, and checked against a floor taken from the Makefile's
+          # install list — the real definition of what ships. list-sources.sh
+          # holds both, and refuses to print a set it cannot vouch for, which
+          # fails this step. See that file for why derivation alone is not
+          # enough.
+          files=$(sh protonvpn-wireguard/list-sources.sh ucode)
+          echo "$(printf '%s\n' "$files" | grep -c .) ucode source(s) to compile"
+          for f in $files; do
             echo "ucode -c $f"
-            "$UC" -L "$MOCKS/*.uc" -L "$LIB/*.uc" -L "$B/*.so" -c "$f"
+            "$UC" -L "$MOCKS/*.uc" -L "$CMOCKS/*.uc" -L "$LIB/*.uc" -L "$B/*.so" -c "$f"
           done
       - name: Run offline fixture/unit tests (modules compiled by import)
         run: |
