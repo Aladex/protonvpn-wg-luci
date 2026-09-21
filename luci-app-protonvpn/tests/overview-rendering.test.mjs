@@ -132,14 +132,23 @@ test('notice() does not parse a remote message as markup', () => {
 	assert.match(view.notices[view.notices.length - 1].text, /<img src=x/);
 });
 
+// The version control is on the Proton account card, so the note that carries
+// the backend's error string is built there.
+function versionCard(rpc) {
+	const view = loadView({
+		uci: { protonvpn: { main: { '.type': 'instance', '.name': 'main' } } },
+		rpc: { client_versions: rpc } });
+	const ctx = makeCtx(view.spec, { refs: {}, session: { state: 'active' },
+		bandEl: El('div', { class: 'pv-acct' }) });
+	ctx.renderBand();
+	return ctx.bandEl;
+}
+
 test('the version-list failure note is rendered as text', async () => {
-	const view = loadView({ uci: { protonvpn: { main: { '.type': 'instance', '.name': 'main' } } },
-		rpc: { client_versions: { versions: [], current: '',
-			error: 'could not fetch <tags>: ' + MSG_INJECT } } });
-	const ctx = makeCtx(view.spec, { refs: {} });
-	const panel = ctx.buildAdvanced();
-	await findOneClass(panel, 'pv-appver-fetch').attrs.click(EV);
-	const note = findOneClass(panel, 'pv-appver-note');
+	const band = versionCard({ versions: [], current: '',
+		error: 'could not fetch <tags>: ' + MSG_INJECT });
+	await findOneClass(band, 'pv-appver-fetch').attrs.click(EV);
+	const note = findOneClass(band, 'pv-appver-note');
 	assert.equal(htmlAssignments(note).length, 0,
 		'a backend error string is assigned to innerHTML');
 	assert.match(text(note), /<img src=x/);
@@ -147,16 +156,24 @@ test('the version-list failure note is rendered as text', async () => {
 });
 
 test('the version-list success note is rendered as text', async () => {
-	const view = loadView({ uci: { protonvpn: { main: { '.type': 'instance', '.name': 'main' } } },
-		rpc: { client_versions: { versions: [ 'linux-vpn-gtk@4.17.0' ],
-			current: 'linux-vpn-gtk@4.17.0',
-			error: 'partial: <b>tags</b> missing' } } });
-	const ctx = makeCtx(view.spec, { refs: {} });
-	const panel = ctx.buildAdvanced();
-	await findOneClass(panel, 'pv-appver-fetch').attrs.click(EV);
-	const note = findOneClass(panel, 'pv-appver-note');
+	const band = versionCard({ versions: [ 'linux-vpn-gtk@4.17.0' ],
+		current: 'linux-vpn-gtk@4.17.0',
+		error: 'partial: <b>tags</b> missing' });
+	await findOneClass(band, 'pv-appver-fetch').attrs.click(EV);
+	const note = findOneClass(band, 'pv-appver-note');
 	assert.equal(htmlAssignments(note).length, 0);
 	assert.match(text(note), /<b>tags<\/b>/);
+});
+
+// A version string straight out of the backend's list reaches the select as an
+// option value, which is a second place a remote string lands on this page.
+test('the fetched version list is rendered as text', async () => {
+	const band = versionCard({ versions: [ 'linux-vpn-gtk@4.17.0 <v>' ],
+		current: '', error: null });
+	await findOneClass(band, 'pv-appver-fetch').attrs.click(EV);
+	const sel = findOneClass(band, 'pv-appver-list');
+	assert.deepEqual(htmlAssignments(sel), []);
+	assert.match(text(sel), /<v>/);
 });
 
 test('the instance-name error is rendered as text', async () => {
@@ -278,11 +295,15 @@ test('nothing in the instance modals goes through innerHTML', () => {
 	assert.deepEqual(htmlAssignments(view.modals.map((m) => m.children)), []);
 });
 
-test('nothing in the Advanced panel goes through innerHTML', async () => {
+test('nothing in the Advanced panel goes through innerHTML', () => {
 	const { ctx } = fullPage();
-	const panel = ctx.buildAdvanced();
-	await findOneClass(panel, 'pv-appver-fetch').attrs.click(EV);
-	assert.deepEqual(htmlAssignments(panel), []);
+	assert.deepEqual(htmlAssignments(ctx.buildAdvanced()), []);
+});
+
+test('nothing on the account card goes through innerHTML, fetched list and all', async () => {
+	const { ctx } = fullPage();
+	await findOneClass(ctx.bandEl, 'pv-appver-fetch').attrs.click(EV);
+	assert.deepEqual(htmlAssignments(ctx.bandEl), []);
 });
 
 test('a value from the backend still reaches the page intact', () => {

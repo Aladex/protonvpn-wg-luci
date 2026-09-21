@@ -191,6 +191,11 @@ var STYLE = '' +
 	// Actions sit on the right on wide screens and wrap underneath on narrow
 	// ones, always with real spacing between the buttons.
 	'.pv-acct-actions{display:flex;gap:.6em;flex-wrap:wrap;margin-left:auto}' +
+	// A full-width basis puts the client version on a line of its own between
+	// the account state and the buttons, at every width.
+	'.pv-acct-appver{flex:1 1 100%}' +
+	'.pv-acct-appver-label{font-weight:600;margin-bottom:.35em}' +
+	'.pv-acct-appver .pv-appver-list{min-width:16em}' +
 	'.pv-acct-warn{border-color:#c79100}' +
 	'.pv-acct-bad{border-color:#c0392b}' +
 	'.pv-led{display:inline-block;width:.7em;height:.7em;border-radius:50%;flex:none}' +
@@ -2072,6 +2077,11 @@ return view.extend({
 				])),
 				E('div', { class: 'pv-acct-sub' }, nodes(sub))
 			])),
+			// On the card in every session state, and on its own line above the
+			// actions: it is the setting somebody reaches for while looking at
+			// a sign-in that has just failed, so it must not be reachable only
+			// from one of those states.
+			this.buildClientVersion(),
 			E('div', { class: 'pv-acct-actions' }, nodes(actions))
 		]));
 	},
@@ -2573,6 +2583,13 @@ return view.extend({
 		// Sync the pin-dependent rows once every section exists (Connection is
 		// built before the rotation and advanced ones).
 		this.updateRotationAvailability();
+		// The client version control lives on the account card rather than in
+		// this form, but it is collected, validated and discarded along with
+		// the form's other fields. The reset of `refs` above would strand it:
+		// save() would skip the setting entirely and a discard would leave an
+		// abandoned choice on screen.
+		if (this.appVerSel)
+			this.syncClientVersion();
 		this._building = false;
 		return sections;
 	},
@@ -3035,28 +3052,6 @@ return view.extend({
 		]));
 		this.dnsSel.value = dnsMode;
 
-		// The Proton client version (x-pm-appversion). Shared by every instance
-		// and read from the globals section when the config has one, so the
-		// field has to look where the backend looks. It lived in uci alone
-		// until now — which is the one setting a user needs exactly when they
-		// cannot sign in, and therefore the one that has to be reachable from
-		// the page in front of them.
-		this.appVerBtn = E('button', { class: 'cbi-button pv-appver-fetch',
-			click: L.bind(this.handleFetchClientVersions, this) },
-			nodes(_('Fetch available versions')));
-		this.appVerPick = E('div', { class: 'pv-appver-pick' });
-		this.appVerNote = E('div', { class: 'cbi-value-description pv-appver-note' }, nodes(''));
-		var appVerCtl = E('div', {}, nodes([
-			E('div', { class: 'pv-inline' }, nodes([
-				this.input('app_version', 'text',
-					uci.get('protonvpn', this.globalsSection(), 'app_version') || '',
-					{ placeholder: 'linux-vpn-gtk@…', style: 'min-width:15em' }),
-				this.appVerBtn
-			])),
-			this.appVerPick,
-			this.appVerNote
-		]));
-
 		var body = E('div', { class: 'cbi-section-node' }, nodes([
 			this.row(_('Interface name'), [ this.input('interface', 'text', g('interface', 'protonvpn')) ],
 				_('Name of the managed WireGuard interface. ⚠ Changing it after setup recreates the tunnel under the new name and orphans the old interface’s firewall/routing objects.')),
@@ -3079,9 +3074,7 @@ return view.extend({
 				]))
 			], shared('')),
 			this.row(_('DNS'), [ this.dnsSel ],
-				_('Which resolver to use while connected. Proton runs a single in-tunnel resolver (10.2.0.1); it only works through the tunnel.')),
-			this.row(_('Proton client version'), [ appVerCtl ],
-				_('Shared by all instances. Client version sent to Proton as x-pm-appversion. Empty = the version built into the package. Only set this when Proton answers a sign-in with Code 5003 "this version of the app is no longer supported" and no package update is available yet — Code 2028 is a temporary limit on your account and Code 8002 is a wrong username or password, and neither is fixed by changing this. "Fetch available versions" asks the official Linux client\'s repository what exists; it only fills the list, you pick a value and press Save.'))
+				_('Which resolver to use while connected. Proton runs a single in-tunnel resolver (10.2.0.1); it only works through the tunnel.'))
 		]));
 
 		// The connection section is built (and may restore a pinned server)
@@ -3135,11 +3128,104 @@ return view.extend({
 		return found || 'main';
 	},
 
+	// What the control says about itself. Long, because it is the answer to
+	// "Proton will not let me in and I do not know why": the three codes are
+	// the ones a failing sign-in actually returns, and only one of them is
+	// fixed here.
+	CLIENT_VERSION_HELP: _('Shared by all instances — the version this router reports to Proton as x-pm-appversion. The version built into the package is right for almost everyone. Change it only when Proton answers a sign-in with Code 5003 "this version of the app is no longer supported" and no package update is available yet; Code 2028 is a temporary limit on your account and Code 8002 is a wrong username or password, and neither is fixed here. "Fetch available versions" asks the official Linux client\'s repository what exists; it only fills the list, you pick a value and press Save.'),
+
+	// The Proton client version (x-pm-appversion), on the account card next to
+	// the sign-in controls.
+	//
+	// It belongs here rather than in Advanced settings for two reasons. It is
+	// a GLOBAL setting, one value shared by every instance, and Advanced
+	// settings is otherwise entirely per-instance options. And it matters
+	// exactly when somebody is looking at a sign-in that has just failed,
+	// which is this card — sending them off to open an accordion further down
+	// the page is sending them away from the thing they are trying to fix.
+	//
+	// A select, not a text box: the only values worth stamping are ones that
+	// exist, and a typo here is stored, ignored by the backend and shown back
+	// as if it had applied. Read from the globals section when the config has
+	// one, because that is where the backend looks.
+	//
+	// Built ONCE and then kept. renderBand() repaints the card on every
+	// five-second status poll; rebuilding the control there would throw away a
+	// fetched list and an unsaved choice on a timer, while the user is looking
+	// at them.
+	buildClientVersion: function () {
+		if (this.appVerBox)
+			return this.appVerBox;
+
+		this.refs = this.refs || {};
+		this.appVerList = [];
+		this.appVerCurrent = '';
+		this.appVerSel = E('select', { class: 'cbi-input-select pv-appver-list' });
+		this.appVerSel.addEventListener('change', L.bind(this.markDirty, this));
+		this.appVerBtn = E('button', { class: 'cbi-button pv-appver-fetch',
+			click: L.bind(this.handleFetchClientVersions, this) },
+			nodes(_('Fetch available versions')));
+		this.appVerNote = E('div', { class: 'cbi-value-description pv-appver-note' },
+			nodes(this.CLIENT_VERSION_HELP));
+		this.syncClientVersion();
+
+		this.appVerBox = E('div', { class: 'pv-acct-appver' }, nodes([
+			E('div', { class: 'pv-acct-appver-label' }, nodes(_('Client version'))),
+			E('div', { class: 'pv-inline' }, nodes([ this.appVerSel, this.appVerBtn ])),
+			this.appVerNote
+		]));
+		return this.appVerBox;
+	},
+
+	// Re-read what uci holds and put the control back on it. Called from
+	// buildFormSections(), which is every path that rebuilds the form from uci
+	// — first render, discard, save, switching instance — so a discarded
+	// choice really goes away and a saved one is what the control shows next.
+	syncClientVersion: function () {
+		this.appVerSaved = uci.get('protonvpn', this.globalsSection(), 'app_version') || '';
+		this.refs.app_version = this.appVerSel;
+		this.fillClientVersions(this.appVerSaved);
+	},
+
+	// Rebuild the options: the built-in version, whatever uci holds, and
+	// whatever the last fetch returned — in that order, de-duplicated.
+	//
+	// The first two are unconditional, which is the whole of "degrade
+	// honestly". With no fetch, or a failed one, the control is still a real
+	// choice rather than an empty box. And the stored value is offered
+	// WHATEVER it looks like, including a shape the backend will refuse:
+	// dropping it would mean that merely opening this page, and later saving
+	// something unrelated, silently changed a setting the user had put in uci
+	// by hand. The refusal on Save is where a malformed value is dealt with,
+	// and it names the value; see appVersionError().
+	fillClientVersions: function (keep) {
+		var self = this;
+		// A Set, not an object: the values come from uci and from upstream, so
+		// one of them can perfectly well be "toString" or "constructor". In a
+		// plain {} those read back as already-present, the entry is dropped
+		// from the list, and the control then shows a different value than the
+		// one in force — which the next Save writes.
+		var opts = [], seen = new Set();
+		var add = function (v, label) {
+			if (seen.has(v))
+				return;
+			seen.add(v);
+			opts.push(E('option', { value: v }, nodes(label ||
+				((v === self.appVerCurrent) ? _('%s — current release').format(v) : v))));
+		};
+		add('', _('Version built into the package (recommended)'));
+		if (this.appVerSaved)
+			add(this.appVerSaved);
+		(this.appVerList || []).forEach(function (v) { add(v); });
+		dom.content(this.appVerSel, nodes(opts));
+		this.appVerSel.value = seen.has(keep) ? keep : '';
+	},
+
 	// Ask upstream which client versions the official Linux app has released.
 	// Only ever reached from the button: this leaves the router's network,
 	// which has no business happening while a page loads or a sign-in runs.
 	//
-	// It fills a list and nothing more. The field is not touched here, on
+	// It fills a list and nothing more. The selection is not touched here, on
 	// success or on failure — a page that restamps the version by itself
 	// breaks sign-ins for a reason its owner cannot see.
 	handleFetchClientVersions: function (ev) {
@@ -3175,10 +3261,17 @@ return view.extend({
 	// Draw what came back. A list that could not be retrieved is said plainly
 	// — the alternative is a button that looks as if it did nothing, which is
 	// the same defect this page already had on the Continue button.
+	//
+	// A failed fetch keeps whatever the list held before it, so pressing the
+	// button while upstream is down cannot empty a list that was already
+	// there, and the selection is carried across either way.
 	renderClientVersions: function (res) {
-		var self = this;
 		var list = res.versions || [];
-		dom.content(this.appVerPick, nodes(''));
+		this.appVerCurrent = res.current || '';
+		if (list.length)
+			this.appVerList = list;
+		this.fillClientVersions(this.appVerSel.value);
+
 		if (!list.length) {
 			dom.content(this.appVerNote, nodes(E('span', { class: 'pv-err' },
 				nodes(res.error
@@ -3186,22 +3279,6 @@ return view.extend({
 					: _('Could not retrieve the version list.')))));
 			return;
 		}
-
-		// The first entry is a placeholder rather than a version, so opening
-		// the list cannot pick one by accident.
-		var sel = E('select', { class: 'cbi-input-select pv-appver-list' },
-			nodes([ E('option', { value: '' }, nodes(_('— choose a version —'))) ]));
-		list.forEach(function (v) {
-			sel.appendChild(E('option', { value: v },
-				nodes(v === res.current ? _('%s — current release').format(v) : v)));
-		});
-		sel.addEventListener('change', function () {
-			if (!sel.value)
-				return;
-			self.refs.app_version.value = sel.value;
-			self.markDirty();
-		});
-		dom.append(this.appVerPick, nodes(sel));
 
 		var note = res.current
 			? _('The official client currently ships %s. Pick a version and press Save — nothing is changed until you do.').format(res.current)
