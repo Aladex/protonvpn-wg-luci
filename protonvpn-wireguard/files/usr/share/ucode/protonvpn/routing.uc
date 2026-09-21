@@ -432,6 +432,14 @@ function reconcile_local_routes(uci, iface, table, desired) {
 // the instance's table with a stamped line (best effort). Numeric tables and
 // already-registered names need nothing.
 function ensure_rt_table(name) {
+	// The sink's own guard, asking the same validator the entry point asks.
+	// Nothing in the product can reach here with a name validate_routing_table
+	// refuses — load_settings runs the option through it — but this is the
+	// last step before a line-oriented file that cannot express a multiline
+	// name, and "the caller already checked" is how the value got here
+	// unchecked in the first place. One definition, applied at both ends.
+	if (_common.validate_routing_table(name) == null || name == '')
+		return false;
 	if (match(name, /^[0-9]+$/))
 		return true;
 	let data = readfile(RT_TABLES) || '';
@@ -456,7 +464,10 @@ function ensure_rt_table(name) {
 
 // Remove ONLY a stamped rt_tables line for `name`; user entries are kept.
 function drop_rt_table(name) {
-	if (name == null || name == '' || match(name, /^[0-9]+$/))
+	// A name this module could not have written is not one it goes looking
+	// for: the same validator, so teardown and setup agree on what a name is.
+	if (_common.validate_routing_table(name) == null || name == '' ||
+	    match(name, /^[0-9]+$/))
 		return;
 	let data = readfile(RT_TABLES);
 	if (!data || index(data, MARK) < 0)
@@ -599,14 +610,15 @@ function reconcile_rules(uci, sectype, role, iface, want_nets, mkopts) {
 //
 // Under 'auto' the pair is
 //     rule6 in <net> lookup <table> priority 20000   (only with the bit)
-//     rule6 in <net> prohibit       priority 21000   (always)
+//     rule6 in <net> prohibit       priority 21000   (unless the mode is 'off')
 // and the order is the whole point. The lookup sends v6 into the instance's
 // table, where netifd has already installed a ::/0 route from the peer's
 // allowed_ips; the prohibit below it catches everything that table cannot
-// serve — a down tunnel, a disabled instance, a gateway without IPv6 — before
-// the kernel ever reaches `main`, where the ISP default route lives. That
-// ordering IS the v6 kill switch, there is no separate option for it, and the
-// prohibit therefore stays in place for as long as the mode is not 'off'.
+// serve — a down tunnel, a gateway without IPv6 — before the kernel ever
+// reaches `main`, where the ISP default route lives. That ordering IS the v6
+// kill switch, there is no separate option for it, and the prohibit therefore
+// outlives the tunnel: it is the half that has to be standing exactly when
+// there is nothing to route into.
 //
 // ProtonVPN forwards IPv6 only on the gateways that carry bit 16 of the
 // logical Features bitmask. Measured on 12 gateways across 11 countries by
@@ -618,31 +630,42 @@ function reconcile_rules(uci, sectype, role, iface, want_nets, mkopts) {
 // Eyeballs on every connection and anything that is not a browser simply
 // hangs. So 'auto' adds the lookup only when the bit is really there, and a
 // missing stamp (an interface written by an older version) counts as no IPv6.
-// `configured` is whether the instance is set up for steering at all (steered
-// mode plus a routing table); `active` whether it is switched on. They are
-// deliberately separate: the lookup follows `active`, the prohibit does not.
-function reconcile_ipv6_rules(uci, s, iface, configured, active, table, nets) {
+//
+// `steering` is is_steering(): set up for steering AND switched on. BOTH
+// halves hang off it, and that single condition is the fix for a real outage.
+// The prohibit used to hang off configured-steering alone, so switching an
+// instance off in LuCI left it behind — a persistent `rule6 in lan prohibit
+// priority 21000` naming an interface that no longer existed, which a reboot
+// did not clear. Meanwhile the ADDRESSING of the same networks follows
+// is_steering (see reconcile_v6_lan, reached through v6_wants_net), so the
+// clients had already been handed their ISP GUA and the router as default
+// gateway. Happy Eyeballs then preferred IPv6 and every connection died at the
+// rule, with `ip -6 route get` answering "Permission denied" and nothing in
+// the UI saying why. The two are one decision: once this module gives the GUA
+// back it has decided IPv6 goes to the provider, and a prohibit after that
+// guards nothing while breaking everything.
+//
+// What this does NOT relax is the leak guard. "Switched off by the user" and
+// "the tunnel is not up right now" are different states, and only the first
+// reaches here as !steering. An ENABLED instance whose tunnel is down, or
+// whose gateway lacks bit 16, still holds its clients' ULA addressing, so the
+// prohibit stays — that is exactly the leak it exists to stop. `ipv6_mode`
+// 'off' remains the way to ask for no guard at all while the instance runs.
+function reconcile_ipv6_rules(uci, s, iface, steering, table, nets) {
 	let changed = false;
 	let mode = s.ipv6_mode || 'block';
 	// Steered routing only: with auto_routing the whole LAN goes through the
 	// tunnel and there is no per-network rule to hang a lookup on, so 'auto'
 	// behaves exactly like 'block' there.
-	let want = configured ? (nets || []) : [];
-	// The lookup is only ever right while the instance is up AND this gateway
-	// forwards IPv6; anything else would route v6 into a table that drops it.
-	let tunnel = active && mode == 'auto' && iface_ipv6_capable(uci, iface);
+	let want = steering ? (nets || []) : [];
+	// The lookup additionally needs this gateway to forward IPv6; anything
+	// else would route v6 into a table that drops it.
+	let tunnel = mode == 'auto' && iface_ipv6_capable(uci, iface);
 	if (reconcile_rules(uci, 'rule6', 'steer_v6_lookup', iface,
 		tunnel ? want : [], function(net) {
 			return { 'in': net, lookup: table, priority: '20000' };
 		}))
 		changed = true;
-	// The prohibit is NOT conditional on the instance being up. It is the v6
-	// kill switch, and taking it away the moment the tunnel goes is the leak
-	// it exists to stop: the steered clients still have IPv6, the lookup above
-	// is gone, so the next rule they meet is `main` — where the ISP default
-	// route lives. A disabled instance, a down tunnel and a gateway without
-	// the bit are all "IPv6 has nowhere legitimate to go", not "stop guarding
-	// IPv6"; the mode 'off' is how a user asks for that.
 	if (reconcile_rules(uci, 'rule6', 'steer_v6', iface,
 		(mode != 'off') ? want : [], function(net) {
 			return { 'in': net, action: 'prohibit', priority: '21000' };
@@ -1190,8 +1213,11 @@ function is_active(s) {
 
 // True when the instance is SET UP for steering: the detected mode is
 // 'steered' and it has the routing table steering needs. Says nothing about
-// the instance being switched on — the IPv6 prohibit hangs off this rather
-// than off is_steering(), because it has to outlive the tunnel.
+// the instance being switched on, which is why nothing that WRITES an object
+// may key off it on its own: an artifact created on this condition outlives
+// an explicit Disable, and the v6 prohibit doing exactly that is what broke a
+// LAN's IPv6 (see reconcile_ipv6_rules). It survives only to tell a user who
+// selected steered mode without a routing table why nothing happened.
 function steering_configured(s, mode) {
 	return (mode == 'steered') &&
 		(s.routing_table != null && s.routing_table != '');
@@ -1429,8 +1455,7 @@ function reconcile_v6_lan(uci, iface, want_nets, notes) {
 function reconcile_ipv6(uci, s) {
 	let mode = detect(uci, s, false).mode;
 	return reconcile_ipv6_rules(uci, s, s.interface,
-		steering_configured(s, mode), is_active(s), s.routing_table,
-		s.source_networks);
+		is_steering(uci, s, mode), s.routing_table, s.source_networks);
 }
 
 // Whether IPv6 currently goes through the tunnel for this instance and, when
@@ -1499,15 +1524,16 @@ function enforce(uci, s) {
 	let cn = false, cf = false, cd = false;
 	let iface = s.interface;
 	let det = detect(uci, s, false);
-	// A disabled instance releases the managed objects that send traffic
-	// through the tunnel: an explicit Disable means "give me normal networking
-	// back", and the next apply recreates them. The one thing it does NOT
-	// release is the IPv6 prohibit — see reconcile_ipv6_rules; that is the
-	// difference between a disabled instance and ipv6_mode 'off'.
+	// A disabled instance releases EVERY managed object it put on the steered
+	// networks: an explicit Disable means "give me normal networking back",
+	// and the next apply recreates them. That includes the IPv6 prohibit,
+	// because it includes the IPv6 addressing — the two are one decision, and
+	// letting them follow different triggers is what left a LAN refusing its
+	// own IPv6 after a Disable (see reconcile_ipv6_rules).
 	let active = is_active(s);
 	let auto = (det.mode == 'auto') && active;
-	// Steering as configured vs. steering right now. Everything that routes
-	// traffic keys off `steer`; only the v6 prohibit keys off `steer_ready`.
+	// Steering right now: set up for it and switched on. Everything written
+	// below keys off this one flag; `steer_ready` only picks the note.
 	let steer_ready = steering_configured(s, det.mode);
 	let steer = steer_ready && active;
 	if ((det.mode == 'steered') && active && !steer_ready)
@@ -1578,17 +1604,18 @@ function enforce(uci, s) {
 	}
 
 	// 1b. Steering rules: per source network, a lookup rule into the instance
-	//     table, plus prohibit rules that act as kill switch (IPv4, only when
-	//     enabled) and IPv6 stop (always, unless ipv6_mode is 'off'). Prohibit
+	//     table, plus prohibit rules that act as kill switch (IPv4, only with
+	//     the option) and IPv6 stop (unless ipv6_mode is 'off'). Prohibit
 	//     sits between the lookup and the main table, so it only fires when
 	//     the tunnel's table cannot serve the traffic.
 	//
 	//     IPv6 is not symmetric with IPv4 by default: whether it may be routed
 	//     at all depends on the gateway, so the lookup half is decided per
 	//     gateway in reconcile_ipv6_rules — which is also the only piece
-	//     rotation and apply have to redo when they move the peer. Its
-	//     prohibit half also outlives a disabled instance, which is why it is
-	//     given the configured-steering flag rather than the live one.
+	//     rotation and apply have to redo when they move the peer. Both halves
+	//     are given the live steering flag, the same one the v6 addressing
+	//     follows, so a Disable releases the guard and the addressing together
+	//     or not at all.
 	let steer_nets = steer ? s.source_networks : [];
 	let table = s.routing_table;
 	if (steer) {
@@ -1605,8 +1632,7 @@ function enforce(uci, s) {
 		return { 'in': net, action: 'prohibit', priority: '21000' };
 	}))
 		cn = true;
-	if (reconcile_ipv6_rules(uci, s, iface, steer_ready, active, table,
-		s.source_networks))
+	if (reconcile_ipv6_rules(uci, s, iface, steer, table, s.source_networks))
 		cn = true;
 	// The ULA addressing on the eligible networks, and the router advertisement
 	// that carries it to the clients.

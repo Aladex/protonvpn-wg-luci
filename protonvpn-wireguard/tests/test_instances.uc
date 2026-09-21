@@ -200,6 +200,40 @@ function reset_uci() {
 	// A numeric table needs no registration at all.
 	check('a numeric table is left to netifd', _routing.ensure_rt_table('101') == true);
 
+	// ── the sink is line-oriented, so the name reaching it must be one line ──
+	//
+	// rt_tables is read a line at a time by iproute2 and written a line at a
+	// time here, so a name with a newline in it is not a badly-named table, it
+	// is a SECOND table entry — under an id nothing here allocated and a name
+	// nothing here will ever clean up, because drop_rt_table matches the name
+	// it was given. The numeric short-circuit above has the same shape: under
+	// REG_NEWLINE `^[0-9]+$` matches a LINE, so "101\njunk" would be waved
+	// through as "netifd resolves this one itself".
+	//
+	// The entry point guards this too (load_settings runs the option through
+	// validate_routing_table), so nothing in the product can get here with
+	// such a name. This is the sink's own guard: it is the last thing between
+	// a name and a file that cannot express one, and the same validator says
+	// what a name is, so the two cannot drift.
+	unlink(rt);
+	_common.atomic_write(rt, '100\tmine\n');
+	check('a multiline table name is refused outright',
+		_routing.ensure_rt_table('pv_x\n200\tevil') == false);
+	let after = readfile(rt) || '';
+	check('and nothing of it reaches the file', index(after, 'evil') < 0);
+	check('the user entry is untouched', ids_in(after).mine == '100');
+	check('a multiline NUMERIC table name is refused too',
+		_routing.ensure_rt_table('101\n200\tevil') == false);
+	check('and it writes nothing either', index(readfile(rt) || '', 'evil') < 0);
+
+	// Teardown is told the same rule, so a name it cannot have written is not
+	// a name it goes looking for.
+	unlink(rt);
+	_common.atomic_write(rt, '100\tmine # protonvpn_managed\n');
+	_routing.drop_rt_table('mine\njunk');
+	check('dropping a multiline name removes nothing',
+		ids_in(readfile(rt)).mine == '100');
+
 	unlink(rt);
 }
 

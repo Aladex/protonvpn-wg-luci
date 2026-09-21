@@ -26,10 +26,18 @@ So the three modes are:
 * `block` (default) — a `prohibit` rule stops IPv6 on the steered networks, as
   before.
 * `auto` — on a gateway with the bit, IPv6 goes through the tunnel; on one
-  without it, the same `prohibit` as in `block`. The prohibit rule is always
-  installed and sits below the lookup but above the main table, so a down
-  tunnel, a disabled instance or a server without IPv6 stops there and never
-  reaches your provider's default route. That ordering is the IPv6 kill switch.
+  without it, the same `prohibit` as in `block`. The prohibit rule sits below
+  the lookup but above the main table, so a down tunnel or a server without
+  IPv6 stops there and never reaches your provider's default route. That
+  ordering is the IPv6 kill switch, and it stays up for as long as the instance
+  is enabled.
+
+  Disabling the instance is the one thing that takes it down, and it has to:
+  Disable also hands the steered networks their normal addressing back, so the
+  clients are holding an ISP address again. A prohibit left standing after that
+  guards nothing and breaks everything — it refuses every IPv6 packet from
+  those networks, and being netifd config it survives a reboot. `off` is how
+  you ask for no guard while the instance keeps running.
 * `off` — the app does not touch IPv6 at all.
 
 `auto` applies to steered routing only; with `auto_routing` there are no
@@ -93,7 +101,8 @@ reached, the tunnel is taken down rather than left running: declining to choose
 such a gateway while still carrying you on one would report the requirement as
 failed and break it at the same time. A tunnel that already satisfies the
 requirement is left alone. IPv6 cannot escape either way — the prohibit rule
-stays installed whether the tunnel is up or down — but IPv4 from the steered
+stays installed whether the tunnel is up or down, as long as the instance is
+enabled — but IPv4 from the steered
 networks falls back to your provider while the tunnel is down, exactly as it
 does after any other connection failure. Turn the kill switch on if you would
 rather those networks lose access than leave through the WAN.

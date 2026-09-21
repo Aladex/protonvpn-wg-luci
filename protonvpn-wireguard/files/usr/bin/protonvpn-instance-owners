@@ -1,0 +1,50 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: MIT
+// Print the interface each configured instance owns, one name per line.
+//
+// "Owns" is load_settings()' answer and nothing else: the raw `interface`
+// option run through validate_interface, falling back to the default name
+// when it is refused. That is the name every stamped routing/firewall object
+// carries, so it is the name anything reasoning about ownership has to use.
+//
+// It is answered HERE, against the same cursor the runtime reads through,
+// rather than reconstructed by a caller from `uci get` output, because a uci
+// value does not survive that trip as the thing the runtime saw:
+//
+//   * uci permits a newline INSIDE a value. Captured from `uci get` it
+//     becomes two lines, and the first of them looks like a perfectly good
+//     interface name; read through the cursor it is one string,
+//     validate_interface refuses it, and the instance owns the default name.
+//   * a one-item list prints as a bare word through `uci get` and arrives as
+//     an array at the cursor, where it is not a string and is refused the
+//     same way.
+//
+// In both cases a reconstructed answer names an interface that owns nothing
+// and leaves the real owner off the list. The uci-defaults migration decides
+// what is an orphan by this list, and an owner missing from it means a LIVE
+// instance's stamped objects are deleted — its IPv6 prohibit among them,
+// which is a leak.
+//
+// Exits non-zero if the configuration cannot be read, so a caller can tell
+// "could not find out" from "nothing is configured" — the two must never be
+// the same answer to anything that deletes. Any CLI arguments are ignored.
+//
+// The output is FRAMED: the names, then a final "# owners <n>" line. That
+// line is what lets a caller verify it received the whole answer and nothing
+// else, structurally, without knowing what an interface name looks like —
+// a truncated run loses the frame, and anything else reaching this stdout
+// breaks the count. The rule for what a name IS stays in validate_interface,
+// where it is stated once; a caller that re-derived it in order to sanity
+// check this output would be the second definition all over again, agreeing
+// today and drifting silently later.
+
+'use strict';
+
+import { cursor } from 'uci';
+const _common = require('protonvpn.common');
+
+let uci = cursor();
+let names = _common.list_instances(uci);
+for (let name in names)
+	print(_common.load_settings(uci, name).interface, '\n');
+print('# owners ', length(names), '\n');

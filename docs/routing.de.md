@@ -29,10 +29,18 @@ Daraus ergeben sich drei Modi:
   Netzwerken, wie bisher.
 * `auto` — auf einem Gateway mit dem Bit geht IPv6 durch den Tunnel, auf einem
   ohne das Bit greift dasselbe `prohibit` wie im Modus `block`. Die
-  `prohibit`-Regel steht immer: sie liegt unter der Lookup-Regel, aber über der
-  Tabelle `main`, sodass ein liegender Tunnel, eine deaktivierte Instanz oder
-  ein Server ohne IPv6 dort endet und die Default-Route des Providers nie
-  erreicht. Genau diese Reihenfolge ist der IPv6-Kill-Switch.
+  `prohibit`-Regel liegt unter der Lookup-Regel, aber über der Tabelle `main`,
+  sodass ein liegender Tunnel oder ein Server ohne IPv6 dort endet und die
+  Default-Route des Providers nie erreicht. Genau diese Reihenfolge ist der
+  IPv6-Kill-Switch, und er steht, solange die Instanz aktiviert ist.
+
+  Nur das Deaktivieren der Instanz nimmt ihn weg — und das muss es auch: mit
+  dem Deaktivieren bekommen die geleiteten Netzwerke ihre normale Adressierung
+  zurück, die Clients halten also wieder eine Provider-Adresse. Ein danach
+  stehen gebliebenes `prohibit` schützt nichts und zerbricht alles: es weist
+  jedes IPv6-Paket aus diesen Netzwerken ab und übersteht als netifd-Konfig
+  jeden Neustart. Wer die Absicherung ohne Deaktivieren loswerden will, nimmt
+  `off`.
 * `off` — die App fasst IPv6 überhaupt nicht an.
 
 `auto` gilt nur für geleitete Netzwerke; bei `auto_routing` gibt es keine
@@ -103,7 +111,8 @@ weiterzulaufen: ein solches Gateway nicht zu wählen und dich gleichzeitig
 darauf weiterzutragen, hieße die Anforderung für gescheitert zu erklären und
 sie im selben Moment zu brechen. Ein Tunnel, der die Anforderung erfüllt,
 bleibt unangetastet. IPv6 entweicht dabei nicht — die `prohibit`-Regel steht,
-ob der Tunnel oben oder unten ist —, aber IPv4 aus den geleiteten Netzwerken
+ob der Tunnel oben oder unten ist, solange die Instanz aktiviert ist —, aber
+IPv4 aus den geleiteten Netzwerken
 geht bei liegendem Tunnel zu deinem Provider, genau wie nach jedem anderen
 Verbindungsfehler. Schalte den Kill Switch ein, wenn dir lieber ist, dass diese
 Netzwerke dann gar keinen Zugang haben.

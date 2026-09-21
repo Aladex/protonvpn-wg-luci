@@ -52,6 +52,108 @@ if [ "$cv" -lt 2 ]; then
 	uci set "$pkg.main.config_version=2"
 fi
 
+# v3 sweeps netifd rules left behind by an instance that no longer exists.
+# The steering objects are stamped with `protonvpn_managed` and the interface
+# that owns them, and the enforcement only ever reconciles instances it can
+# see — so a rule whose owner was deleted, or renamed, has nothing left to
+# clean it up and survives every reboot. Until the fix in protonvpn.routing
+# that also covered a merely DISABLED instance: its IPv6 prohibit stayed at
+# priority 21000, above the ISP default route in `main` at 32766, while the
+# addressing it was meant to protect had already been handed back — so the
+# network kept an ISP GUA the router then refused to route. The fix stops new
+# ones appearing; this clears the ones already out there.
+#
+# Ownership is the only test. An unstamped rule is the user's, and a stamped
+# one that records no interface gives nothing to judge by, so both are left
+# exactly as they are: this script must never delete a rule somebody wrote.
+if [ "$cv" -lt 3 ]; then
+	# The interfaces that still have an instance behind them.
+	#
+	# Nothing about that question is answered here, and no uci VALUE passes
+	# through this shell. A stamped object carries the interface its instance
+	# owns, which is what load_settings() reports after running the raw option
+	# through validate_interface — so the helper below opens the config with
+	# the same cursor the runtime uses and prints what the runtime would call
+	# the owner. Two things that costs nothing to get right this way and are
+	# very easy to get wrong any other way:
+	#
+	#   * uci permits a newline INSIDE a value. Read through `uci get` and
+	#     captured in a variable it becomes two lines, and the first of them
+	#     looks like a perfectly good interface name; read through the cursor
+	#     it is one string, which validate_interface refuses, and the instance
+	#     owns the default name instead.
+	#   * a one-item list prints as a bare word through `uci get` and arrives
+	#     as an array at the cursor, where it is not a string and is refused
+	#     the same way.
+	#
+	# In both cases a marshalled answer names an interface that owns nothing,
+	# the real owner is missing from the list, and this sweep deletes a live
+	# instance's stamped objects — the IPv6 prohibit among them. That is the
+	# round-2 defect arriving through the transport instead of through a
+	# second copy of the rule, so the transport is what this avoids.
+	out="$(protonvpn-instance-owners 2>/dev/null)"
+	rc=$?
+
+	# The helper FRAMES its answer: the names, then a final "# owners <n>"
+	# line. Everything below is a structural check of that frame — this script
+	# never asks what an interface name looks like, because that rule belongs
+	# to validate_interface and a copy of it here would agree today and drift
+	# the day the validator widens, with the counts disagreeing forever and
+	# nothing to say why.
+	last="$(printf '%s\n' "$out" | tail -n 1)"
+	said="${last#\# owners }"
+	# `said` unchanged means the sentinel is not there: a truncated run, or
+	# something else on stdout after it.
+	[ "$said" = "$last" ] && said=''
+	case "$said" in
+		''|*[!0-9]*) said='' ;;
+	esac
+	# Lines actually delivered, the sentinel excluded.
+	names="$(printf '%s\n' "$out" | sed '$d')"
+	got="$(printf '%s\n' "$out" | wc -l)"
+	got=$((got - 1))
+
+	# How many answers there should be. Section NAMES, unlike option values,
+	# are uci identifiers and survive the trip through the shell intact.
+	want="$(uci -q show "$pkg" | sed -n "s/^$pkg\.\([^.=]*\)=instance\$/\1/p" | wc -l)"
+
+	# "I could not find out who owns these" and "nobody owns these" must never
+	# be the same answer, because this sweep deletes things. Four things have
+	# to line up: the helper exited 0, it framed its output, it delivered as
+	# many lines as the frame declares, and that is one per instance section.
+	# A non-zero status, a run that stopped part way, or anything else landing
+	# on that stdout breaks at least one of them. The block above guarantees a
+	# `main` instance, so a correct answer is never empty either. Anything
+	# short of all four skips the sweep and leaves the stamp at 2 — the next
+	# boot simply tries again.
+	if [ "$rc" = 0 ] && [ -n "$said" ] && [ "$said" -gt 0 ] &&
+	   [ "$said" = "$got" ] && [ "$got" = "$want" ]; then
+		live="$names"
+		# Space-delimited for the membership test below. `tr` rather than word
+		# splitting: an unquoted expansion would also glob, and this list is
+		# about to be matched against, not executed.
+		live=" $(printf '%s' "$live" | tr '\n' ' ') "
+		for typ in rule6 rule; do
+			# Deleting an anonymous section renumbers the ones after it, so the
+			# indices are walked in DESCENDING order: every index still names
+			# the section it named when the list was taken.
+			for idx in $(uci -q show network |
+					sed -n "s/^network\.@$typ\[\([0-9]*\)\]=$typ\$/\1/p" |
+					sort -rn); do
+				sect="network.@$typ[$idx]"
+				[ "$(uci -q get "$sect.protonvpn_managed")" = '1' ] || continue
+				owner="$(uci -q get "$sect.protonvpn_iface")"
+				[ -n "$owner" ] || continue
+				case "$live" in
+					*" $owner "*) continue ;;
+				esac
+				uci -q delete "$sect"
+			done
+		done
+		uci set "$pkg.main.config_version=3"
+	fi
+fi
+
 [ -n "$(uci -q changes "$pkg")" ] && uci commit "$pkg"
 
 exit 0

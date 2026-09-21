@@ -1077,11 +1077,15 @@ function start_apply(instance) {
 }
 
 // Take the tunnel down and pause rotation: tunnel kept down (auto '0'),
-// scheduled rotation stopped, and the managed routing/firewall objects that
-// send traffic through the tunnel released, so the steered networks return to
-// normal networking. IPv6 is the exception: its prohibit rule stays, because
-// a paused instance is not a decision to let IPv6 out to the provider — that
-// is what ipv6_mode 'off' is for. The next apply re-enables everything.
+// scheduled rotation stopped, and every managed routing/firewall object
+// released, so the steered networks return to exactly the state they were in
+// before this instance existed. That includes the IPv6 prohibit, and it has
+// to: the same enforcement hands those networks their normal IPv6 addressing
+// back, so the clients hold a provider address again and a prohibit above the
+// provider's default route would refuse every packet they send — persistently,
+// since netifd rules survive a reboot. `ipv6_mode` 'off' is how a user asks
+// for no IPv6 guard while the instance keeps running; this is the other thing.
+// The next apply re-enables everything.
 function disconnect(uci, instance) {
 	let s = load_settings(uci, instance);
 	let iface = validate_interface(s.interface);

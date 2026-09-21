@@ -145,6 +145,28 @@ function rules6(role, iface) {
 	return out;
 }
 
+// The whole config with the auto-generated names of ANONYMOUS sections
+// dropped. uci hands out a fresh cfgNNNN every time it creates a section, so
+// tearing an instance down and building it again produces identical objects
+// under different names; comparing shapes is what tells "the same
+// configuration" apart from "the same bytes". Named sections keep their name,
+// which is the only thing that says which network a body belongs to.
+function shape() {
+	let out = [];
+	for (let cfg in global.MOCK_UCI) {
+		for (let k in global.MOCK_UCI[cfg]) {
+			let src = global.MOCK_UCI[cfg][k], sec = {};
+			for (let o in src)
+				if (o != '.name')
+					sec[o] = src[o];
+			push(out, cfg + '/' + (src['.anonymous'] ? '@' : k) + ' ' +
+				sprintf('%J', sec));
+		}
+	}
+	sort(out);
+	return out;
+}
+
 // ── 1. the option itself ─────────────────────────────────────────────────
 {
 	eq('ipv6_mode accepts block', _cmn.validate_ipv6_mode('block'), 'block');
@@ -376,7 +398,8 @@ function rules6(role, iface) {
 	ok('ula: and the record with it', global.MOCK_UCI.network.media.protonvpn_saved_ip6assign == null);
 
 	// Disabling the instance gives the addressing back — those sections are
-	// the user's. The v6 prohibit is NOT part of that: see section 12.
+	// the user's. The v6 prohibit goes with it, for the same reason: see
+	// section 12.
 	global.MOCK_UCI = mkall(F_V6);
 	uci = cursor();
 	enforce_routing(uci, ssteer({ ipv6_mode: 'auto' }));
@@ -658,14 +681,25 @@ function rules6(role, iface) {
 	rmdir(cdir);
 }
 
-// ── 12. the prohibit is a kill switch, so it outlives the instance ───────
-// Removing it when the instance goes down is a leak: the steered clients still
-// have IPv6, the lookup is gone, and the next rule they meet is `main` — where
-// the ISP default route lives. 'off' is how a user says "stop guarding IPv6";
-// a disabled instance is not 'off'.
+// ── 12. an explicit Disable hands the steered networks back, whole ───────
+// The v6 prohibit and the ULA addressing are one decision, not two. Once the
+// module gives the ISP GUA back to the clients — releasing `ip6class local`
+// and `delegate 0` and letting RA/DHCPv6 announce the delegation again — it
+// has already decided that IPv6 leaves through the provider. A prohibit left
+// at priority 21000 after that guards nothing (there is no address left to
+// protect) and breaks everything: it refuses every packet from the network
+// before the kernel ever reaches the ISP default route in `main` at 32766.
+// That is broken IPv6, which is worse than no IPv6, and it survives a reboot
+// because netifd rules are persistent uci.
+//
+// So `enabled=0` — the user explicitly switching this instance off — releases
+// the pair. "The tunnel is not up right now" is a DIFFERENT state and does
+// NOT: see section 13, where the instance is still enabled and the guard has
+// to stay.
 {
 	global.MOCK_UCI = mkall(F_V6);
 	let uci = cursor();
+	let pristine = sprintf('%J', global.MOCK_UCI);
 	enforce_routing(uci, ssteer({ ipv6_mode: 'auto' }));
 	eq('disabled: lookup and prohibit are both up while enabled',
 		length(rules6('steer_v6_lookup', 'pv_media')) + length(rules6('steer_v6', 'pv_media')), 2);
@@ -673,21 +707,31 @@ function rules6(role, iface) {
 	enforce_routing(uci, ssteer({ ipv6_mode: 'auto', enabled: false }));
 	eq('disabled: the lookup goes, nothing routes into a dead tunnel',
 		length(rules6('steer_v6_lookup', 'pv_media')), 0);
-	eq('disabled: the prohibit stays, so IPv6 cannot reach the ISP route',
-		length(rules6('steer_v6', 'pv_media')), 1);
-	let stop = rules6('steer_v6', 'pv_media');
-	eq('disabled: and it is still the priority-21000 prohibit',
-		stop[0] ? (stop[0].priority + '/' + stop[0].action) : null, '21000/prohibit');
+	eq('disabled: the prohibit goes too, the clients are back on the ISP route',
+		length(rules6('steer_v6', 'pv_media')), 0);
+	// The addressing release and the rule release follow the same trigger, so
+	// the whole steered network is back where it started — every stamped
+	// object, not just the ones this section names. Comparing the entire
+	// config is what makes "returns everything as it was" checkable: a leftover
+	// anywhere shows up here even if no assertion above mentions it.
+	eq('disabled: the config is back exactly as it was before the instance',
+		sprintf('%J', global.MOCK_UCI), pristine);
 
-	// Same for a disabled instance in plain 'block' mode.
+	// Same for a disabled instance in plain 'block' mode: 'block' is a
+	// statement about an instance that is running, and a switched-off instance
+	// is not running.
 	global.MOCK_UCI = mkall(F_V6);
 	uci = cursor();
+	pristine = sprintf('%J', global.MOCK_UCI);
 	enforce_routing(uci, ssteer({ ipv6_mode: 'block' }));
 	enforce_routing(uci, ssteer({ ipv6_mode: 'block', enabled: false }));
-	eq('disabled: block keeps its prohibit too',
-		length(rules6('steer_v6', 'pv_media')), 1);
+	eq('disabled: block releases its prohibit too',
+		length(rules6('steer_v6', 'pv_media')), 0);
+	eq('disabled: and block leaves nothing behind either',
+		sprintf('%J', global.MOCK_UCI), pristine);
 
-	// 'off' is the one mode that really does take it away, disabled or not.
+	// 'off' still removes it, disabled or not — nothing about this changes
+	// what 'off' means.
 	global.MOCK_UCI = mkall(F_V6);
 	uci = cursor();
 	enforce_routing(uci, ssteer({ ipv6_mode: 'block' }));
@@ -699,23 +743,48 @@ function rules6(role, iface) {
 	// instance no longer has anything to do with.
 	global.MOCK_UCI = mkall(F_V6);
 	uci = cursor();
-	let pristine = sprintf('%J', global.MOCK_UCI);
+	pristine = sprintf('%J', global.MOCK_UCI);
 	enforce_routing(uci, ssteer({ ipv6_mode: 'auto' }));
 	enforce_routing(uci, ssteer({ ipv6_mode: 'auto', source_networks: [] }));
 	eq('un-steering restores the pristine config', sprintf('%J', global.MOCK_UCI), pristine);
 
-	// The real user action behind "disabled" is Disconnect, which is a
+	// Re-enabling has to put all of it back, or "Disable" would be a one-way
+	// door: the guard, the lookup and the addressing the clients need.
+	global.MOCK_UCI = mkall(F_V6);
+	uci = cursor();
+	enforce_routing(uci, ssteer({ ipv6_mode: 'auto' }));
+	let running = shape();
+	enforce_routing(uci, ssteer({ ipv6_mode: 'auto', enabled: false }));
+	enforce_routing(uci, ssteer({ ipv6_mode: 'auto' }));
+	eq('re-enabled: the lookup is back', length(rules6('steer_v6_lookup', 'pv_media')), 1);
+	eq('re-enabled: and so is the prohibit below it',
+		length(rules6('steer_v6', 'pv_media')), 1);
+	let back = v6_state('media');
+	eq('re-enabled: the ULA addressing is back on the clients',
+		[ back.ip6class, back.delegate, back.ra ], [ 'local', '0', 'server' ]);
+	eq('re-enabled: and the whole config matches the running one again',
+		shape(), running);
+
+	// The real user action behind "disabled" is Disable in LuCI, which is a
 	// separate entry point into the same enforcement.
 	global.MOCK_UCI = mkall(F_V6);
 	global.MOCK_UCI.protonvpn = { main: { '.type': 'instance', interface: 'pv_media',
 		enabled: '1', routing_table: '101', ipv6_mode: 'auto', source_network: [ 'media' ] } };
 	uci = cursor();
+	let before_disconnect = sprintf('%J', global.MOCK_UCI.network);
 	enforce_routing(uci, _cmn.load_settings(uci));
 	_apply.disconnect(uci, 'main');
 	eq('disconnect: the lookup is withdrawn',
 		length(rules6('steer_v6_lookup', 'pv_media')), 0);
-	eq('disconnect: the prohibit survives the disconnect',
-		length(rules6('steer_v6', 'pv_media')), 1);
+	eq('disconnect: and the prohibit is released with it',
+		length(rules6('steer_v6', 'pv_media')), 0);
+	// disconnect() also sets `auto 0` on the tunnel interface, which is its
+	// own doing and not part of what the steered network gets back; everything
+	// else has to be untouched.
+	let after = global.MOCK_UCI.network;
+	delete after.pv_media.auto;
+	eq('disconnect: the network config is back as it was',
+		sprintf('%J', after), before_disconnect);
 }
 
 // ── 13. a tunnel that is not there is not a reason to unguard IPv6 ───────
