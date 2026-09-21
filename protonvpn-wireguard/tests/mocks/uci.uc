@@ -55,9 +55,20 @@
 
 'use strict';
 
+import { readfile } from 'fs';
+
+// A spawned interpreter has no global to seed, so PROTONVPN_MOCK_UCI may name
+// a JSON file holding the same shape. This is transport, not semantics: it is
+// how a test hands a CHILD process the very config it is asserting about,
+// which is what lets the migration's `ucode -e` helper be driven against the
+// real modules. Consulted only when nothing has seeded the global already, so
+// an in-process suite behaves exactly as before.
 function store() {
-	if (!global.MOCK_UCI)
-		global.MOCK_UCI = {};
+	if (!global.MOCK_UCI) {
+		let f = getenv('PROTONVPN_MOCK_UCI');
+		let raw = f ? readfile(f) : null;
+		global.MOCK_UCI = raw ? json(raw) : {};
+	}
 	return global.MOCK_UCI;
 }
 

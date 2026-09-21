@@ -20,7 +20,24 @@
 # first file whose name occurs in the requested URL wins; a request matching
 # none of them fails the way an unreachable host does, which is what lets a
 # test fail exactly one of the two sources.
+#
+# Whatever arrives on --config is copied to $PROTONVPN_RUN_DIR/curl-config
+# before anything else, on EVERY call including the ones that fail. That file
+# is a line-oriented curl config built by string concatenation in api.uc, so
+# it is the one place a test can see what was actually sent — and the one
+# place a value carrying a newline or a quote would show up as an extra curl
+# option rather than as part of a header.
 resp="${PROTONVPN_RUN_DIR:-/tmp}/curl-response"
+
+cfg=''
+prev=''
+for a in "$@"; do
+	[ "$prev" = "--config" ] && cfg="$a"
+	prev="$a"
+done
+# The config arrives on a pipe fd, so this read consumes it exactly as the
+# real curl would.
+[ -n "$cfg" ] && cat "$cfg" > "${PROTONVPN_RUN_DIR:-/tmp}/curl-config" 2>/dev/null
 
 # The URL is the last argument api_call() pushes onto the curl command line.
 url=''
@@ -42,11 +59,22 @@ fi
 
 code=$(sed -n '1p' "$resp")
 out=''
+wflag=''
 prev=''
 for a in "$@"; do
 	[ "$prev" = "-o" ] && out="$a"
+	[ "$a" = "-w" ] && wflag=1
 	prev="$a"
 done
+
+# Real curl prints the status only when asked for it with -w. api_call()
+# always asks; the external-IP probe in rpcd does not, and appending a status
+# to ITS output would be this stub inventing bytes the device never sends —
+# exactly the kind of divergence that hides a defect instead of catching one.
+if [ -z "$wflag" ]; then
+	tail -n +2 "$resp"
+	exit 0
+fi
 
 if [ -n "$out" ]; then
 	tail -n +2 "$resp" > "$out"

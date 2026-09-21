@@ -6,7 +6,7 @@
 
 'use strict';
 
-import { open, unlink } from 'fs';
+import { open, unlink, readfile } from 'fs';
 
 let ok = true;
 function check(label, cond) {
@@ -298,6 +298,80 @@ check('a successful call logs no failure',
 
 global.warn = real_warn;
 unlink(resp);
+// ── the curl config is line-oriented, so what goes into it must be one line ──
+//
+// api_call() builds curl's --config by string concatenation:
+//     header = "x-pm-uid: <uid>"
+//     header = "Authorization: Bearer <token>"
+// curl reads that file one OPTION PER LINE and the value is a quoted field.
+// The uid and the access token are opaque strings taken verbatim out of
+// Proton's JSON and stored, so nothing about them is this package's to
+// invent — but a newline in one is a second curl option, and a double quote
+// closes the field and lets the rest of the value be read as options. Either
+// turns a credential into control of the request, so both are refused before
+// the request is built rather than trusted because of where they came from.
+//
+// This is the same defect as the two blockers of this round: the guard has to
+// be on the PATH the value travels, not merely somewhere in the file.
+{
+	const cfgfile = getenv('PROTONVPN_RUN_DIR') + '/curl-config';
+	const poison = [
+		{ what: 'a newline in the uid',
+		  sess: { uid: 'u\noutput = /tmp/pv-pwned', access_token: 'a' } },
+		{ what: 'a newline in the access token',
+		  sess: { uid: 'u', access_token: 'a\noutput = /tmp/pv-pwned' } },
+		{ what: 'a quote in the uid',
+		  sess: { uid: 'u"\noutput = /tmp/pv-pwned', access_token: 'a' } },
+		{ what: 'a quote in the access token',
+		  sess: { uid: 'u', access_token: 'a"\noutput = /tmp/pv-pwned' } },
+		// Not a literal newline: the two characters backslash and n, which
+		// curl's config parser unescapes INTO one. See test_curlconfig.uc,
+		// where real curl is asked what it does with these.
+		{ what: 'an escaped newline in the uid',
+		  sess: { uid: 'u\\noutput = /tmp/pv-pwned', access_token: 'a' } },
+		{ what: 'an escaped newline in the access token',
+		  sess: { uid: 'u', access_token: 'a\\noutput = /tmp/pv-pwned' } },
+		{ what: 'a trailing backslash in the uid',
+		  sess: { uid: 'u\\', access_token: 'a' } },
+		{ what: 'a NUL in the access token',
+		  sess: { uid: 'u', access_token: 'a' + chr(0) + 'output = /tmp/pv-pwned' } }
+	];
+	for (let p in poison) {
+		unlink(cfgfile);
+		api.session_store({ uid: p.sess.uid, access_token: p.sess.access_token,
+			refresh_token: 'r', access_expires_at: time() + 1800,
+			session_expires_at: time() + 86400, scope: 'vpn', twofa: false });
+		// A session whose credentials cannot travel safely is not a usable
+		// session: the user is asked to sign in again, which is recoverable.
+		check(p.what + ' makes the session unusable', api.session_load() == null);
+		check(p.what + ' produces no auth headers', api.auth_headers() == null);
+
+		// ...and the sink refuses independently, so a future caller that
+		// builds a request some other way cannot reintroduce it.
+		stub_response(200, { Code: 1000 });
+		api.api_call({ url: 'https://api.protonvpn.ch/tests',
+			uid: p.sess.uid, token: p.sess.access_token });
+		let cfg = readfile(cfgfile) || '';
+		check(p.what + ' never reaches the curl config',
+			index(cfg, 'output = /tmp/pv-pwned') < 0);
+	}
+	unlink(cfgfile);
+	unlink(resp);
+
+	// The ordinary case still works: a clean session is sent, and the headers
+	// really are in that config — otherwise the checks above would pass by
+	// the config being empty.
+	seed_session();
+	stub_response(200, { Code: 1000 });
+	api.api_call({ url: 'https://api.protonvpn.ch/tests',
+		uid: 'UID-SECRET', token: ACCESS });
+	let good = readfile(cfgfile) || '';
+	check('a clean uid is sent', index(good, 'x-pm-uid: UID-SECRET') >= 0);
+	check('and so is a clean token', index(good, 'Bearer ' + ACCESS) >= 0);
+	unlink(cfgfile);
+	unlink(resp);
+}
+
 api.session_store(null);
 
 exit(ok ? 0 : 1);

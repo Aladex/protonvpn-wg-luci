@@ -117,6 +117,73 @@ const DIR_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 // Coerce to an int within [min, max], else null. Only numbers and numeric
 // strings are accepted: int() happily turns a bool, an array or a garbage
 // string into 0, which would silently pass a bounds check that spans zero.
+// A string that is ONE line, which is the precondition every anchored shape
+// test below silently assumes.
+//
+// ucode compiles regexes with REG_NEWLINE, so `^` and `$` match LINE
+// boundaries rather than string boundaries. An anchored test therefore only
+// says "SOME line of this value has the right shape", and the validator hands
+// back the WHOLE value — so `pv_home\njunk` passes an interface-name test and
+// becomes an interface name with a newline in it. api.uc's app_version() has
+// carried this guard on its own since a multiline override could inject
+// options into the curl config it is concatenated into; the validators here
+// feed the same kinds of places. `validate_routing_table` names a table
+// written into /etc/iproute2/rt_tables, where a second line is a second
+// table; `validate_interface` names the interface every stamped routing and
+// firewall object is tagged with, and a name that is two lines is two
+// different answers to "who owns this" depending on who asks.
+//
+// CR is refused alongside LF so the predicate means what its name says, and
+// to match the guard api.uc already carries. It changes no outcome for the
+// validators below — none of their character classes admit CR, so the shape
+// test rejects it on its own — and a mutation run will not be able to tell
+// this clause from its absence. It is here for the next caller, not for
+// today's.
+//
+// Once the value is a single line the anchors do constrain every character of
+// it, so this is the only thing the shape tests were missing.
+function one_line(v) {
+	return type(v) == 'string' && index(v, '\n') < 0 && index(v, '\r') < 0;
+}
+
+// A value safe to interpolate into a QUOTED field of curl's --config, which
+// is where every Proton header this package sends ends up (api_call builds
+// that file by concatenation, one option per line, values in double quotes).
+//
+// On the SINK's terms, and the sink is a parser with rules of its own —
+// measured against curl 8.x rather than assumed, because assuming is how the
+// backslash case below got shipped:
+//
+//   \n \r \t   are UNESCAPED to a real LF, CR and TAB. This is the one that
+//               matters: a stored token holding the two ordinary characters
+//               backslash and n leaves curl as a line feed, which ends the
+//               header and starts whatever followed it as another one — a
+//               header nobody asked to send, on an authenticated request,
+//               and curl reports success.
+//   \\         becomes a single backslash.
+//   \<other>   an UNKNOWN escape drops the backslash and keeps the letter,
+//               so the value that arrives is not the value that was stored.
+//   \ at end   a backslash against the closing quote makes that quote
+//               literal, so the field swallows the rest of the line.
+//   "          closes the field, and the remainder is read as options.
+//   LF CR      end the line, so what follows is another option.
+//   NUL        makes curl stop reading the config THERE. Everything below is
+//               silently dropped — in api_call that is the Authorization
+//               header, or the request body, gone without a word.
+//
+// Refused rather than escaped, deliberately. An encoder would be a second
+// implementation of the rules above, and they have corners (an unknown escape
+// swallows its backslash; a trailing backslash eats the closing quote) that a
+// second implementation gets to be wrong about — the same second-definition
+// hazard this module has been bitten by before. Proton's uid and access token
+// have never carried a backslash or a NUL, a credential that did could not
+// travel through this format without an encoder anyway, and a refused session
+// is recoverable: the user is asked to sign in again.
+function safe_header_value(v) {
+	return one_line(v) && index(v, '"') < 0 &&
+		index(v, '\\') < 0 && index(v, chr(0)) < 0;
+}
+
 function bounded_int(v, min, max) {
 	let n;
 	let t = type(v);
@@ -125,7 +192,7 @@ function bounded_int(v, min, max) {
 	} else if (t == 'double') {
 		n = int(v);
 	} else if (t == 'string') {
-		if (!match(v, /^-?[0-9]+$/))
+		if (!one_line(v) || !match(v, /^-?[0-9]+$/))
 			return null;
 		n = int(v);
 	} else {
@@ -138,9 +205,28 @@ function bounded_int(v, min, max) {
 
 // Interface name: 1-15 chars, alnum/underscore.
 function validate_interface(name) {
-	if (type(name) != 'string' || length(name) < 1 || length(name) > 15)
+	if (!one_line(name) || length(name) < 1 || length(name) > 15)
 		return null;
 	return match(name, /^[A-Za-z0-9_]+$/) ? name : null;
+}
+
+// The interface an instance OWNS, from the raw `interface` option: the name
+// every stamped routing/firewall object is tagged with, and the name netifd
+// knows the tunnel by. A value validate_interface refuses is not an error the
+// user is stopped on — the option is simply not honoured and the instance
+// falls back to the default name — so the raw option and the owned name are
+// not the same string, and anything that reasons about ownership has to ask
+// for the second.
+//
+// This is the ONLY place that conversion lives. load_settings() below reads
+// the option through it, and so does the uci-defaults migration, which shells
+// out to `ucode -e` rather than reimplementing the rule: the migration decides
+// what is an orphan by this name, and a second copy of the rule would be one
+// edit to validate_interface away from calling a live instance's objects
+// orphaned — starting with its IPv6 prohibit, which is a leak.
+function instance_interface(raw) {
+	let want = (raw == null || raw == '') ? DEFAULT_INTERFACE : raw;
+	return validate_interface(want) || DEFAULT_INTERFACE;
 }
 
 // WireGuard key: 44 chars, base64 with '=' padding (char-by-char, no regex).
@@ -157,7 +243,7 @@ function validate_wg_key(k) {
 
 // Hostname: 1-253 chars of the usual DNS-safe set.
 function validate_hostname(h) {
-	if (type(h) != 'string' || length(h) < 1 || length(h) > 253)
+	if (!one_line(h) || length(h) < 1 || length(h) > 253)
 		return null;
 	return match(h, /^[A-Za-z0-9._:-]+$/) ? h : null;
 }
@@ -195,26 +281,26 @@ function validate_interval(v) {
 
 // "HH:MM" 24-hour local time.
 function validate_time(s) {
-	return (type(s) == 'string' && match(s, /^([01][0-9]|2[0-3]):[0-5][0-9]$/)) ? s : null;
+	return (one_line(s) && match(s, /^([01][0-9]|2[0-3]):[0-5][0-9]$/)) ? s : null;
 }
 
 // Two-letter country code, normalized to lowercase.
 function validate_country_code(c) {
-	if (type(c) != 'string' || !match(c, /^[A-Za-z]{2}$/))
+	if (!one_line(c) || !match(c, /^[A-Za-z]{2}$/))
 		return null;
 	return lc(c);
 }
 
 // Location slug like "nl-amsterdam".
 function validate_location_code(c) {
-	if (type(c) != 'string' || !match(c, /^[A-Za-z0-9-]+$/))
+	if (!one_line(c) || !match(c, /^[A-Za-z0-9-]+$/))
 		return null;
 	return lc(c);
 }
 
 // Instance name: 1-32 chars, alnum/underscore.
 function validate_instance(n) {
-	if (type(n) != 'string' || length(n) < 1 || length(n) > 32)
+	if (!one_line(n) || length(n) < 1 || length(n) > 32)
 		return null;
 	return match(n, /^[A-Za-z0-9_]+$/) ? n : null;
 }
@@ -223,7 +309,7 @@ function validate_instance(n) {
 function validate_routing_table(t) {
 	if (t == null || t == '')
 		return '';
-	if (type(t) != 'string')
+	if (!one_line(t))
 		return null;
 	return match(t, /^[A-Za-z0-9_]+$/) ? t : null;
 }
@@ -268,7 +354,12 @@ function iface_ipv6_capable(uci, iface) {
 	if (raw == null)
 		return false;
 	let v = '' + raw;
-	if (!match(v, /^[0-9]+$/))
+	// one_line() first: `^[0-9]+$` matches a LINE under REG_NEWLINE, so a
+	// malformed multiline stamp whose first line happens to be a number with
+	// the bit set would read as capable — and enable the v6 lookup into a
+	// gateway that may drop it, which is exactly the black hole the paragraph
+	// above says this reads closed to avoid.
+	if (!one_line(v) || !match(v, /^[0-9]+$/))
 		return false;
 	return (int(v) & FEATURE_IPV6) ? true : false;
 }
@@ -281,7 +372,8 @@ function relay_ipv6_capable(r) {
 	if (type(r) != 'object')
 		return false;
 	let f = r.features;
-	if (type(f) == 'string' && match(f, /^[0-9]+$/))
+	// Same anchored-test trap as iface_ipv6_capable, on the cache side.
+	if (type(f) == 'string' && one_line(f) && match(f, /^[0-9]+$/))
 		f = int(f);
 	if (type(f) != 'int')
 		return false;
@@ -431,8 +523,15 @@ function load_settings(uci, instance) {
 		source_networks: source_networks,
 		locations: locations,
 		enabled: g('enabled', '0') == '1',
-		interface: validate_interface(g('interface', DEFAULT_INTERFACE)) || DEFAULT_INTERFACE,
-		routing_table: g('routing_table', ''),
+		interface: instance_interface(g('interface', null)),
+		// Through the validator, not raw. This value is written into
+		// /etc/iproute2/rt_tables one line at a time (ensure_rt_table), so a
+		// multiline one is a second table entry there, under an id nothing
+		// allocated and a name nothing will clean up. A refused value reads
+		// as "no custom table", which is the same thing an absent option
+		// means: the instance is then not set up for steering and the page
+		// says so, rather than the backend quietly writing a poisoned file.
+		routing_table: validate_routing_table(g('routing_table', '')) || '',
 		// Optional WireGuard interface MTU override; null = keep the netifd
 		// default (1420). Clamped to the valid Ethernet/IPv6 range.
 		mtu: (function() {
@@ -597,7 +696,8 @@ return {
 	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,
 	WATCHDOG_GRACE, WATCHDOG_COOLDOWN_BASE, WATCHDOG_COOLDOWN_MAX,
 	SESSION_MAX_AGE, SESSION_REFRESH_AGE, CERT_MAX_DAYS, CERT_RENEW_DAYS, CERT_SESSION_DAYS,
-	bounded_int, validate_interface, validate_wg_key, validate_hostname,
+	bounded_int, one_line, safe_header_value,
+	validate_interface, instance_interface, validate_wg_key, validate_hostname,
 	FEATURE_SECURE_CORE, FEATURE_TOR, FEATURE_P2P, FEATURE_STREAMING, FEATURE_IPV6,
 	validate_port, validate_hop_mode, validate_dns_mode, validate_ipv6_mode, relay_kind,
 	iface_ipv6_capable, relay_ipv6_capable, require_ipv6_active,

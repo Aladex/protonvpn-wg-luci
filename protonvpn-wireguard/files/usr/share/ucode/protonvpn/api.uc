@@ -30,6 +30,7 @@ const API_BASE = _common.API_BASE,
       release_lock = _common.release_lock,
       log = _common.log,
       sh_quote = _common.sh_quote,
+      safe_header_value = _common.safe_header_value,
       SESSION_MAX_AGE = _common.SESSION_MAX_AGE,
       CERT_MAX_DAYS = _common.CERT_MAX_DAYS,
       CERT_SESSION_DAYS = _common.CERT_SESSION_DAYS;
@@ -186,6 +187,21 @@ function api_call(opts) {
 		conf += 'header = "Accept: application/vnd.protonmail.v1+json"\n';
 	}
 	if (opts.token && opts.uid) {
+		// The sink's own guard. This file is read one option per line with
+		// the value in a quoted field, so a newline or a quote in a
+		// credential is not a malformed header, it is an extra curl option.
+		// Checked here as well as at session_load() because this is the last
+		// step before the file, and "the caller already checked" is how a
+		// value reaches a sink unchecked.
+		if (!_common.safe_header_value('' + opts.uid) ||
+		    !_common.safe_header_value('' + opts.token)) {
+			w.close();
+			r.close();
+			if (br) br.close();
+			if (bw) bw.close();
+			return { code: 0, data: null, raw: '',
+				error: 'the stored session credentials are malformed' };
+		}
 		conf += 'header = "x-pm-uid: ' + opts.uid + '"\n';
 		conf += 'header = "Authorization: Bearer ' + opts.token + '"\n';
 	}
@@ -477,6 +493,13 @@ function session_load() {
 		return null;
 	}
 	if (type(s) != 'object' || !s.uid || !s.access_token || !s.refresh_token)
+		return null;
+	// The uid and access token are concatenated into curl's line-oriented
+	// --config on every authenticated call, so a stored session carrying a
+	// newline or a quote in either is not one this package can use. Reading
+	// it as "no session" asks the user to sign in again, which is
+	// recoverable; sending it would let the value steer curl.
+	if (!safe_header_value('' + s.uid) || !safe_header_value('' + s.access_token))
 		return null;
 	// Migrate the single `expires_at` written before access and session
 	// horizons were split apart.
