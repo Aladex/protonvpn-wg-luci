@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=protonvpn-wireguard
-PKG_VERSION:=0.7.4
+PKG_VERSION:=0.7.5
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Andrey Aleksandrov <aladex@gmail.com>
 PKG_LICENSE:=MIT
