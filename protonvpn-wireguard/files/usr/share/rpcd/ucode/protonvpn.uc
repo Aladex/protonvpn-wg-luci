@@ -290,25 +290,35 @@ methods.account = {
 // whether a session exists, when it expires and what the user must do next.
 methods.session_state = {
 	call: function(request) {
+		// The client version this package stamps, on a call the page already
+		// makes when it loads. It is the label on the "built into the package"
+		// option, so without it here the page can only offer that option
+		// unnamed until somebody presses Fetch — a network round trip to read
+		// a label. Cheap: a constant, no I/O.
+		let builtin = _api.builtin_app_version();
 		let s = _api.session_load();
 		if (!s)
-			return { state: 'no_session', action_required: 're_login' };
+			return { state: 'no_session', action_required: 're_login',
+				app_version_builtin: builtin };
 		let now = time();
 		if (s.twofa)
 			return { state: 'needs_2fa', action_required: 'totp',
-				session_expires_at: s.session_expires_at };
+				session_expires_at: s.session_expires_at,
+				app_version_builtin: builtin };
 		// Only the SESSION horizon (the ~30-day refresh token) can force a
 		// re-login. The access token lives 30 minutes and the daemon rotates it
 		// silently, so its expiry must never surface as "please log in again".
 		if (s.session_expires_at && s.session_expires_at <= now)
 			return { state: 'expired', action_required: 're_login',
-				session_expires_at: s.session_expires_at };
+				session_expires_at: s.session_expires_at,
+				app_version_builtin: builtin };
 		return {
 			state: 'active', action_required: null,
 			session_expires_at: s.session_expires_at,
 			access_expires_at: s.access_expires_at,
 			access_stale: _api.access_token_stale(s, now),
-			scope: s.scope || ''
+			scope: s.scope || '',
+			app_version_builtin: builtin
 		};
 	}
 };

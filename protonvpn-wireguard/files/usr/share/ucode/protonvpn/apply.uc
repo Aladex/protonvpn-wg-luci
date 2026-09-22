@@ -14,6 +14,17 @@ import { rand, srand } from 'math';
 import { readfile, unlink, chmod, mkdir, stat } from 'fs';
 import { cursor } from 'uci';
 const _common = require('protonvpn.common');
+
+// Seconds given to any `ubus` call. ubus bounds itself with -t, which is the
+// only bound available here: stock OpenWrt has no `timeout` binary, no busybox
+// timeout applet, and this package declares no coreutils-timeout — a previous
+// attempt wrapped the probe in `timeout` and was inert on the router while the
+// suite, running on a machine that has GNU timeout, stayed green.
+//
+// Every call, not just the readiness probe: a wedged ubusd otherwise hangs an
+// apply, the rpcd request behind it and the page in front of that, with no
+// bound anywhere on the path.
+const UBUS_TIMEOUT_S = '5';
 const FIXED_ADDRESS = _common.FIXED_ADDRESS,
       FIXED_ADDRESS6 = _common.FIXED_ADDRESS6,
       DEFAULT_PORT = _common.DEFAULT_PORT,
@@ -29,7 +40,8 @@ const FIXED_ADDRESS = _common.FIXED_ADDRESS,
       validate_wg_key = _common.validate_wg_key,
       iso_ts = _common.iso_ts,
       log = _common.log,
-      run = _common.run;
+      run = _common.run,
+      run_ip = _common.run_ip;
 const read_cache = require('protonvpn.cache').read_cache;
 const _select = require('protonvpn.select');
 const selection_report = _select.selection_report,
@@ -454,6 +466,32 @@ function write_relay(uci, iface, relay, s) {
 	// Nord's 10.5.0.2, unlike Mullvad's per-device addresses).
 	uci.set('network', iface, 'addresses', [ FIXED_ADDRESS, FIXED_ADDRESS6 ]);
 
+	// Both families go into the instance's own table, which is what makes the
+	// tunnel's ::/0 route steerable instead of swallowing the whole router.
+	//
+	// KNOWN, and deliberately left as it is: netifd also installs a source
+	// rule per table — `from <the interface's address> lookup <table>` at
+	// priority 10000 — and the IPv6 address above is the SAME fixed /128 on
+	// every instance, because that is what Proton assigns. With several
+	// instances those rules are identical in their selector and differ only in
+	// the table, so only the first one installed can ever match.
+	//
+	// What that costs, precisely: forwarded client traffic is unaffected,
+	// because it is matched by the `in <network>` rules at priority 20000
+	// (reconcile_ipv6_rules), which name the incoming network and are distinct
+	// per instance. The casualty is IPv6 the ROUTER itself originates from the
+	// tunnel address — in practice its queries to the in-tunnel resolver — for
+	// every instance after the first: they take the first instance's table and
+	// therefore leave through its exit rather than their own. Wrong country,
+	// right answer, and nothing user-visible says so.
+	//
+	// Not fixable here. There is nothing in the selector to tell the instances
+	// apart: same source address, and a rule cannot match on an output device
+	// the kernel has not chosen yet at the time rules are evaluated. Dropping
+	// ip6table would be worse — the ::/0 route would land in the main table and
+	// send all of the router's IPv6 into one arbitrary tunnel. It is fixed the
+	// day Proton hands out per-client addresses, and test_v6_switch.uc pins the
+	// shape so that day is noticed.
 	if (s.routing_table && s.routing_table != '') {
 		uci.set('network', iface, 'ip4table', s.routing_table);
 		uci.set('network', iface, 'ip6table', s.routing_table);
@@ -564,6 +602,47 @@ function connect_one(uci, iface, relay, s) {
 // Reconcile the IPv6 rules with the gateway that is NOW on the interface, and
 // make netifd apply the delta.
 //
+// Commit what enforce_routing() changed and make it take effect.
+//
+// Three call sites did this identically — apply, disconnect and delete — and
+// the fourth step below is the one that has to reach all three, so they share
+// one function rather than three copies to keep in step.
+//
+// Order matters and is the whole point of the last step. `ubus call network
+// reload` returns once netifd has ACCEPTED the configuration, not once the
+// interfaces carry it, so the odhcpd reload that used to follow it
+// immediately could re-initialise against the old prefix — and the corrected
+// advertisement then waited for the next scheduled one, up to ten minutes
+// away. ra_refresh() waits (bounded) for netifd to actually report the new
+// addressing before asking odhcpd to advertise, in both directions: without
+// it on release, clients keep a ULA that no longer routes anywhere.
+function commit_routing(uci, routing, iface) {
+	if (routing.changed_firewall) {
+		uci.commit('firewall');
+		run([ '/etc/init.d/firewall', 'reload' ]);
+	}
+	if (routing.changed_network) {
+		uci.commit('network');
+		// Steering/prohibit rules are plain netifd config; a reload makes
+		// netifd apply the delta (unchanged interfaces are left alone).
+		run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+	}
+	if (routing.changed_dhcp) {
+		uci.commit('dhcp');
+		// Only odhcpd's router-advertisement options are ever touched here, so
+		// reload that rather than restart dnsmasq and drop its DNS cache.
+		run([ '/etc/init.d/odhcpd', 'reload' ]);
+	}
+	if (routing.changed_network || routing.changed_firewall)
+		// Committing deletions invalidates the cursor's section iteration
+		// state (find_peer silently missed sections) — start fresh.
+		uci = cursor();
+	// Tell the clients now rather than at odhcpd's next unsolicited round.
+	if (_routing.ra_refresh(uci, iface, routing.v6_ra || [], routing.notes))
+		uci.commit('network');
+	return uci;
+}
+
 // Load-bearing ordering: enforce_routing runs at the top of an apply, before
 // any peer is written, so it can only judge the gateway being left behind.
 // Whether IPv6 may be routed at all is a property of the gateway, so applying
@@ -578,7 +657,7 @@ function settle_ipv6(uci, s) {
 	uci.commit('network');
 	// Plain netifd rules; a reload applies the delta and leaves the interface
 	// that was just brought up alone.
-	run([ 'ubus', 'call', 'network', 'reload' ]);
+	run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
 }
 
 // The half of the teardown the user does not expect. Taking the tunnel down
@@ -692,12 +771,12 @@ function restore_wan_default() {
 	// after an immediate check passes, so probe a few times.
 	for (let attempt = 0; attempt < 3; attempt++) {
 		run([ 'sleep', '2' ]);
-		let r = run([ 'ip', '-4', 'route', 'show', 'default' ]);
+		let r = run_ip([ '-4', 'route', 'show', 'default' ]);
 		if (r.code != 0)
 			return false;
 		if (length(trim(r.stdout || '')) > 0)
 			continue;
-		let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+		let d = run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network.interface', 'dump' ]);
 		if (d.code != 0)
 			return false;
 		let data;
@@ -711,7 +790,7 @@ function restore_wan_default() {
 				continue;
 			for (let rt in (ifc.route || [])) {
 				if (rt.target == '0.0.0.0' && rt.mask == 0 && rt.nexthop && rt.nexthop != '0.0.0.0') {
-					let res = run([ 'ip', 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
+					let res = run_ip([ 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
 					if (res.code != 0)
 						return false;
 					// Only claim success once the route really went in.
@@ -748,6 +827,7 @@ function apply_inner(uci, instance) {
 	if (!cache)
 		return { state: 'failure', error: 'server list not available; refresh the cache first' };
 
+
 	// Applying implies the user wants the instance on — undo a disable, both
 	// in the config and in the already-loaded settings the enforcement uses.
 	if (!s.enabled) {
@@ -759,27 +839,7 @@ function apply_inner(uci, instance) {
 	// Reconcile the managed routing/firewall objects with the settings. Only
 	// stamped objects are ever touched; a detected manual scheme is left alone.
 	let routing = enforce_routing(uci, s);
-	if (routing.changed_firewall) {
-		uci.commit('firewall');
-		run([ '/etc/init.d/firewall', 'reload' ]);
-	}
-	if (routing.changed_network) {
-		uci.commit('network');
-		// Steering/prohibit rules are plain netifd config; a reload makes
-		// netifd apply the delta (unchanged interfaces are left alone).
-		run([ 'ubus', 'call', 'network', 'reload' ]);
-	}
-	if (routing.changed_dhcp) {
-		uci.commit('dhcp');
-		// Only odhcpd's router-advertisement options are ever touched here, so
-		// reload that rather than restart dnsmasq and drop its DNS cache.
-		run([ '/etc/init.d/odhcpd', 'reload' ]);
-	}
-	if (routing.changed_network || routing.changed_firewall) {
-		// Committing deletions invalidates the cursor's section iteration
-		// state (find_peer silently missed sections) — start fresh.
-		uci = cursor();
-	}
+	uci = commit_routing(uci, routing, iface);
 	for (let note in routing.notes)
 		_common.log('routing: ' + note);
 
@@ -1096,22 +1156,7 @@ function disconnect(uci, instance) {
 
 	s.enabled = false;
 	let routing = enforce_routing(uci, s);
-	if (routing.changed_firewall) {
-		uci.commit('firewall');
-		run([ '/etc/init.d/firewall', 'reload' ]);
-	}
-	if (routing.changed_network) {
-		uci.commit('network');
-		run([ 'ubus', 'call', 'network', 'reload' ]);
-	}
-	if (routing.changed_dhcp) {
-		uci.commit('dhcp');
-		// Only odhcpd's router-advertisement options are ever touched here, so
-		// reload that rather than restart dnsmasq and drop its DNS cache.
-		run([ '/etc/init.d/odhcpd', 'reload' ]);
-	}
-	if (routing.changed_network || routing.changed_firewall)
-		uci = cursor();
+	uci = commit_routing(uci, routing, iface);
 
 	if (uci.get('network', iface) != null) {
 		uci.set('network', iface, 'auto', '0');
@@ -1207,22 +1252,7 @@ function delete_instance(uci, name) {
 	s.vpn_dns = 'off';
 	s.source_networks = [];
 	let routing = enforce_routing(uci, s);
-	if (routing.changed_firewall) {
-		uci.commit('firewall');
-		run([ '/etc/init.d/firewall', 'reload' ]);
-	}
-	if (routing.changed_network) {
-		uci.commit('network');
-		run([ 'ubus', 'call', 'network', 'reload' ]);
-	}
-	if (routing.changed_dhcp) {
-		uci.commit('dhcp');
-		// Only odhcpd's router-advertisement options are ever touched here, so
-		// reload that rather than restart dnsmasq and drop its DNS cache.
-		run([ '/etc/init.d/odhcpd', 'reload' ]);
-	}
-	if (routing.changed_network || routing.changed_firewall)
-		uci = cursor(); // see apply(): committed deletions break iteration
+	uci = commit_routing(uci, routing, iface);
 
 	retire_certificate(name);
 	forget_cert_state(name);

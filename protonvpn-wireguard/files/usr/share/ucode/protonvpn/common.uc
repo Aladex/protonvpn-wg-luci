@@ -683,6 +683,39 @@ function run(argv) {
 	return { code: code, stdout: out };
 }
 
+// Run `ip` with the given arguments, reporting its absence once.
+//
+// `ip` is a declared dependency (see the Makefile), and on the router this was
+// written for busybox has no ip applet, so /usr/bin/ip from iproute2 is the
+// only one there is. A package can still be force-installed onto an image
+// without it, or `ip` removed afterwards, and until this wrapper every call
+// site turned "not installed" into an ordinary negative answer: no IPv6
+// default route on the WAN, no WAN MTU, no pinned routes to mirror, no WAN
+// default route to put back. Every one of those is a plausible answer, so five
+// features degraded at once and nothing said why.
+//
+// 127 is the shell's "command not found" and popen runs the argv through a
+// shell, so the number is defined by the thing actually producing it — unlike
+// a timeout status, which no shell defines. Nothing BRANCHES on it either:
+// callers get exactly the result they got before, and it only decides whether
+// to speak. Once per process: a missing dependency is one fact, and repeating
+// it per probe would bury the log the user has to read.
+let ip_reported = false;
+function run_ip(argv) {
+	let full = [ 'ip' ];
+	for (let a in argv)
+		push(full, a);
+	let r = run(full);
+	if (r.code == 127 && !ip_reported) {
+		ip_reported = true;
+		log('`ip` is not installed, so IPv6 leak detection, MTU advice, ' +
+			'pinned-route mirroring and WAN default-route recovery cannot ' +
+			'run. Install ip-tiny or ip-full (this package depends on `ip`; ' +
+			'busybox is usually built without the applet).');
+	}
+	return r;
+}
+
 // CommonJS export (ucode on OpenWrt 24.10 does not support ES `export`).
 return {
 	VERSION, API_BASE, LOGICALS_URL, CERT_URL,
@@ -705,5 +738,5 @@ return {
 	validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,
 	load_settings, list_instances, globals_section, cache_file_path, iso_ts, redact, log,
-	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run
+	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run, run_ip
 };

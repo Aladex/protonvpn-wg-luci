@@ -1,0 +1,79 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Test stub for `ubus`, which does not exist off-device.
+#
+# By default it fails, like the missing command it stands in for — that is the
+# degraded path most of the suite exercises, where routing.uc has to cope with
+# no ubus at all.
+#
+# A test that needs netifd to report something writes ubus-netifd.json in the
+# state directory: a map of network name to the list of IPv6 addresses netifd
+# should say that network has. Only `call network.interface.<net> status` is
+# answered; anything else still fails, so a new call site cannot quietly start
+# depending on this stub.
+state="${PROTONVPN_STATE_DIR:-/tmp/protonvpn-test-state}"
+fixture="$state/ubus-netifd.json"
+
+# ubus bounds itself: `ubus -t <secs> call ...`. Honoured here, because that
+# bound is the thing under test — the production code hands it the time it has
+# left and decides "wedged" from how long the call actually took.
+tmo=
+if [ "$1" = "-t" ]; then
+	tmo="$2"
+	shift 2
+fi
+
+# A wedged ubus: the answer takes this many seconds to come back, or does not
+# come back before the caller gives up on it.
+#
+# THE DELAY HERE MUST BE REAL. There is a `sleep` stub on PATH in this suite
+# that returns instantly, which is what makes the rest of the suite fast — and
+# it once turned the slow-probe test into a false pass: the suite went green
+# while the property it was there to prove had stopped being tested. So this
+# deliberately does NOT go through PATH; it calls sleep by absolute path. If
+# you are speeding this suite up, leave it alone: a timing test whose delay can
+# be stubbed away is not a timing test.
+if [ -f "$state/ubus-wedge-s" ]; then
+	secs=$(cat "$state/ubus-wedge-s")
+	# Emulate ubus's own -t: it gives up after that many seconds rather than
+	# hanging for the whole wedge. Whatever the real ubus exits with in that
+	# case, the production code decides "wedged" from the elapsed time, so
+	# this stub does not have to guess a status to be a faithful test.
+	if [ -n "$tmo" ] && [ "$tmo" -lt "$secs" ]; then
+		secs="$tmo"
+		timed_out=1
+	fi
+	for real in /bin/sleep /usr/bin/sleep; do
+		if [ -x "$real" ]; then
+			"$real" "$secs"
+			break
+		fi
+	done
+	# Which status a real ubus exits with when its own -t fires is not
+	# something this repository can verify, so a test can put any of them
+	# here: the production code must decide from the elapsed time either way.
+	[ -n "$timed_out" ] && exit "$(cat "$state/ubus-timeout-status" 2>/dev/null || echo 7)"
+fi
+[ -f "$fixture" ] || exit 1
+[ "$1" = "call" ] || exit 1
+
+case "$2" in
+	network.interface.*) net="${2#network.interface.}" ;;
+	*) exit 1 ;;
+esac
+[ "$3" = "status" ] || exit 1
+
+# One object per address, under the key netifd uses for a prefix assignment's
+# own address on the bridge.
+addrs=$(sed -n 's/.*"'"$net"'"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' "$fixture")
+[ -n "$addrs" ] || { printf '{"interface":"%s","up":true}\n' "$net"; exit 0; }
+
+out=""
+IFS=,
+for a in $addrs; do
+	a=$(printf '%s' "$a" | tr -d ' "')
+	[ -n "$a" ] || continue
+	[ -n "$out" ] && out="$out,"
+	out="$out{\"local-address\":{\"address\":\"$a\",\"mask\":64}}"
+done
+printf '{"interface":"%s","up":true,"ipv6-prefix-assignment":[%s]}\n' "$net" "$out"

@@ -53,7 +53,34 @@ blocking policy encouraged — the client would end up with no address at all. S
 `auto` also switches the router advertisement on for those networks
 (`ra 'server'`, `ra_slaac 1`) and sets `ra_default 1`, without which odhcpd
 advertises a router lifetime of zero on a ULA-only interface and the client
-gets an address it cannot route with. DHCPv6 is left alone. It also opens
+gets an address it cannot route with.
+
+It also clears two things a network that used to sit behind an ISP relay
+carries: `ra_flags` (the *managed* and *other configuration* flags) and `ndp`.
+The M flag tells a client to go and ask DHCPv6 for an address the
+advertisement it arrived in already carries — pure delay on the switch, and a
+wait for nothing on a client with no DHCPv6 at all. `ndp 'relay'` proxies
+neighbour discovery toward the uplink, which keeps the path to the ISP router
+alive for exactly the clients being moved off it. DHCPv6 itself is left alone
+in both directions: `auto` does not switch on a server you disabled, and does
+not switch off one you enabled. With the M flag cleared, nothing tells a
+client to ask it for an address, so it stops taking part in address
+configuration — but it keeps running and keeps answering a client that asks
+anyway, which is the point: it is your service and it still does whatever you
+set it up to do.
+
+Changing the addressing is not the same as the clients using it. odhcpd's
+unsolicited advertisements are minutes apart — ten, on the router this was
+measured on — so a client that missed the one carrying the switch kept its ISP
+address until the next. Claiming or releasing a network therefore waits for
+netifd to report the new addressing and then asks odhcpd to advertise again,
+which makes it send the initial burst RFC 4861 prescribes rather than a single
+packet. Both directions: without it on release, clients keep a ULA that no
+longer routes anywhere. For a few minutes afterwards the status card says the
+clients are still moving over, so "IPv6 is active" is not read as "every device
+is already using it".
+
+It also opens
 neighbour discovery for the steered networks — router solicitation and
 neighbour solicitation/advertisement, IPv6 only, nothing else, and bound to
 that network's own interface so nothing else sharing its firewall zone is

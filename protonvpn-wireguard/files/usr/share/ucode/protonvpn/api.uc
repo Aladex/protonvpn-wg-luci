@@ -64,6 +64,16 @@ const PM_APPVERSION = 'linux-vpn-gtk@4.18.2';
 // an extra line injects curl options. Once the value is a single line, the
 // anchored test constrains every character of it, so nothing else can slip
 // through.
+// The version this package stamps when nothing overrides it. Exported because
+// the LuCI page names it on the "built into the package" option, and that
+// option is what the control shows before any button is pressed — without
+// this the page could only say "built into the package" and leave the user to
+// guess which version that is. client_versions() carries the same value, but
+// only after a network round trip nobody should have to make to read a label.
+function builtin_app_version() {
+	return PM_APPVERSION;
+}
+
 function app_version() {
 	let c = cursor();
 	let v = c ? c.get('protonvpn', _common.globals_section(c), 'app_version') : null;
@@ -474,6 +484,7 @@ function client_versions() {
 		versions: offered,
 		current: current ? CLIENT_PREFIX + current : '',
 		configured: app_version(),
+		builtin: PM_APPVERSION,
 		error: length(problems) ? join('; ', problems) : null
 	};
 }
@@ -1038,7 +1049,7 @@ function access_token_stale(session, now) {
 
 return {
 	PM_APPVERSION, SESSION_FILE, ACCESS_TOKEN_TTL, ACCESS_REFRESH_MARGIN,
-	api_call, api_error, app_version, client_versions,
+	api_call, api_error, app_version, builtin_app_version, client_versions,
 	auth_headers, access_token_stale,
 	generate_keypair, pem_from_seed, wg_key_from_seed,
 	session_load, session_store,

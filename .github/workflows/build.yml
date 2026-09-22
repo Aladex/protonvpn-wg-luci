@@ -54,6 +54,12 @@ jobs:
           node-version: lts/*
       - run: npm install --no-save --no-audit --no-fund --legacy-peer-deps eslint@9 @eslint/js@9 globals@15
       - run: npx eslint luci-app-protonvpn
+      # iso-codes is the oracle the flag suite checks countryFlag() against:
+      # a two-letter code may only render as a flag when ISO 3166-1 assigns
+      # it, and that test skips itself when the data is absent. Installing it
+      # here is what makes it actually run.
+      - name: ISO 3166-1 data for the flag oracle
+        run: sudo apt-get update && sudo apt-get install -y iso-codes
       # The SRP suite carries cross-implementation vectors: a regression here
       # means the browser computes a proof the Proton API rejects, which is
       # only visible as a failed login on a live account. Node's test runner

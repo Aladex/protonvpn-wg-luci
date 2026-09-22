@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Test stub for /etc/init.d/odhcpd. The production path is absolute, so it
+# cannot be shadowed through PATH like the other stubs; routing.uc reads
+# PROTONVPN_ODHCPD_INIT instead, the same relocation convention as
+# PROTONVPN_RT_TABLES and PROTONVPN_STATE_DIR.
+#
+# Nudging odhcpd leaves no uci trace at all, so without this log a test could
+# only assert the configuration and an implementation that never asked for a
+# fresh advertisement would pass — which is precisely the defect being fixed.
+printf '%s\n' "$1" >> "${PROTONVPN_STATE_DIR:-/tmp/protonvpn-test-state}/odhcpd.log"
+exit 0

@@ -61,6 +61,26 @@ export PATH
 PROTONVPN_RT_TABLES="${PROTONVPN_RT_TABLES:-$PROTONVPN_STATE_DIR/rt_tables}"
 export PROTONVPN_RT_TABLES
 
+# odhcpd's init script: an absolute path on a router, so PATH cannot shadow it
+# the way it shadows ifup/ifdown. Pointed at a stub that records the calls, so
+# a test can assert that a fresh router advertisement was actually asked for.
+PROTONVPN_ODHCPD_INIT="${PROTONVPN_ODHCPD_INIT:-$here/stubs/odhcpd-init}"
+export PROTONVPN_ODHCPD_INIT
+
+# The readiness budget the router-advertisement wait spends before giving up
+# (routing.uc ra_budget_ms). In production it is five seconds, and several
+# tests drive a wait all the way to its timeout — at the production value that
+# one file took 48 seconds, which is most of the cost of a mutation round.
+#
+# Shortened here rather than stubbed: this is the real knob, set the way an
+# owner with a slow router would set it, so the tests still exercise the real
+# code path. The one test that has to prove the PRODUCTION default works end
+# to end unsets this again in a child process (helpers/real-budget.uc) — a
+# fast suite that no longer tests the timeout would be a worse trade than a
+# slow one.
+PROTONVPN_RA_SETTLE_MS="${PROTONVPN_RA_SETTLE_MS:-300}"
+export PROTONVPN_RA_SETTLE_MS
+
 if ! command -v "$UCODE" >/dev/null 2>&1; then
 	echo "ucode not found (set \$UCODE to a built interpreter); skipping" >&2
 	exit 2
@@ -75,6 +95,12 @@ PVT_UCODE_L="-L '$mocks/*.uc' -L '$lib/*.uc'"
 export PVT_UCODE_L
 PVT_MEASURE="$here/measure_peak.uc"
 export PVT_MEASURE
+# Helpers a test invokes as a child process (see helpers/real-budget.uc).
+PVT_HELPERS="$here/helpers"
+export PVT_HELPERS
+# The tests directory itself, for the test that reads the package sources.
+PVT_TESTS="$here"
+export PVT_TESTS
 
 status=0
 for t in "$here"/test_*.uc; do

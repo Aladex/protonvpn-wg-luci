@@ -18,9 +18,20 @@ define Package/protonvpn-wireguard
   TITLE:=ProtonVPN WireGuard backend
   URL:=https://github.com/Aladex/protonvpn-wg-luci
   PKGARCH:=all
+# Every external command this package runs has to come from somewhere the
+# router is guaranteed to have; tests/test_target_commands.uc checks that list
+# against this one. `+ip` is here for a measured reason rather than a guess:
+# OpenWrt disables busybox's ip applet by default (netifd uses libnl instead),
+# and on the router this was found on, busybox indeed has no ip applet while
+# /usr/bin/ip comes from iproute2 installed for unrelated reasons. Without the
+# declaration the package installs happily onto a build that has neither, and
+# then five call sites fail silently — including the one that puts the WAN
+# default route back. `ip` is the virtual that ip-tiny and ip-full provide, so
+# an image carrying either satisfies it and nothing is pulled in twice.
   DEPENDS:= \
 	+ca-bundle \
 	+curl \
+	+ip \
 	+kmod-wireguard \
 	+openssl-util \
 	+rpcd \

@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Test stub for `sleep`, which very much does exist off-device — this one is
+# here to make it instant, not to stand in for a missing command.
+#
+# Two places in the production code pause by shelling out: bring_up() waits a
+# second for netifd to settle, and restore_wan_default() probes three times two
+# seconds apart. That is six seconds on EVERY disconnect, and the suite drives
+# disconnect from several files, so it was the single largest block of dead
+# wall clock in the run — six seconds of a twenty-second file, and nothing
+# asserts on the delay itself.
+#
+# What still runs is the logic around it: the probe loop iterates the same
+# number of times, and every command it issues is still issued. Only the
+# waiting is skipped.
+#
+# NOT used for the router-advertisement readiness wait, which pauses with
+# ucode's own sleep() builtin and is therefore unaffected — that one is
+# shortened honestly, through PROTONVPN_RA_SETTLE_MS (see run.sh).
+exit 0

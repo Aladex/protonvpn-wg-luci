@@ -12,6 +12,17 @@ import { rand, srand } from 'math';
 import { readfile } from 'fs';
 import { cursor } from 'uci';
 const _common = require('protonvpn.common');
+
+// Seconds given to any `ubus` call. ubus bounds itself with -t, which is the
+// only bound available here: stock OpenWrt has no `timeout` binary, no busybox
+// timeout applet, and this package declares no coreutils-timeout — a previous
+// attempt wrapped the probe in `timeout` and was inert on the router while the
+// suite, running on a machine that has GNU timeout, stayed green.
+//
+// Every call, not just the readiness probe: a wedged ubusd otherwise hangs an
+// apply, the rpcd request behind it and the page in front of that, with no
+// bound anywhere on the path.
+const UBUS_TIMEOUT_S = '5';
 const load_settings = _common.load_settings,
       cache_file_path = _common.cache_file_path,
       iso_ts = _common.iso_ts,
@@ -203,7 +214,7 @@ function rotate_inner(uci, instance) {
 		mark_ipv6_unmet(uci, s, 'no_gateway');
 		if (down && reconcile_ipv6(uci, s)) {
 			uci.commit('network');
-			run([ 'ubus', 'call', 'network', 'reload' ]);
+			run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
 		}
 		return { error: 'no IPv6 gateways in the selected locations' +
 				(down ? teardown_note(s) : ''),
@@ -242,7 +253,7 @@ function rotate_inner(uci, instance) {
 				uci.commit('network');
 				// Plain netifd rules; a reload applies the delta and leaves
 				// the freshly connected interface alone.
-				run([ 'ubus', 'call', 'network', 'reload' ]);
+				run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
 			}
 			record({ last_success: time(), server: id }, instance);
 			log('rotated ' + s.name + ' to ' + id);
@@ -264,7 +275,7 @@ function rotate_inner(uci, instance) {
 			'gateway that does not forward IPv6');
 		if (reconcile_ipv6(uci, s)) {
 			uci.commit('network');
-			run([ 'ubus', 'call', 'network', 'reload' ]);
+			run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
 		}
 		return { error: 'could not reach an IPv6 gateway for the current selection' +
 				teardown_note(s),

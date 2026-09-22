@@ -16,7 +16,19 @@
 
 import { readfile } from 'fs';
 const _common = require('protonvpn.common');
+
+// Seconds given to any `ubus` call. ubus bounds itself with -t, which is the
+// only bound available here: stock OpenWrt has no `timeout` binary, no busybox
+// timeout applet, and this package declares no coreutils-timeout — a previous
+// attempt wrapped the probe in `timeout` and was inert on the router while the
+// suite, running on a machine that has GNU timeout, stayed green.
+//
+// Every call, not just the readiness probe: a wedged ubusd otherwise hangs an
+// apply, the rpcd request behind it and the page in front of that, with no
+// bound anywhere on the path.
+const UBUS_TIMEOUT_S = '5';
 const run = _common.run,
+      run_ip = _common.run_ip,
       atomic_write = _common.atomic_write,
       iface_ipv6_capable = _common.iface_ipv6_capable;
 
@@ -76,10 +88,55 @@ function v6_lan_opts(net) {
 //                   (router.c: `!IN6_IS_ADDR_ULA(...) || iface->default_router`),
 //                   and our prefix is always a ULA — there is no global one.
 //
-// dhcpv6 is deliberately left alone: SLAAC supplies the address and the RA
-// supplies the route, so stateful assignment adds nothing, and turning on a
-// service the user disabled is not ours to do.
-const V6_DHCP_OPTS = { ra: 'server', ra_slaac: '1', ra_default: '1' };
+//   ra_flags 'none'  clears the M and O flags. Measured on a network that had
+//                   been served by an ISP relay: it kept `ra_flags
+//                   'managed-config' 'other-config'` while the two networks
+//                   that worked had neither. M tells a client to go and ask
+//                   DHCPv6 for its address — but the advertisement it arrives
+//                   in already carries that address, so the round trip is
+//                   pure delay on exactly the switch this addressing exists
+//                   to make, and a client with no DHCPv6 implementation at
+//                   all (Android) waits for something that will never come.
+//                   Under this takeover the router is a SLAAC-only router for
+//                   the network, and the advertisement should say so.
+//   ndp 'disabled'  stops odhcpd proxying neighbour discovery toward the
+//                   uplink. Same network, same leftover. This is the one that
+//                   works AGAINST the takeover rather than merely alongside
+//                   it: relaying keeps the path between the client and the
+//                   ISP router alive at the neighbour level, for precisely
+//                   the clients this is trying to move off it.
+//
+// dhcpv6 is deliberately left alone, and now in BOTH directions. We do not
+// turn it on: SLAAC supplies the address and the RA supplies the route, so
+// stateful assignment adds nothing. We do not turn it off either, for the
+// mirror of the same reason — a service the user enabled is not ours to stop,
+// and with the M flag cleared it is simply inert for address configuration
+// while still answering anything they set it up to answer.
+const V6_DHCP_OPTS = { ra: 'server', ra_slaac: '1', ra_default: '1',
+	ra_flags: 'none', ndp: 'disabled' };
+// odhcpd's init script. Absolute on a router, so PATH cannot shadow it the way
+// it shadows ifup/ifdown; relocated for the offline suite the same way the
+// table registry and the state dir are.
+const ODHCPD_INIT = getenv('PROTONVPN_ODHCPD_INIT') || '/etc/init.d/odhcpd';
+// How long to wait for netifd to put the new addressing on a bridge before
+// nudging odhcpd anyway, and how often to look.
+//
+// Measured against the MONOTONIC clock, not counted in iterations. Every probe
+// launches a process, so an iteration count times a sleep is not a bound at
+// all: on a slow or busy router twenty probes of a second each is twenty-five
+// seconds of "five second" wait. Monotonic rather than wall so that an NTP
+// step mid-apply cannot turn the bound into either zero or forever.
+//
+// Five seconds because the assignment is computed locally out of the router's
+// own ULA — it is either quick or it is not coming. Overridable so a slow
+// router can be given more without a code change; the log line on timeout
+// names the variable.
+const RA_SETTLE_MS = 5000;
+const RA_POLL_MS = 250;
+// How long after that nudge the page may tell the user their clients are
+// moving over. Long enough to cover a device that was asleep when the
+// advertisement went out, short enough that it is news rather than furniture.
+const RA_SETTLE_WINDOW = 300;
 // And before any of that can take effect, the kernel has to accept an IPv6
 // address on the bridge at all. `option ipv6 '0'` on a network's `config
 // device` section becomes disable_ipv6=1 on the device, and then netifd
@@ -318,7 +375,7 @@ function local_subnets(uci, skip) {
 		}
 	});
 
-	let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+	let d = run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network.interface', 'dump' ]);
 	if (d.code == 0) {
 		let data;
 		try {
@@ -342,7 +399,7 @@ function local_subnets(uci, skip) {
 		// or pinned destination. Only on-device (needs ubus for the mapping).
 		let pin_lines = [];
 		for (let proto in [ 'static', 'boot', 'kernel' ]) {
-			let rt = run([ 'ip', '-4', 'route', 'show', 'table', 'main', 'proto', proto ]);
+			let rt = run_ip([ '-4', 'route', 'show', 'table', 'main', 'proto', proto ]);
 			if (rt.code == 0)
 				for (let l in split(trim(rt.stdout || ''), '\n'))
 					push(pin_lines, l);
@@ -488,7 +545,7 @@ function drop_rt_table(name) {
 
 // True when the WAN has a default IPv6 route (potential leak path).
 function wan_has_ipv6() {
-	let r = run([ 'ip', '-6', 'route', 'show', 'default' ]);
+	let r = run_ip([ '-6', 'route', 'show', 'default' ]);
 	return r.code == 0 && length(trim(r.stdout || '')) > 0;
 }
 
@@ -505,7 +562,7 @@ function wan_l3_mtu(uci) {
 			for (let n in as_list(sec.network))
 				wannets[n] = 1;
 	});
-	let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+	let d = run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network.interface', 'dump' ]);
 	if (d.code != 0)
 		return null;
 	let data;
@@ -524,7 +581,7 @@ function wan_l3_mtu(uci) {
 		// the smallest "WAN" device, dragging the next recommendation down 80.
 		if (ifc.proto == 'wireguard')
 			continue;
-		let l = run([ 'ip', 'link', 'show', 'dev', ifc.l3_device ]);
+		let l = run_ip([ 'link', 'show', 'dev', ifc.l3_device ]);
 		if (l.code != 0)
 			continue;
 		let m = match(l.stdout || '', /mtu ([0-9]+)/);
@@ -672,6 +729,417 @@ function reconcile_ipv6_rules(uci, s, iface, steering, table, nets) {
 		}))
 		changed = true;
 	return changed;
+}
+
+// ── Making the switch prompt ─────────────────────────────────────────
+//
+// Changing the addressing is not the same as the clients using it. Measured
+// on a live router: steering a network DID work and the advertisement content
+// was right — our ULA announced, the ISP prefix deprecated with a preferred
+// lifetime of 0 — but unsolicited advertisements were ten minutes apart, and
+// four of five clients were still holding ISP addresses because they had
+// missed the one that carried the switch.
+//
+// There is no "advertise now" method on odhcpd: no ubus call, no signal. What
+// it does guarantee is that when it starts advertising on an interface it
+// sends the RFC 4861 §6.2.4 initial burst — several advertisements, seconds
+// apart, rather than one — which is exactly the property a client that missed
+// one needs. On OpenWrt the supported way to make that happen is the init
+// script's reload, and the code already ran it.
+//
+// So the defect was never WHETHER but WHEN. `ubus call network reload` returns
+// once netifd has accepted the new configuration, not once the interfaces have
+// been reconfigured, and the odhcpd reload that immediately followed it could
+// therefore re-initialise against the OLD prefix. The corrected advertisement
+// then waited for the next scheduled one.
+//
+// Hence: wait for netifd to actually report the new addressing, then nudge
+// odhcpd. Bounded, because a wait that can hang is worse than a slow switch,
+// and it nudges on the way out regardless — a late burst still beats the next
+// ten-minute tick.
+//
+// NOTE for whoever revisits this: the ordering above is inferred from netifd's
+// and odhcpd's documented behaviour, not measured. What WAS measured is at the
+// top of this comment. If the switch is still slow on a router, that ordering
+// is the first thing to doubt.
+
+// The leading hextets of the router's own ULA, which is where `ip6class local`
+// draws every steered network's prefix from. Null when there is none to
+// compare against, or when it is not on a hextet boundary — /48 is what
+// OpenWrt writes, and guessing at anything else would be worse than not
+// looking.
+function ula_groups(uci) {
+	let ula = uci.get('network', 'globals', 'ula_prefix') || '';
+	let m = match(ula, /^([0-9a-fA-F:]+)\/([0-9]+)$/);
+	if (!m)
+		return null;
+	let bits = int(m[2]);
+	if (bits <= 0 || bits % 16 != 0)
+		return null;
+	let want = bits / 16;
+	let parts = [];
+	for (let g in split(lc(m[1]), ':'))
+		if (length(g))
+			push(parts, g);
+	if (length(parts) != want)
+		return null;
+	return parts;
+}
+
+// The readiness budget in milliseconds. Read at CALL time, not folded into a
+// constant at load time, so it is answerable — a knob nobody can observe is a
+// claim, not a setting. A slow router can be given more without a code change
+// and without a rebuild; the log line on timeout names the variable.
+function ra_budget_ms() {
+	let v = int(getenv('PROTONVPN_RA_SETTLE_MS') || '0');
+	return (v > 0) ? v : RA_SETTLE_MS;
+}
+
+// The `notes` argument is kept in the signature for the callers that pass it,
+// and deliberately not written to: see finish_ra for why this function logs
+// instead.
+function void_notes(notes) {
+	return notes;
+}
+
+// Milliseconds on the monotonic clock.
+function ms_now() {
+	let c = clock(true);
+	return c[0] * 1000 + int(c[1] / 1000000);
+}
+
+// One hextet as a number, or -1 for anything that is not one.
+//
+// Deliberately strict: a field this cannot read must not compare equal to
+// another it also cannot read. A mutation run shows that strictness is not
+// currently observable — the prefix being looked FOR is built here and is
+// always well-formed and non-zero (a ULA starts fd.., v6_hint() never returns
+// below 0x1000), so unreadable input on the other side can only fail to match
+// whatever it decays to. That makes returning 0 instead an equivalent mutant
+// rather than a caught bug, and this comment rather than a test is the honest
+// record of it. It stays because the guarantee is about this function, not
+// about its one caller: the day something asks it to compare a prefix with a
+// zero hextet in it, -1 is the answer that does not quietly agree.
+function hex16(g) {
+	if (!length(g) || length(g) > 4)
+		return -1;
+	let v = 0;
+	for (let i = 0; i < length(g); i++) {
+		let c = ord(lc(g), i), d = -1;
+		if (c >= 48 && c <= 57)
+			d = c - 48;
+		else if (c >= 97 && c <= 102)
+			d = c - 87;
+		else
+			return -1;
+		v = v * 16 + d;
+	}
+	return v;
+}
+
+// The first four hextets of an address, with `::` expanded — or null when
+// they cannot be known.
+//
+// `::` stands for a run of zero groups, so the four leading hextets are only
+// ambiguous when the run starts inside them. The length of the run is
+// recoverable: an IPv6 address has eight groups, so the omitted ones are eight
+// minus the ones written. That makes `fd7a::1abc:0:0:0:1` and
+// `fd7a:0:0:1abc::1` the same first four groups, which a textual compare calls
+// different.
+//
+// Null only for an address that is not one — too many groups, or more than one
+// `::`. Everything netifd writes expands cleanly; this exists so that the
+// comparison does not depend on that remaining true.
+function expand4(addr) {
+	let parts = split(lc(addr), ':');
+	// A leading or trailing '::' produces an empty first or last field on top
+	// of the empty one marking the run; drop those before counting.
+	if (length(parts) > 1 && !length(parts[0]))
+		parts = slice(parts, 1);
+	if (length(parts) > 1 && !length(parts[length(parts) - 1]))
+		parts = slice(parts, 0, length(parts) - 1);
+	let out = [], gap = -1;
+	for (let i = 0; i < length(parts); i++) {
+		if (!length(parts[i])) {
+			if (gap >= 0)
+				return null;           // two '::' is not an address
+			gap = length(out);
+			continue;
+		}
+		push(out, parts[i]);
+	}
+	if (length(out) > 8 || (gap < 0 && length(out) != 8))
+		return null;
+	if (gap >= 0) {
+		let zeros = [];
+		for (let i = 0; i < 8 - length(out); i++)
+			push(zeros, '0');
+		out = [ ...slice(out, 0, gap), ...zeros, ...slice(out, gap) ];
+	}
+	return slice(out, 0, 4);
+}
+
+// Whether `addr` falls under the /64 named by the first four hextets of
+// `want`, compared as NUMBERS rather than as text.
+//
+// The same prefix has several spellings — `fd7a:1b2c:3d4e:1abc`, `FD7A:...`,
+// `fd7a:1b2c:3d4e:1abc:0:0:0:1` — and a textual match calls two of those
+// different. netifd writes the canonical form, so this has never actually
+// bitten; comparing the numbers costs a dozen lines and removes the question.
+//
+// `::` is expanded before comparing (see expand4), so an address that
+// abbreviates a zero run inside its first four groups is matched too — that
+// was the last spelling this could not see.
+function addr_under_prefix(addr, want) {
+	if (type(addr) != 'string')
+		return false;
+	let a = expand4(addr), w = split(want, ':');
+	if (a == null)
+		return false;
+	for (let i = 0; i < 4; i++) {
+		if (i >= length(w) || !length(w[i]))
+			return false;
+		if (hex16(a[i]) != hex16(w[i]))
+			return false;
+	}
+	return true;
+}
+
+// The /64 this module asked netifd to give THIS network, as the leading text
+// of any address out of it: the router's ULA with the network's own ip6hint
+// as the fourth hextet.
+//
+// "Some address out of the ULA /48" is a different question, and wrong in both
+// directions. On a claim it is answered yes by a sibling steered network's
+// prefix, so the wait ends before ours exists, odhcpd is nudged against the
+// old addressing and the ten-minute wait is straight back. On a release it is
+// answered yes by that same sibling, so the wait times out every time while
+// nothing is actually wrong. The hint is ours and computed per network
+// (v6_hint), so the expected prefix is knowable rather than guessable.
+//
+// Null when it cannot be worked out: no ULA, or one that is not a /48 and so
+// does not put the hint in the fourth hextet.
+function v6_expect_prefix(groups, net) {
+	// A /48 is what OpenWrt writes, and it is the only length that puts the
+	// 16-bit hint in the fourth hextet. Anything else cannot be turned into an
+	// expected prefix, and guessing would be worse than saying so: the wait
+	// would time out on every apply while nothing was actually wrong.
+	if (groups == null || length(groups) != 3)
+		return null;
+	return join(':', groups) + ':' + v6_hint(net) + ':';
+}
+
+// Whether netifd currently reports an address under `want` on this network.
+//
+// Returns { has: true|false|null, wedged: bool }. `has` is null when the
+// question cannot be answered at all — no ubus, nothing that parses, or a
+// probe that did not come back — which is a reason to stop waiting rather
+// than to keep asking. `wedged` separates the last of those, because a ubus
+// that does not answer is a different thing to tell the user about than one
+// that is not there.
+//
+// THE PROBE IS BOUNDED, not just the loop around it. `run()` is synchronous
+// and has no timeout of its own, so a busy or wedged ubus blocks here for as
+// long as it likes — outside both of the loop's clock checks, and so straight
+// through the budget that the log and the page both advertise.
+//
+// The bound is ubus's own `-t`, and that choice is the whole lesson of this
+// round. The first attempt wrapped the call in `timeout`, which does not
+// exist on stock OpenWrt — no binary, no busybox applet, no declared
+// dependency — so on the router the probe failed to start, the wait was
+// skipped, and the ten-minute switchover came back while the suite stayed
+// green on a machine that has GNU timeout. `ubus -t` needs nothing installed
+// and bounds the thing actually being waited on rather than the process
+// around it. test_target_commands.uc now fails if anything here reaches for a
+// command the target does not have.
+//
+// Whole seconds because that is what -t takes, rounded up and never below one
+// — so the probe cap can overshoot a sub-second budget. That is exactly why
+// the caller reports the time it MEASURED rather than the budget it intended:
+// see finish_ra.
+function net_has_prefix(net, want, secs) {
+	let t0 = ms_now();
+	let d = run([ 'ubus', '-t', '' + secs, 'call', 'network.interface.' + net, 'status' ]);
+	if (d.code != 0) {
+		// "Wedged" is decided from the CLOCK, not from an exit status.
+		//
+		// This is now a measured fact rather than a judgement call. On the
+		// router this package was written for, `ubus -t 1 call
+		// network.interface.<nonexistent> status` exits 4 — so on that build
+		// 4 means "no such object", NOT a timeout. Keying on an exit code
+		// would have picked the wrong branch whichever number was chosen:
+		// 124 is GNU timeout's convention for a tool that is not even on the
+		// target, and 4 is taken. (The documented enum puts
+		// UBUS_STATUS_TIMEOUT at 7, which is corroboration, not evidence.)
+		//
+		// How long the call took is observable right here and means the same
+		// thing on every build: if it used up the time it was given, it was
+		// wedged; if it came back at once, ubus is missing or refusing, which
+		// is a different thing to tell the user.
+		let spent = ms_now() - t0;
+		return { has: null, wedged: spent >= (secs * 1000 * 9) / 10 };
+	}
+	let data;
+	try {
+		data = json(d.stdout);
+	} catch (e) {
+		return { has: null, wedged: false };
+	}
+	if (type(data) != 'object')
+		return { has: null, wedged: false };
+	for (let a in (data['ipv6-prefix-assignment'] || [])) {
+		let addr = (a['local-address'] || {}).address;
+		if (addr_under_prefix(addr, want))
+			return { has: true, wedged: false };
+	}
+	return { has: false, wedged: false };
+}
+
+// The tail every exit of ra_refresh takes: say what did not settle, ask odhcpd
+// for a fresh advertisement, and stamp when that happened. Declared ahead of
+// its caller because ucode resolves names at parse time.
+function finish_ra(uci, iface, plan, pending, spent, unchecked) {
+	// Logged directly rather than pushed into `notes`: only apply() ever logs
+	// that array, so on both release paths — disconnect and delete_instance —
+	// a timeout used to pass in complete silence, and a silent timeout is
+	// indistinguishable from success. This is the one moment where the fix
+	// can be known to have fallen back to the old behaviour, so it has to
+	// reach the log wherever it happens.
+	//
+	// The line says what was DONE as well as what went wrong: "it timed out"
+	// alone leaves the reader not knowing whether the clients were told at
+	// all. They were, which is why the ten-minute wait is usually still
+	// avoided even on this path.
+	// The number reported is the one the CALLER waited, not the budget that
+	// was intended. A probe capped at whole seconds can overshoot a sub-second
+	// budget, and a log that rounds in its own favour is how a bound stops
+	// meaning anything — the time here and the time the user sat through are
+	// the same number by construction.
+	for (let p in (pending || []))
+		_common.log('routing: network ' + p.net + ': its IPv6 addressing did not ' +
+			'settle within ' + (spent || 0) + 'ms (budget ' + ra_budget_ms() +
+			'ms), advertised anyway — clients may take a few minutes to move. ' +
+			'Raise PROTONVPN_RA_SETTLE_MS if this router is simply slow.');
+	// A ubus that does not answer is a different thing to tell the user than
+	// one that answers "not yet": nothing is wrong with the addressing, the
+	// question could not be put.
+	for (let p in (unchecked || []))
+		_common.log('routing: network ' + p.net + ': readiness could not be checked ' +
+			'— the ubus probe did not answer within ' + (spent || 0) + 'ms, ' +
+			'advertised anyway. Something is holding up ubus on this router.');
+	run([ ODHCPD_INIT, 'reload' ]);
+	// Stamped only when something was CLAIMED. The stamp exists for one
+	// reader — the page saying "clients are moving to the tunnel address" —
+	// and that line is only ever shown while IPv6 is active on the tunnel, so
+	// after a pure release there is nothing it could say. Writing it anyway
+	// would mean a disconnect edited the configuration for no reader at all.
+	let claimed = false;
+	for (let p in (plan || []))
+		if (p.want)
+			claimed = true;
+	if (claimed && iface != null && uci.get('network', iface) != null)
+		uci.set('network', iface, 'protonvpn_v6_ra_at', '' + time());
+	return true;
+}
+
+// Make the clients of the networks in `plan` move now rather than at the next
+// scheduled advertisement. Each entry is { net, want }: want=true after a
+// claim (wait for the ULA to appear), false after a release (wait for it to
+// go). `iface` is stamped with the moment the nudge went out, so the page can
+// say the clients are moving over while that is still true.
+function ra_refresh(uci, iface, plan, notes) {
+	if (!length(plan))
+		return false;
+	// `notes` is accepted for the callers that still pass it; what this
+	// function has to say goes to the log, because that is the only channel
+	// every caller actually reads. See finish_ra.
+	void_notes(notes);
+	let groups = ula_groups(uci);
+	let budget = ra_budget_ms();
+	let deadline = ms_now() + budget;
+	let pending = [], blind = [];
+	for (let p in plan) {
+		let want = v6_expect_prefix(groups, p.net);
+		if (want == null)
+			push(blind, p);
+		else
+			push(pending, { net: p.net, want: p.want, prefix: want });
+	}
+
+	// Nothing to watch for. Two different reasons, and only one is worth
+	// waiting through:
+	//
+	//   * no usable ula_prefix at all — then there IS no ULA addressing, the
+	//     clients were never going to get an address (reconcile_v6_lan says so
+	//     separately), and a wait would be five seconds of sleep before
+	//     announcing nothing;
+	//   * a ULA that is not a /48 — the addressing exists but the hint is not
+	//     in the fourth hextet, so the prefix cannot be named. Here the safe
+	//     side is to wait the whole budget anyway: what is being guarded
+	//     against is nudging odhcpd before netifd is done, and an unverifiable
+	//     wait still gives netifd the time.
+	//
+	// Either way the log says readiness was not verified, because a wait that
+	// proved nothing must not read as one that did.
+	if (length(blind)) {
+		let t0 = ms_now();
+		if (groups != null)
+			sleep(budget);
+		void_notes(ms_now() - t0);
+		let ula = uci.get('network', 'globals', 'ula_prefix') || '';
+		for (let p in blind)
+			_common.log('routing: network ' + p.net + ': could not work out which ' +
+				'IPv6 prefix to expect (network.globals.ula_prefix is ' +
+				(length(ula) ? ula : 'unset') + '), so readiness was not ' +
+				'verified; advertised anyway');
+	}
+
+	let started = ms_now();
+	while (length(pending)) {
+		let still = [];
+		for (let p in pending) {
+			// Each probe gets what is left of the budget, rounded up to the
+			// whole seconds `timeout` takes and never below one. Without this
+			// the probe sits outside every clock check and one wedged ubus
+			// call overruns the whole bound.
+			let left = deadline - ms_now();
+			let r = net_has_prefix(p.net, p.prefix,
+				(left > 1000) ? int((left + 999) / 1000) : 1);
+			// Unanswerable — no ubus, nothing that parses, or a probe that
+			// never came back. Waiting cannot turn that into an answer, so
+			// stop rather than spend the budget on identical failures, and
+			// claim nothing about readiness.
+			if (r.has == null)
+				return finish_ra(uci, iface, plan, [], ms_now() - started,
+					r.wedged ? [ p ] : []);
+			// `want` is the direction: a claim waits for our prefix to
+			// appear, a release for it to go. Testing only for presence makes
+			// every release time out.
+			if (r.has != p.want)
+				push(still, p);
+		}
+		pending = still;
+		// Against the clock before AND after the sleep.
+		//
+		// The SECOND check is what bounds the loop: without it there is no
+		// deadline test on the path at all and a network that never settles
+		// spins forever — a mutation that removes it does not fail the suite,
+		// it hangs, and that hang is the proof.
+		//
+		// The FIRST check is deliberately not redundant, and a mutation run
+		// found it survives, so it is worth saying why it stays. It only
+		// stops the loop sleeping 250ms it has already run out of time for,
+		// which is a quarter second nobody waits at the end of an apply. That
+		// is below what any reasonable test can measure against a five-second
+		// budget, so it is an equivalent mutant rather than a gap — not dead
+		// code to delete on the grounds that nothing caught its removal.
+		if (!length(pending) || ms_now() >= deadline)
+			break;
+		sleep(RA_POLL_MS);
+		if (ms_now() >= deadline)
+			break;
+	}
+	return finish_ra(uci, iface, plan, pending, ms_now() - started, []);
 }
 
 // Reconcile the ULA addressing this module writes onto the steered networks
@@ -1300,6 +1768,24 @@ function v6_lan_successor(uci, net, iface) {
 
 function reconcile_v6_lan(uci, iface, want_nets, notes) {
 	let cn = false, cd = false;
+	// Networks whose ANNOUNCEMENT changed on this run, so their clients can be
+	// told now instead of at the next scheduled advertisement (see
+	// ra_refresh). Keyed on the dhcp section rather than on the network's
+	// addressing, deliberately: odhcpd is what gets nudged, so a network with
+	// no dhcp section to announce through is a nudge for nobody, and every
+	// network that does announce has that section claimed or released in the
+	// same run as its prefix.
+	//
+	// A hand-over to another instance is NOT one of these: the addressing and
+	// the announcement both stay exactly as they are, only the record of who
+	// owns them moves, and re-advertising would be noise.
+	let touched = [], seen = {};
+	let touch = function(net) {
+		if (net == null || seen[net])
+			return;
+		seen[net] = true;
+		push(touched, net);
+	};
 
 	// Sections this instance currently holds, in both config files.
 	let have = [];
@@ -1345,10 +1831,12 @@ function reconcile_v6_lan(uci, iface, want_nets, notes) {
 		if (addressable && index(want_nets, d.net) >= 0)
 			continue;
 		let heir = addressable ? v6_lan_successor(uci, d.net, iface) : null;
-		if (heir)
+		if (heir) {
 			uci.set('dhcp', d.section, V6_MARK, heir);
-		else
+		} else {
 			release_section(uci, 'dhcp', d.section, V6_DHCP_OPTS);
+			touch(d.net);
+		}
 		cd = true;
 	}
 
@@ -1429,8 +1917,10 @@ function reconcile_v6_lan(uci, iface, want_nets, notes) {
 		let downer = uci.get('dhcp', d, V6_MARK);
 		if (downer != null && downer != iface)
 			continue;
-		if (claim_section(uci, 'dhcp', d, V6_DHCP_OPTS, iface))
+		if (claim_section(uci, 'dhcp', d, V6_DHCP_OPTS, iface)) {
 			cd = true;
+			touch(net);
+		}
 	}
 
 	// ip6class 'local' draws the prefix from the router's own ULA. Without one
@@ -1442,7 +1932,10 @@ function reconcile_v6_lan(uci, iface, want_nets, notes) {
 		push(notes, 'the router has no ULA prefix (network.globals.ula_prefix); ' +
 			'steered clients cannot be given an IPv6 address');
 
-	return { network: cn, dhcp: cd };
+	let plan = [];
+	for (let net in touched)
+		push(plan, { net: net, want: index(want_nets, net) >= 0 });
+	return { network: cn, dhcp: cd, ra: plan };
 }
 
 // Redo ONLY the IPv6 rule decision for one instance, against whatever gateway
@@ -1480,7 +1973,15 @@ function ipv6_state(uci, s, mode, connected) {
 		// Which of the ways the requirement can go unmet this was, so the page
 		// can word it for what actually happened instead of guessing. Only
 		// meaningful with the reason below; null when nothing was recorded.
-		required_cause: null };
+		required_cause: null,
+		// True for a few minutes after this module asked odhcpd for a fresh
+		// advertisement, and only while IPv6 really is on the tunnel. The page
+		// says the clients are moving over exactly while that is the case: the
+		// whole reported defect was a page claiming IPv6 was active while four
+		// of five clients were still on their old address, and a permanent
+		// line saying so would be furniture on a card that was cut from 748px
+		// to 248 for good reason.
+		clients_settling: false };
 	if (out.mode == 'off')
 		out.reason = 'mode_off';
 	else if (out.mode == 'block')
@@ -1509,6 +2010,10 @@ function ipv6_state(uci, s, mode, connected) {
 		out.reason = 'tunnel_down';
 	else
 		out.active = true;
+	if (out.active) {
+		let at = int(uci.get('network', s.interface, 'protonvpn_v6_ra_at') || '0');
+		out.clients_settling = (at > 0) && ((time() - at) < RA_SETTLE_WINDOW);
+	}
 	return out;
 }
 
@@ -1641,6 +2146,7 @@ function enforce(uci, s) {
 		cn = true;
 	if (v6lan.dhcp)
 		cd = true;
+	let v6ra = v6lan.ra;
 
 	// 1c. Bypass routes for local subnets, so the steered default does not
 	//     swallow LAN↔VLAN or LAN↔local-tunnel traffic. The protonvpn
@@ -1822,10 +2328,14 @@ function enforce(uci, s) {
 	}
 
 	return { changed_network: cn, changed_firewall: cf, changed_dhcp: cd,
-		notes: notes };
+		// Which networks' clients have to be moved, and in which direction.
+		// The caller runs it after the reloads, because the advertisement has
+		// to describe addressing netifd has already put in place.
+		v6_ra: v6ra, notes: notes };
 }
 
-return { detect, enforce, reconcile_ipv6, ipv6_state, v6_hint,
+return { detect, enforce, reconcile_ipv6, ipv6_state, v6_hint, ra_refresh,
+	ra_budget_ms,
 	is_lan_side, v6_decline_reason, net_is_way_out, way_out_reason,
 	device_is_lan_side, device_way_out_reason, networks_on_device,
 	has_default_route, zones_of, zone_is_uplink, net_device, device_path,

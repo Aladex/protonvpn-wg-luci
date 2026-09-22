@@ -258,6 +258,14 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 {
 	eq('session_state without a session', m.session_state.call({}).state, 'no_session');
 	eq('session_state asks for a login', m.session_state.call({}).action_required, 're_login');
+	// The client version this package stamps, carried on a call the page
+	// already makes when it loads. Without it the "built into the package"
+	// option can only be offered unnamed until somebody presses Fetch — a
+	// network round trip to read a label, on the one control people reach for
+	// when a sign-in has just been refused for being too old.
+	eq('session_state names the built-in client version, with no session',
+		m.session_state.call({}).app_version_builtin,
+		require('protonvpn.api').builtin_app_version());
 	eq('account without a session', m.account.call({}).error, 'not logged in');
 	eq('refresh_locations without a session', m.refresh_locations.call({}).error, 'not logged in');
 

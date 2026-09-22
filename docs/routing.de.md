@@ -57,8 +57,36 @@ Blockade-Politik geradezu einlud — bekäme der Client überhaupt keine Adresse
 Deshalb schaltet `auto` für diese Netzwerke auch das Router Advertisement ein
 (`ra 'server'`, `ra_slaac 1`) und setzt `ra_default 1`; ohne das kündigt odhcpd
 auf einem Interface mit ausschließlich ULA eine Router-Lifetime von 0 an, und
-der Client erhält eine Adresse, mit der er nicht routen kann. DHCPv6 bleibt
-unangetastet. Zusätzlich wird Neighbour Discovery für die geleiteten
+der Client erhält eine Adresse, mit der er nicht routen kann.
+
+Ausserdem werden zwei Überbleibsel eines Netzwerks entfernt, das zuvor hinter
+einem ISP-Relay hing: `ra_flags` (die Flags *managed* und *other
+configuration*) und `ndp`. Das M-Flag schickt den Client zu DHCPv6, um eine
+Adresse zu holen, die das Advertisement bereits mitbringt — reine Verzögerung
+beim Umschalten, und ein Client ganz ohne DHCPv6 wartet auf etwas, das nie
+kommt. `ndp 'relay'` leitet Neighbour Discovery zum Uplink weiter und hält
+damit den Weg zum Provider-Router genau für die Clients offen, die gerade davon
+weggeholt werden. DHCPv6 selbst bleibt in beide Richtungen unangetastet:
+`auto` schaltet keinen Server ein, den Sie ausgeschaltet haben, und keinen aus,
+den Sie eingeschaltet haben. Mit gelöschtem M-Flag fordert nichts mehr einen
+Client auf, ihn nach einer Adresse zu fragen, also nimmt er an der
+Adressvergabe nicht mehr teil — er läuft aber weiter und antwortet dem, der
+von sich aus fragt. Genau darum geht es: es ist Ihr Dienst, und er tut
+weiterhin, wofür Sie ihn eingerichtet haben.
+
+Die Adressierung zu ändern ist nicht dasselbe, wie sie von den Clients benutzen
+zu lassen. Die unaufgeforderten Advertisements von odhcpd liegen Minuten
+auseinander — auf dem gemessenen Router zehn — und ein Client, der das
+entscheidende verpasst hat, behielt seine Provider-Adresse bis zum nächsten.
+Beim Übernehmen wie beim Freigeben eines Netzwerks wird deshalb gewartet, bis
+netifd die neue Adressierung meldet, und dann odhcpd zum erneuten Ankündigen
+aufgefordert — was es die von RFC 4861 vorgesehene Anfangsserie senden lässt
+statt eines einzelnen Pakets. In beide Richtungen: ohne das behalten die
+Clients beim Freigeben eine ULA, die nirgends mehr hinführt. Für einige Minuten
+danach sagt die Statuskarte, dass die Clients noch umziehen, damit „IPv6 ist
+aktiv" nicht als „alle Geräte benutzen es bereits" gelesen wird.
+
+Zusätzlich wird Neighbour Discovery für die geleiteten
 Netzwerke geöffnet — Router Solicitation sowie Neighbour
 Solicitation/Advertisement, ausschließlich IPv6 und sonst nichts, gebunden an
 das Interface des Netzwerks selbst, sodass nichts anderes aus seiner
