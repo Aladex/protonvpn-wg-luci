@@ -25,6 +25,16 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const VIEW = join(here, '../htdocs/luci-static/resources/view/protonvpn/overview.js');
 
+// Which source file loadView() reads. Normally the view in this checkout; the
+// browser harness points it at an older revision to take a "before"
+// measurement through the identical rig, which is the only way a before/after
+// comparison means anything. Kept as an explicit option rather than an
+// environment variable so the unit suite can never be pointed elsewhere by a
+// stray export.
+function viewPath(opts) {
+	return (opts && opts.view) ? opts.view : VIEW;
+}
+
 // LuCI installs String.prototype.format; the view uses it everywhere.
 // %s/%d and %% are all this app needs.
 function luciFormat(...args) {
@@ -94,20 +104,50 @@ function renderHtml(src) {
 // first; note that the SCALAR branch replaces the children even on a plain
 // append, because innerHTML is an assignment — that quirk is upstream's, not
 // ours.
+// Whatever ends up as a child of `el` remembers it, so a test can ask whether
+// a node is inside something that is hidden — which is what decides whether
+// it can take focus at all.
+//
+// Non-enumerable, like a real node's: the link points back up the tree, and
+// an enumerable one turns every node record into a cycle that JSON.stringify
+// and deep-equal both choke on.
+function setParent(child, parent) {
+	Object.defineProperty(child, 'parentNode',
+		{ value: parent, writable: true, enumerable: false, configurable: true });
+}
+
+function adopt(el, kids) {
+	(Array.isArray(kids) ? kids : [ kids ]).forEach((c) => {
+		if (c && typeof c === 'object' && !Array.isArray(c) && c.nodeType === 1)
+			setParent(c, el);
+	});
+	return kids;
+}
+
 function appendInto(el, children, replace) {
-	if (replace)
+	if (replace) {
+		// A browser blurs whatever it removes from the document, and it does
+		// so even when the very same node is put back immediately after —
+		// which is exactly what dom.content() does to the controls a card
+		// rebuilds. Without this the harness lets a detached node keep
+		// focus, and a test asking "did focus survive?" answers yes for a
+		// control the user can no longer see.
+		if (typeof el.contains === 'function' && fakeDocument.activeElement &&
+			el.contains(fakeDocument.activeElement))
+			fakeDocument.activeElement = null;
 		el.children = [];
+	}
 	if (Array.isArray(children)) {
 		// A non-element member becomes a text node, verbatim. Upstream would
 		// stringify a null member into the literal "null"; the harness is
 		// lenient about that one case rather than reproducing a bug no test
 		// here exercises — do not pass null inside an array.
-		el.children = childList(el).concat(children.map(
+		el.children = childList(el).concat(adopt(el, children).map(
 			(c) => (isElem(c) || c == null || c === false) ? c : String(c)));
 	} else if (typeof children === 'function') {
 		return appendInto(el, children(el), false);
 	} else if (isElem(children)) {
-		el.children = childList(el).concat([ children ]);
+		el.children = childList(el).concat([ adopt(el, children) ]);
 	} else if (children != null) {
 		el.children = [ htmlAssign(children) ];
 	}
@@ -132,16 +172,36 @@ export function htmlAssignments(node) {
 	return out;
 }
 
+// The one document every El belongs to, so `card.ownerDocument.activeElement`
+// resolves the way it does in a browser. Focus is a rendering property like
+// any other here: a repaint that throws it away is invisible to a test that
+// cannot observe it, and that is exactly the defect being pinned.
+export const fakeDocument = { activeElement: null };
+
+export function resetFocus() {
+	fakeDocument.activeElement = null;
+}
+
 export function El(tag, attrs, children) {
 	// nodeType is what makes this record an element to dom.elem() — real
 	// elements are nodeType 1.
-	const el = { tag, nodeType: 1, attrs: attrs || {}, children: [] };
+	const el = { tag, nodeType: 1, attrs: attrs || {}, children: [],
+		ownerDocument: fakeDocument };
 	// A real input/select reflects its value ATTRIBUTE into the .value
 	// property once, at creation; later writes to .value leave the attribute
 	// alone. Mirroring it here is what lets a test read back what the view
 	// rendered a field with, the same way the view's own code does.
 	if (el.attrs.value !== undefined && el.value === undefined)
 		el.value = el.attrs.value;
+	// A real element's .className IS the class attribute; the view assigns it
+	// wholesale on every repaint (`this.stateEl.className = cls`). Without
+	// this reflection the record kept its original attrs.class, so classList
+	// and every class-based lookup read a value the browser would not have.
+	Object.defineProperty(el, 'className', {
+		get: () => String(el.attrs.class || ''),
+		set: (v) => { el.attrs.class = String(v == null ? '' : v); },
+		enumerable: false, configurable: true
+	});
 	const current = () => String(el.attrs.class || '').split(/\s+/).filter(Boolean);
 	const set = (cls, on) => {
 		const parts = current();
@@ -150,16 +210,82 @@ export function El(tag, attrs, children) {
 		if (!on && at >= 0) parts.splice(at, 1);
 		el.attrs.class = parts.join(' ');
 	};
-	el.appendChild = (c) => { el.children = childList(el).concat([c]); return c; };
+	el.appendChild = (c) => {
+		if (c && typeof c === 'object' && c.nodeType === 1)
+			setParent(c, el);
+		el.children = childList(el).concat([c]);
+		return c;
+	};
 	// DOM.create() ends in DOM.append(elem, data) — same two branches.
 	appendInto(el, children, false);
-	// The one selector shape the view uses: an option lookup inside a select.
+	el.getAttribute = (name) => {
+		const v = el.attrs[name];
+		return (v === undefined || typeof v === 'function') ? null : v;
+	};
+	el.setAttribute = (name, v) => { el.attrs[name] = v; };
+	// A real element takes focus only if it is rendered. `display:none` is
+	// not focusable, and neither is anything inside it — a browser simply
+	// ignores the call and leaves focus where it was. Modelling that is what
+	// makes the panel-close tests mean something: they only pass if the
+	// trigger is un-hidden BEFORE it is focused, which is an ordering a
+	// permissive fake cannot tell apart from the correct one.
+	//
+	// `hidden` is the class this page hides things with (.hidden is
+	// display:none!important in its stylesheet); the harness does not
+	// evaluate CSS, so that class is the signal.
+	el.isRendered = () => {
+		for (let n = el; n; n = n.parentNode)
+			if (String((n.attrs && n.attrs.class) || '').split(/\s+/).includes('hidden'))
+				return false;
+		return true;
+	};
+	el.focus = () => {
+		if (!el.isRendered())
+			return;
+		fakeDocument.activeElement = el;
+	};
+	el.blur = () => {
+		if (fakeDocument.activeElement === el)
+			fakeDocument.activeElement = null;
+	};
+	el.contains = (other) => {
+		if (other === el)
+			return true;
+		const walk = (n) => {
+			if (n == null || typeof n !== 'object')
+				return false;
+			if (Array.isArray(n))
+				return n.some(walk);
+			if (n === other)
+				return true;
+			return walk(n.children);
+		};
+		return walk(childList(el));
+	};
+	// The two selector shapes the view uses: an option lookup inside a select,
+	// and an attribute lookup for the focus keys a repaint restores by.
 	el.querySelector = (sel) => {
-		const m = /^([a-z]+)\[value="(.*)"\]$/.exec(sel);
-		if (!m)
+		const opt = /^([a-z]+)\[value="(.*)"\]$/.exec(sel);
+		if (opt)
+			return childList(el).find((c) => c && c.tag === opt[1] &&
+				String((c.attrs && c.attrs.value) || '') === opt[2]) || null;
+		const at = /^\[([a-z-]+)="(.*)"\]$/.exec(sel);
+		if (!at)
 			return null;
-		return childList(el).find((c) => c && c.tag === m[1] &&
-			String((c.attrs && c.attrs.value) || '') === m[2]) || null;
+		let hit = null;
+		const walk = (n) => {
+			if (hit || n == null || typeof n !== 'object')
+				return;
+			if (Array.isArray(n))
+				return n.forEach(walk);
+			if (n.attrs && n.attrs[at[1]] === at[2]) {
+				hit = n;
+				return;
+			}
+			walk(n.children);
+		};
+		walk(childList(el));
+		return hit;
 	};
 	el.addEventListener = (ev, fn) => {
 		el.listeners = el.listeners || {};
@@ -320,7 +446,7 @@ export function loadView(opts) {
 		validation: {}, widgets: {}
 	};
 
-	const src = readFileSync(VIEW, 'utf8');
+	const src = readFileSync(viewPath(opts), 'utf8');
 	const names = Object.keys(globals);
 	// The 'require x' pragmas are string expressions, harmless here; the
 	// trailing `return` is why this has to be a Function body and not a module.

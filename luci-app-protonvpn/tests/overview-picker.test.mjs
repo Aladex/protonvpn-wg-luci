@@ -114,7 +114,7 @@ test('the Locations description matches the accordion picker', () => {
 
 test('country rows are acc rows built from a hit cell and a separate expand cell', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	assert.equal(accRows(ctx._poolListEl).length, 2,
 		'one acc row per country');
 	const de = mustRow(ctx._poolListEl, 'DE');
@@ -127,7 +127,7 @@ test('country rows are acc rows built from a hit cell and a separate expand cell
 
 test('the hit cell toggles the whole country; the exp cell does not select', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	assert.deepEqual(codes(ctx), [],
 		'expanding must not put the country in the set by itself');
@@ -141,7 +141,7 @@ test('the hit cell toggles the whole country; the exp cell does not select', () 
 
 test('the exp cell expands and collapses the cities inline, never swapping the list', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	const el = ctx._poolListEl;
 	assert.ok(has(mustRow(el, 'DE'), 'pv-acc-open'),
@@ -159,7 +159,7 @@ test('the exp cell expands and collapses the cities inline, never swapping the l
 
 test('a city hit narrows the country and the row shows the partial mark', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	cell(mustRow(ctx._poolListEl, 'Frankfurt'), 'pv-acc-hit').attrs.click(EV);
 	assert.deepEqual(codes(ctx), [ 'DE-FRA' ], 'one city hit narrows to that city');
@@ -170,7 +170,7 @@ test('a city hit narrows the country and the row shows the partial mark', () => 
 
 test('unchecking a city from a whole country keeps the other cities', () => {
 	const ctx = pickerCtx({ poolEntries: [ { code: 'DE', kind: 'country' } ] });
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	cell(mustRow(ctx._poolListEl, 'Frankfurt'), 'pv-acc-hit').attrs.click(EV);
 	assert.deepEqual(codes(ctx), [ 'DE-BER' ],
@@ -179,7 +179,7 @@ test('unchecking a city from a whole country keeps the other cities', () => {
 
 test('the city exp cell is an inert spacer that keeps the column aligned', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	const fra = mustRow(ctx._poolListEl, 'Frankfurt');
 	assert.ok(has(fra, 'pv-acc-city'), 'city rows carry pv-acc-city');
@@ -189,16 +189,19 @@ test('the city exp cell is an inert spacer that keeps the column aligned', () =>
 	assert.ok(!spacer.attrs.click, 'the spacer is not a click target');
 });
 
-// ── chip edit mode ─────────────────────────────────────────────────────────
+// ── selected-set edit mode ─────────────────────────────────────────────────
+// The selected set used to be chips; it is an aligned list now (one row per
+// country, columns that line up), but the entry path into edit mode is the
+// same: clicking the row for a picked country.
 
-test('chips render as inspectable elements, and a chip click opens edit mode', () => {
+test('the selected set renders inspectable rows, and a row click opens edit mode', () => {
 	const ctx = pickerCtx({ poolEntries: [ { code: 'NL', kind: 'country' } ] });
-	const chips = findAllClass(ctx.poolChips, 'pv-chip');
-	assert.equal(chips.length, 1, 'one chip per picked country');
-	assert.ok(text(chips[0]).indexOf('NL') >= 0, 'the chip shows its country');
-	assert.equal(typeof chips[0].attrs.click, 'function',
-		'the chip is a click target (the edit-mode entry path)');
-	chips[0].attrs.click(EV);
+	const rows = findAllClass(ctx.poolChips, 'pv-selrow');
+	assert.equal(rows.length, 1, 'one row per picked country');
+	assert.ok(text(rows[0]).indexOf('NL') >= 0, 'the row shows its country');
+	assert.equal(typeof rows[0].attrs.click, 'function',
+		'the row is a click target (the edit-mode entry path)');
+	rows[0].attrs.click(EV);
 	assert.equal(ctx._poolOpen, true, 'the panel opens');
 	assert.equal(ctx._poolEdit, true, 'in edit mode');
 	assert.equal(ctx._poolCountry, 'NL', 'for the chip country');
@@ -206,7 +209,7 @@ test('chips render as inspectable elements, and a chip click opens edit mode', (
 		'with that country expanded');
 });
 
-test('chip edit mode opens the same accordion with that country expanded', () => {
+test('edit mode opens the same accordion with that country expanded', () => {
 	const ctx = pickerCtx({ poolEntries: [ { code: 'NL', kind: 'country' } ] });
 	ctx.poolOpenCountry('NL', true);
 	assert.deepEqual(codes(ctx), [ 'NL' ], 'edit mode does not duplicate the entry');
@@ -241,7 +244,7 @@ test('the remove row keeps the hit+exp structure and removes the country', () =>
 
 test('the plain add flow offers no remove row', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	assert.equal(accRows(ctx._poolListEl).filter((r) => has(r, 'pv-pool-remove')).length, 0,
 		'remove is an edit-mode-only affordance');
 });
@@ -250,7 +253,7 @@ test('the plain add flow offers no remove row', () => {
 
 test('typing in the filter input narrows the list through its own listener', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const filt = findOneClass(ctx.poolPanel, 'pv-pool-filter');
 	assert.ok(filt, 'the panel carries the filter input');
 	assert.ok(filt.listeners && filt.listeners.input && filt.listeners.input.length,
@@ -264,7 +267,7 @@ test('typing in the filter input narrows the list through its own listener', () 
 
 test('the filter still narrows the accordion to matching countries', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	ctx._poolFilter = 'nl';
 	ctx.poolRenderCountryList();
 	assert.ok(mustRow(ctx._poolListEl, 'NL'), 'the matching country stays');
@@ -274,7 +277,7 @@ test('the filter still narrows the accordion to matching countries', () => {
 
 test('a filter with no hits keeps the plain no-matches row', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	ctx._poolFilter = 'zzz';
 	ctx.poolRenderCountryList();
 	const plain = findAllClass(ctx._poolListEl, 'pv-pool-row')
@@ -288,7 +291,7 @@ test('a filter with no hits keeps the plain no-matches row', () => {
 
 test('rows keep the per-hop-mode gateway counters', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	assert.match(text(metaOf(mustRow(ctx._poolListEl, 'DE'))), /\(4\)/);
 	ctx.hopValue = 'secure_core';
 	ctx.locations.countries[0].secure_core_count = 9;
@@ -303,7 +306,7 @@ test('tor mode counts tor gateways on country and city rows', () => {
 	ctx.locations.countries[0].tor_count = 7;
 	ctx.locations.countries[0].cities[0].tor_count = 5;
 	ctx.locations.countries[0].cities[1].tor_count = 2;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	assert.match(text(metaOf(mustRow(ctx._poolListEl, 'DE'))), /\(7\)/,
 		'the country row shows tor_count');
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
@@ -315,7 +318,7 @@ test('tor mode counts tor gateways on country and city rows', () => {
 test('city rows carry their own counter, not the country total', () => {
 	const ctx = pickerCtx();
 	ctx.locations.countries[0].cities[1].standard_count = 1;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	assert.match(text(metaOf(mustRow(ctx._poolListEl, 'Frankfurt'))), /\(2\)/);
 	assert.match(text(metaOf(mustRow(ctx._poolListEl, 'Berlin'))), /\(1\)/,
@@ -328,7 +331,7 @@ test('city rows carry their own counter, not the country total', () => {
 
 test('only the name ellipsises; the metadata is a flex:none sibling', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const hit = cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-hit');
 	const grow = findOneClass(hit, 'grow');
 	assert.ok(grow, 'the name keeps its grow span');
@@ -354,7 +357,7 @@ test('rows show the cache average load as a coloured dot and figure', () => {
 	const ctx = pickerCtx();
 	ctx.locations.countries[0].standard_load = 23;
 	ctx.locations.countries[0].cities[0].standard_load = 81;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const deMeta = metaOf(mustRow(ctx._poolListEl, 'DE'));
 	assert.match(text(deMeta), /23%/, 'the country row shows the average load');
 	const deDot = findAllClass(deMeta, 'pv-dot')[0];
@@ -374,7 +377,7 @@ test('the load figure follows the hop mode like the counter does', () => {
 	ctx.locations.countries[0].cities[1].tor_count = 2;
 	ctx.locations.countries[0].standard_load = 10;
 	ctx.locations.countries[0].tor_load = 96;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const meta = metaOf(mustRow(ctx._poolListEl, 'DE'));
 	assert.match(text(meta), /96%/, 'tor mode shows tor_load');
 	assert.ok(!/10%/.test(text(meta)), 'not the standard figure');
@@ -390,7 +393,7 @@ test('every hop mode reads its own load key, on country and city rows', () => {
 	fra.standard_count = 2; fra.secure_core_count = 2; fra.tor_count = 2;
 	de.standard_load = 10; de.secure_core_load = 42; de.tor_load = 96;
 	fra.standard_load = 11; fra.secure_core_load = 43; fra.tor_load = 97;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	cell(mustRow(ctx._poolListEl, 'DE'), 'pv-acc-exp').attrs.click(EV);
 	[ { hop: 'standard', country: 10, city: 11 },
 		{ hop: 'secure_core', country: 42, city: 43 },
@@ -419,7 +422,7 @@ test('an explicit null load renders like a missing one; a real zero renders 0%',
 	ctx.locations.countries[0].standard_load = null;
 	ctx.locations.countries[0].cities[0].standard_load = 0;
 	ctx.locations.countries[0].cities[1].standard_load = null;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const deMeta = metaOf(mustRow(ctx._poolListEl, 'DE'));
 	assert.equal(findAllClass(deMeta, 'pv-dot').length, 0,
 		'explicit null renders no dot');
@@ -446,7 +449,7 @@ test('the metadata rule carries no clipping declarations', () => {
 
 test('a cache without load figures renders the count alone, no invented number', () => {
 	const ctx = pickerCtx();
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const meta = metaOf(mustRow(ctx._poolListEl, 'DE'));
 	assert.equal(findAllClass(meta, 'pv-dot').length, 0, 'no dot without data');
 	assert.ok(!/\d+%/.test(text(meta)), 'no percentage is invented');
@@ -462,7 +465,7 @@ test('the IPv6 count label still lands in country and city rows', () => {
 	});
 	ctx.locations.countries[0].ipv6_count = 1;
 	ctx.locations.countries[0].cities[0].ipv6_count = 0;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	// The requirement defaults the IPv6-only filter on, and Frankfurt has no
 	// IPv6 gateways: turn the filter off so the zero-IPv6 label can show.
 	const v6t = v6Toggle(ctx.poolPanel);
@@ -529,7 +532,7 @@ test('IPv6 only drops countries without IPv6 gateways and says how many', () => 
 	const ctx = pickerCtx();
 	ctx.locations.countries[0].ipv6_count = 2;
 	ctx.locations.countries[1].ipv6_count = 0;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	assert.equal(box.checked, false, 'the toggle defaults to off without the requirement');
 	box.checked = true;
@@ -555,7 +558,7 @@ test('IPv6 only drops zero-IPv6 cities inside an expanded country', () => {
 	ctx.locations.countries[0].ipv6_count = 1;
 	ctx.locations.countries[0].cities[0].ipv6_count = 1;
 	ctx.locations.countries[0].cities[1].ipv6_count = 0;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	box.checked = true;
 	box.attrs.change();
@@ -570,7 +573,7 @@ test('the text filter and IPv6 only compose', () => {
 	const ctx = pickerCtx();
 	ctx.locations.countries[0].ipv6_count = 2;
 	ctx.locations.countries[1].ipv6_count = 0;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	box.checked = true;
 	box.attrs.change();
@@ -591,7 +594,7 @@ test('the toggle is disabled with an explanation in Secure Core and never emptie
 		c.secure_core_count = c.standard_count;
 		c.ipv6_count = 0;    // counted against the standard kind only
 	});
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { label, box } = v6Toggle(ctx.poolPanel);
 	assert.equal(box.disabled, true, 'the toggle stays clickable in Secure Core');
 	assert.match(label.attrs.title || '', /Secure Core/i,
@@ -608,7 +611,7 @@ test('switching hop mode with the toggle on re-renders the panel without an empt
 	ctx.locations.countries[0].ipv6_count = 2;
 	ctx.locations.countries[1].ipv6_count = 0;
 	ctx.locations.countries.forEach((c) => { c.secure_core_count = c.standard_count; });
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	box.checked = true;
 	box.attrs.change();
@@ -631,7 +634,7 @@ test('the toggle defaults to on when the IPv6 requirement already applies', () =
 	});
 	ctx.locations.countries[0].ipv6_count = 2;
 	ctx.locations.countries[1].ipv6_count = 0;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	assert.equal(box.checked, true,
 		'the requirement is on but the picker still lists zero-IPv6 countries');
@@ -649,7 +652,7 @@ test('IPv6 only says how many cities it hides, even when no country is hidden', 
 	ctx.locations.countries[0].cities[0].ipv6_count = 1; // Frankfurt
 	ctx.locations.countries[0].cities[1].ipv6_count = 0; // Berlin
 	ctx.locations.countries[1].cities[0].ipv6_count = 0; // Amsterdam
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	box.checked = true;
 	box.attrs.change();
@@ -687,7 +690,7 @@ test('the hidden-country count is exact for several countries and follows the te
 	const ctx = pickerCtx();
 	ctx.locations.countries[0].ipv6_count = 0;
 	ctx.locations.countries[1].ipv6_count = 0;
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	const { box } = v6Toggle(ctx.poolPanel);
 	box.checked = true;
 	box.attrs.change();
@@ -706,7 +709,7 @@ test('the toggle is disabled with an explanation in Tor and never empties the li
 		c.tor_count = c.standard_count;
 		c.ipv6_count = 0;    // counted against the standard kind only
 	});
-	ctx.poolTogglePanel();
+	ctx.poolOpenPanel();
 	// A toggle left on from Standard…
 	const { box } = v6Toggle(ctx.poolPanel);
 	box.checked = true;

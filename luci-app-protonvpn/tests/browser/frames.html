@@ -1,0 +1,90 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ProtonVPN layout measurements</title>
+<!--
+  The page in an iframe per target width, so the theme's media queries
+  evaluate against the width being measured. See README.md: without
+  mobile-emulated.css these frames show the DESKTOP form and every number is
+  wrong.
+
+  window.measure() returns the numbers; drive it from a devtools console or
+  any CDP client.
+-->
+<style>
+ body{margin:0;background:#111;color:#ccc;font:12px system-ui,sans-serif}
+ .row{display:flex;gap:12px;padding:10px;align-items:flex-start;flex-wrap:wrap}
+ .cap{color:#888;margin:0 0 4px}
+ iframe{border:1px solid #444;height:1400px;background:#1b1b1b}
+</style></head>
+<body>
+<div class="row" id="row"></div>
+<script>
+const WIDTHS = [ 320, 360, 390, 820 ];
+const row = document.getElementById('row');
+for (const w of WIDTHS) {
+	const wrap = document.createElement('div');
+	const cap = document.createElement('p');
+	cap.className = 'cap';
+	cap.textContent = w + 'px';
+	wrap.appendChild(cap);
+	const f = document.createElement('iframe');
+	f.width = w;
+	f.id = 'f' + w;
+	f.src = 'page.html?v=' + Date.now();
+	wrap.appendChild(f);
+	row.appendChild(wrap);
+}
+
+// Reload every frame — call after re-running render.mjs.
+window.reloadFrames = () => Promise.all(WIDTHS.map((w) => new Promise((res) => {
+	const f = document.getElementById('f' + w);
+	f.onload = res;
+	f.src = 'page.html?v=' + Date.now();
+}))).then(() => new Promise((res) => setTimeout(res, 400)));
+
+window.measure = function () {
+	const out = {};
+	for (const w of WIDTHS) {
+		const d = document.getElementById('f' + w).contentDocument;
+		const b = d.body;
+		const h = (sel) => {
+			const e = d.querySelector(sel);
+			return e ? Math.round(e.getBoundingClientRect().height) : null;
+		};
+		// Count rows from the grid itself. The header is align-items:center,
+		// so its children have different `top` values while sharing one row —
+		// counting distinct tops reports a wrapped header that is not wrapped.
+		const gridRows = (sel) => {
+			const e = d.querySelector(sel);
+			return e ? getComputedStyle(e).gridTemplateRows
+				.split(' ').filter(Boolean).length : null;
+		};
+		// Leaf elements whose text does not fit. Some of these are meant to be
+		// cut (the header's detail column, the location name) — the question
+		// a measurement answers is whether anything is cut that had room.
+		const truncated = [];
+		d.querySelectorAll('*').forEach((el) => {
+			if (el.children.length === 0 && el.clientWidth > 0 &&
+				el.scrollWidth > el.clientWidth + 1)
+				truncated.push((el.className || el.tagName) +
+					' [' + el.clientWidth + '<' + el.scrollWidth + '] ' +
+					(el.textContent || '').slice(0, 40));
+		});
+		out[w] = {
+			viewport: b.clientWidth,
+			overflow: b.scrollWidth - b.clientWidth,
+			accountCard: h('.pv-acct'),
+			stateCard: h('.pv-state'),
+			furniture: h('.pv-acct') + h('.pv-state'),
+			accountHeaderRows: gridRows('.pv-acct .pv-line'),
+			stateHeaderRows: gridRows('.pv-state .pv-line'),
+			// Proof the mobile emulation is firing at all: the theme's form
+			// keeps a 180px label column on the desktop and drops it on a
+			// phone. "180px" at 320 means you are measuring the wrong layout.
+			formLabelColumn: getComputedStyle(d.querySelector('.cbi-value-title')).width,
+			truncated: truncated
+		};
+	}
+	return out;
+};
+</script>
+</body></html>

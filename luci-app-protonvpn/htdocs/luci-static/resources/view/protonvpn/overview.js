@@ -91,15 +91,7 @@ var STYLE = '' +
 	'.pv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3;white-space:nowrap;flex:1 1 auto}' +
 	'.pv-seg button+button{border-left:1px solid #0069d6}' +
 	'.pv-seg button.active{background:#0069d6;color:#fff}' +
-	// Rotation pool chips: a country is filled (like the active segment), a
-	// Location chips: one filled pill per country, with borderless edit/remove
-	// buttons inside. A stale code (no longer in the server list) is dashed.
 	'.pv-pool{display:flex;flex-direction:column;align-items:flex-start;gap:.4em;margin-top:.45em}' +
-	'.pv-chip{display:inline-flex;align-items:center;gap:.35em;border:1px solid #0069d6;border-radius:1.2em;padding:.15em .55em;line-height:1.4;white-space:nowrap}' +
-	'.pv-chip-country{background:var(--primary-color-medium,#0069d6);color:#fff}' +
-	'.pv-chip-click{cursor:pointer}' +
-	'.pv-chip-stale{border-style:dashed;color:var(--text-color-medium,#666)}' +
-	'.pv-chip button{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 .1em;margin:0;font:inherit;font-weight:700;line-height:1}' +
 	'.pv-pool-count{color:var(--text-color-medium,#666);font-size:.9em}' +
 	// Custom location picker: the trigger opens an inline accordion — the
 	// country rows expand to their cities in place. The trigger hides
@@ -116,16 +108,15 @@ var STYLE = '' +
 	'.pv-pool-filterrow{display:flex;align-items:center;gap:.6em;margin:0 0 .3em 0}' +
 	'.pv-pool-filterrow .pv-pool-filter{margin:0}' +
 	'.pv-pool-v6only{flex:none;white-space:nowrap;font-weight:normal}' +
-	'.pv-pool-row{display:flex;align-items:center;gap:.55em;padding:.34em .5em;border-radius:.3em;cursor:pointer;white-space:nowrap}' +
+	'.pv-pool-row{display:flex;align-items:center;gap:.55em;padding:.34em .5em;border-radius:.3em;cursor:pointer;white-space:nowrap;width:100%;box-sizing:border-box}' +
 	'.pv-pool-row:hover{background:rgba(0,105,214,.14)}' +
 	'.pv-pool-row.is-in{opacity:.55}' +
-	'.pv-pool-row .grow{flex:1;overflow:hidden;text-overflow:ellipsis}' +
+	'.pv-pool-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}' +
 	'.pv-pool-row .chev{color:var(--text-color-medium,#888);font-weight:700}' +
 	'.pv-pool-row .box{font-weight:700;width:1.15em;text-align:center;flex:none}' +
 	'.pv-pool-remove{color:#c0392b;font-weight:600}' +
 	'.pv-pool-remove:hover{background:rgba(192,57,43,.12)}' +
 	'.pv-pool-sep{border-top:1px solid var(--border-color-medium,#ddd);margin:.25em 0}' +
-	'.pv-chip-add{font-weight:700;padding:0 .15em}' +
 	// The location picker accordion, scoped to its own panel so the server
 	// picker's rows keep the base .pv-pool-row look. Each row is two cells:
 	// the hit cell takes the width and does the selecting, the 34px expand
@@ -142,7 +133,7 @@ var STYLE = '' +
 	// of the name, never inside it: .grow alone flexes and ellipsises, so a
 	// long country name can never eat these.
 	'.pv-pool-acc .pv-acc-meta{flex:none;display:flex;align-items:center;gap:.4em;color:var(--text-color-medium,#888);font-variant-numeric:tabular-nums}' +
-	'.pv-pool-acc .pv-acc-exp{flex:none;width:34px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-left:1px solid var(--border-color-medium,#ddd);color:var(--text-color-medium,#888);font-weight:700;cursor:pointer}' +
+	'.pv-pool-acc .pv-acc-exp{flex:none;width:34px;padding:0;align-self:stretch;display:flex;align-items:center;justify-content:center;border-left:1px solid var(--border-color-medium,#ddd);color:var(--text-color-medium,#888);font-weight:700;cursor:pointer}' +
 	'.pv-pool-acc .pv-acc-exp:hover{background:rgba(0,105,214,.14)}' +
 	'.pv-acc-city .pv-acc-hit{padding-left:2.1em}' +
 	'.pv-pool-acc .pv-acc-city .pv-acc-exp{cursor:default}' +
@@ -181,42 +172,176 @@ var STYLE = '' +
 	// A real card, not a bare paragraph: the credential state is the first
 	// thing to read on the page, and its actions must not collide with the
 	// form below.
-	'.pv-acct{display:flex;flex-wrap:wrap;align-items:center;gap:1em;' +
-	'padding:.85em 1.1em;margin-bottom:1.2em;border-radius:6px;' +
-	'border:1px solid var(--border-color-medium,#444);' +
-	'background:var(--background-color-medium,rgba(127,127,127,.06))}' +
-	'.pv-acct-main{flex:1 1 22em;min-width:16em}' +
-	'.pv-acct-title{font-weight:700;display:flex;align-items:center;gap:.5em}' +
-	'.pv-acct-sub{font-size:90%;opacity:.75;margin-top:.25em}' +
-	// Actions sit on the right on wide screens and wrap underneath on narrow
-	// ones, always with real spacing between the buttons.
-	'.pv-acct-actions{display:flex;gap:.6em;flex-wrap:wrap;margin-left:auto}' +
-	// A full-width basis puts the client version on a line of its own between
-	// the account state and the buttons, at every width.
-	'.pv-acct-appver{flex:1 1 100%}' +
-	'.pv-acct-appver-label{font-weight:600;margin-bottom:.35em}' +
-	'.pv-acct-appver .pv-appver-list{min-width:16em}' +
+	// The account card carries a tint so it reads as the page's first block;
+	// everything else about its box comes from .pv-card.
+	'.pv-acct{background:var(--background-color-medium,rgba(127,127,127,.06))}' +
+	'.pv-acct-sub{font-size:90%;opacity:.8;margin-top:.35em}' +
+	'.pv-state-note{font-size:90%;opacity:.85;margin-top:.35em}' +
 	'.pv-acct-warn{border-color:#c79100}' +
 	'.pv-acct-bad{border-color:#c0392b}' +
 	'.pv-led{display:inline-block;width:.7em;height:.7em;border-radius:50%;flex:none}' +
 	'.pv-led-ok{background:#3c8c3c}.pv-led-warn{background:#c79100}.pv-led-bad{background:#c0392b}' +
-	'.pv-tagline{font-size:85%;opacity:.8;margin-left:.4em}' +
 	'.pv-err{color:#c0392b;font-weight:bold;margin-bottom:.6em}' +
 	'.pv-field{margin-bottom:.9em}' +
 	'.pv-field label{display:block;margin-bottom:.3em;font-weight:bold}' +
 	'.pv-field input{width:100%;box-sizing:border-box}' +
-	'.pv-state{display:flex;flex-wrap:wrap;align-items:center;gap:1em;' +
-	'padding:.85em 1.1em;margin-bottom:1.2em;border-radius:6px;' +
-	'border:1px solid var(--border-color-medium,#444)}' +
-	'.pv-state-main{flex:1 1 24em;min-width:16em}' +
-	// The bold lives on the state word alone, not on the whole heading row:
-	// the row also carries the LED and the instance tag, which must stay light.
-	'.pv-state-title{display:flex;align-items:center;gap:.5em}' +
-	'.pv-state-label{font-weight:700}' +
-	'.pv-state-sub{font-size:90%;opacity:.8;margin-top:.3em;line-height:1.5}' +
-	'.pv-state-actions{display:flex;gap:.6em;flex-wrap:wrap;margin-left:auto}' +
-	'.pv-quota{font-size:85%;opacity:.75}' +
+	// ── the layout rule for this whole page ──────────────────────────────
+	//
+	// Never rely on flex-wrap for a "text + action" pair. Use an explicit
+	// grid where ONLY the text column flexes, and carry min-width:0 all the
+	// way up. Every complaint the owner raised about this page was the same
+	// mistake: the client-version button wrapped onto its own line, a
+	// location chip grew without bound, and a long country name in the picker
+	// widened the form until the page scrolled sideways. A flex item defaults
+	// to min-width:auto, so the min-content width of a nowrap descendant
+	// propagates outward one ancestor at a time until something stops it.
+	//
+	// THE root cause of the horizontal scroll on phones: a <fieldset> carries
+	// a UA default of min-width:min-content, so .cbi-section cannot shrink
+	// below the widest nowrap thing inside it and drags the document with it.
+	// Measured: this one line took the document from 518px to the viewport
+	// width at 320, 360 and 390.
+	'fieldset.cbi-section{min-width:0}' +
+	'.cbi-value-field,.pv-pool-wrap,.pv-pool-panel,.pv-sel{min-width:0}' +
+	'.pv-card{border-radius:6px;padding:.6em .8em;margin-bottom:.9em;' +
+		'border:1px solid var(--border-color-medium,#444)}' +
+	// led · label · detail · primary actions · secondary actions. The detail
+	// is the only column allowed to flex, so the header can never break onto
+	// a second row.
+	//
+	// Five columns, not four: grid-template-columns fixes the column count,
+	// so a fifth item on a four-column template wraps to a second ROW —
+	// measured, that is exactly what the secondary actions did at 820px, and
+	// it is the same wrapping-header defect in a new place.
+	'.pv-line{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto auto;' +
+		'align-items:center;gap:.35em .5em;min-height:1.9em}' +
+	'.pv-line .pv-grow{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+	'.pv-line-label{font-weight:700;white-space:nowrap}' +
+	'.pv-acts{display:flex;gap:.35em;align-items:center;justify-self:end}' +
+	// Secondary actions are hidden only where they do not fit. The kebab is
+	// the narrow-screen fallback, not the design: with room, every action is
+	// one click, which is the whole point of having a toolbar.
+	'.pv-sec{display:none;gap:.35em;align-items:center;justify-self:end}' +
+	'.pv-card.pv-acts-open .pv-sec{display:flex;grid-column:1/-1;' +
+		'flex-wrap:wrap;justify-content:flex-end}' +
+	'.pv-kebab{border:1px solid var(--border-color-medium,#888);background:none;' +
+		'color:inherit;border-radius:4px;padding:0 .45em;cursor:pointer;font:inherit;' +
+		'line-height:1.6;margin:0}' +
+	'@media (min-width:34em){.pv-sec{display:flex}' +
+		'.pv-card.pv-acts-open .pv-sec{grid-column:auto;flex-wrap:nowrap}' +
+		'.pv-kebab{display:none}}' +
+	// Facts as labelled pairs rather than a middot run-on.
+	//
+	// Narrow: ONE column, and the values may wrap. Two columns at 320px give
+	// each value about 140px, which is where the external IP lost its tail —
+	// and an IPv4 address has no space to wrap at, so a narrower column can
+	// only cut it. One column costs three more rows and truncates nothing,
+	// which is the better trade on a card that went from 248px to about 100.
+	// Wide: let them flow and go nowrap, because forcing a column grid there
+	// truncated that same IP while empty space sat beside it.
+	'.pv-facts{display:grid;grid-template-columns:minmax(0,1fr);' +
+		'gap:.1em .9em;margin-top:.4em;font-size:92%}' +
+	'@media (min-width:34em){.pv-facts{display:flex;flex-wrap:wrap;gap:.1em 1.5em}' +
+		'.pv-facts .pv-fact span{white-space:nowrap}}' +
+	'.pv-fact{display:flex;gap:.4em;min-width:0}' +
+	'.pv-fact b{font-weight:600;color:var(--text-color-medium,#888);flex:none}' +
+	'.pv-fact span{min-width:0;overflow:hidden;text-overflow:ellipsis}' +
+	'details.pv-more{margin-top:.45em}' +
+	'details.pv-more>summary{cursor:pointer;color:var(--text-color-medium,#888);font-size:90%}' +
+	// Same rule as the header row: the control that can shrink does, the
+	// button never wraps. A <select> will not go below its longest option
+	// without min-width:0, which is why this row used to break in two.
+	'.pv-verrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.4em;' +
+		'align-items:center;margin-top:.4em}' +
+	'.pv-verrow select{min-width:0;width:100%}' +
+	'.pv-verrow button{white-space:nowrap;margin:0}' +
+	// The selected locations, as an aligned list rather than chips. Chips put
+	// one pill per row anyway (the container was a column flex) and a
+	// narrowed country concatenated every city name into a single nowrap pill
+	// with no width bound. Measured row minimum here is 103-127px whatever the
+	// name, against 304-361px for the picker rows it replaced.
+	// 460px matches the picker directly below it, so the two blocks line up;
+	// on a wide screen the cap is raised, because a name ellipsised while
+	// empty space sits beside it is the mistake this list was built to fix.
+	'.pv-sel{margin-top:.45em;max-width:460px;border-radius:.4em;' +
+		'border:1px solid var(--border-color-medium,#888)}' +
+	'.pv-selrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;' +
+		'gap:.5em;align-items:center;padding:.3em .5em;cursor:pointer;' +
+		'border-bottom:1px solid var(--border-color-medium,#888)}' +
+	'.pv-selrow:last-child{border-bottom:0}' +
+	'.pv-selrow:hover{background:rgba(0,105,214,.14)}' +
+	'.pv-selrow .pv-selname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+	'.pv-selrow .pv-seldetail{color:var(--text-color-medium,#888);font-size:88%;white-space:nowrap}' +
+	'.pv-selrow .pv-selx{border:0;background:transparent;font:inherit;font-weight:700;' +
+		'cursor:pointer;padding:0 .25em;margin:0;color:var(--error-color-medium,#c0392b)}' +
+	'.pv-selrow .pv-selx:hover{background:rgba(192,57,43,.14);border-radius:.25em}' +
+	'@media (min-width:34em){.pv-sel{max-width:640px}}' +
+	// The dashed border is the meaning the old chip carried: this entry is
+	// in the saved set but the server list does not know it, so nothing
+	// will ever be connected to through it.
+	'.pv-selrow.pv-sel-stale{border-style:dashed;border-width:1px;' +
+		'border-color:var(--warn-color-medium,#c79100)}' +
+	'.pv-sel-stale .pv-selname{font-style:italic;color:var(--text-color-medium,#888)}' +
+	'.pv-flag{flex:none}' +
+	// The no-flag fallback: the country code itself, set as a badge so the
+	// flag column keeps its width and nothing looks like a missing glyph.
+	'.pv-flag-code{font-size:76%;font-weight:600;letter-spacing:.04em;line-height:1.6;' +
+		'padding:0 .28em;border-radius:3px;border:1px solid var(--border-color-medium,#888);' +
+		'color:var(--text-color-medium,#888)}' +
+	// ── keyboard ─────────────────────────────────────────────────────────
+	//
+	// Every row that acts is a real <button>. A <div> with a click handler is
+	// not reachable by Tab, is not activated by Enter or Space, and draws no
+	// focus ring — and this page was built entirely out of those. Using the
+	// element the browser already gives keyboard behaviour to is both less
+	// code and more correct than re-implementing it with role/tabindex and a
+	// keydown handler.
+	//
+	// The theme styles bare buttons heavily, so each one is reset back to
+	// looking exactly like the row it replaced. What is deliberately NOT
+	// reset is the outline: a focus ring is the only thing telling a
+	// keyboard user where they are.
+	'.pv-rowbtn{appearance:none;-webkit-appearance:none;border:0;background:transparent;' +
+		'color:inherit;font:inherit;line-height:inherit;text-align:left;margin:0;' +
+		'box-shadow:none;border-radius:inherit;min-width:0}' +
+	// :focus first, then withdrawn for pointer focus. A browser too old for
+	// :focus-visible drops the second rule as an unknown selector and keeps
+	// the ring on every focus — the wrong trade-off in the safe direction.
+	'.pv-rowbtn:focus,.pv-selx:focus,.pv-kebab:focus,.pv-pool-x:focus,' +
+		'.pv-more-summary:focus{outline:2px solid var(--primary-color-medium,#0069d6);' +
+		'outline-offset:-2px}' +
+	'.pv-rowbtn:focus:not(:focus-visible),.pv-selx:focus:not(:focus-visible),' +
+		'.pv-kebab:focus:not(:focus-visible),.pv-pool-x:focus:not(:focus-visible),' +
+		'.pv-more-summary:focus:not(:focus-visible){outline:none}' +
+	'.pv-rowbtn[disabled]{cursor:default}' +
+	// The picked-location name is the keyboard handle for its row, so it is a
+	// button; it still has to lay out as the one ellipsising grid cell.
+	'button.pv-selname{display:block;width:100%;padding:0}' +
 	'.hidden{display:none!important}';
+
+// Every officially assigned ISO 3166-1 alpha-2 code. Unicode's flag sequences
+// are keyed on exactly this list, so it is also the set of codes that can be
+// drawn as a flag at all — see countryFlag(). Shipped as a string and split
+// once, because 249 array literals cost more source than they save.
+var FLAG_CODES =
+	'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI ' +
+	'BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN ' +
+	'CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK ' +
+	'FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM ' +
+	'HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN ' +
+	'KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ' +
+	'ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP ' +
+	'NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW ' +
+	'SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF ' +
+	'TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI ' +
+	'VN VU WF WS YE YT ZA ZM ZW';
+var flagCodes = null;
+
+// Codes Proton uses that ISO 3166-1 does not assign, and the country they
+// actually mean. Verified against the live server list: UK is the only one
+// with an ISO equivalent — XK (Kosovo) has none, and deliberately gets the
+// no-flag fallback rather than an invented mapping.
+var CODE_ALIASES = { UK: 'GB' };
 
 // Proton sends ISO country codes only, so the browser localizes them instead
 // of the router shipping a 148-entry name table.
@@ -298,6 +423,20 @@ function fmtTime(epoch) {
 	return epoch ? new Date(epoch * 1000).toLocaleString() : '?';
 }
 
+// Day and month only. The account card's one line has to fit next to its
+// actions at 320px, and the hour a ~30-day session lapses at is not something
+// anybody acts on; the full stamp is still in the tooltip.
+function fmtDay(epoch) {
+	if (!epoch)
+		return '?';
+	var d = new Date(epoch * 1000);
+	try {
+		return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+	} catch (e) {
+		return d.toLocaleDateString();
+	}
+}
+
 return view.extend({
 	handleSave: null,
 	handleSaveApply: null,
@@ -358,15 +497,16 @@ return view.extend({
 	// The minutes branch starts at 90s, so it renders "1 minute" for a whole
 	// half-minute window — singular is worth spelling out rather than shipping
 	// "1 minutes ago" on the most visible line of the page.
+	// How long ago the last handshake was, as a VALUE. It used to carry the
+	// word "Handshake" itself, which was right for a middot run-on and says
+	// it twice next to a label.
 	fmtHandshake: function (sec) {
 		if (sec == null)
 			return null;
 		if (sec < 90)
-			return (sec == 1) ? _('Handshake 1 second ago')
-				: _('Handshake %d seconds ago').format(sec);
+			return (sec == 1) ? _('1 second ago') : _('%d seconds ago').format(sec);
 		var min = Math.floor(sec / 60);
-		return (min == 1) ? _('Handshake 1 minute ago')
-			: _('Handshake %d minutes ago').format(min);
+		return (min == 1) ? _('1 minute ago') : _('%d minutes ago').format(min);
 	},
 
 	// Display names for the country/city pair the tunnel reports. The country
@@ -551,13 +691,56 @@ return view.extend({
 		}, this));
 	},
 
+	// The emoji flag for a country code, or '' when there is no flag to draw.
+	//
+	// Unicode only assigns a regional-indicator sequence to codes that name a
+	// country; every other pair falls back to the white flag with a question
+	// mark on it, which reads as a broken picture rather than as "unknown".
+	// This used to map ANY two letters, so both non-ISO codes in Proton's own
+	// server list came out broken: UK (ISO assigns GB) and XK (Kosovo, which
+	// has no flag sequence at all). The membership test is what makes that
+	// general — a code Proton invents tomorrow gets the honest fallback
+	// instead of a phantom flag.
 	countryFlag: function (code) {
+		var cc = this.isoCode(code);
+		if (!cc)
+			return '';
+		return String.fromCodePoint(
+			0x1F1E6 + (cc.charCodeAt(0) - 65),
+			0x1F1E6 + (cc.charCodeAt(1) - 65));
+	},
+
+	// The assigned country this code stands for, or '' when it stands for
+	// none. Proton's UK is resolved to GB here rather than in the flag
+	// function, because the alias is about the code, not about the picture.
+	isoCode: function (code) {
 		if (typeof code !== 'string' || !/^[A-Za-z]{2}$/.test(code))
 			return '';
-		var c = code.toLowerCase();
-		return String.fromCodePoint(
-			0x1F1E6 + (c.charCodeAt(0) - 97),
-			0x1F1E6 + (c.charCodeAt(1) - 97));
+		var cc = code.toUpperCase();
+		if (Object.prototype.hasOwnProperty.call(CODE_ALIASES, cc))
+			cc = CODE_ALIASES[cc];
+		if (flagCodes === null)
+			flagCodes = new Set(FLAG_CODES.split(' '));
+		return flagCodes.has(cc) ? cc : '';
+	},
+
+	// What goes in the flag column. An emoji when Unicode has one, otherwise
+	// the code itself in a small badge.
+	//
+	// The badge, rather than an empty cell: the flag has its own column in the
+	// selected-location list and in the picker, and a blank there reads as a
+	// font that failed to load. Kosovo is the live case — Proton lists it as
+	// XK, ISO 3166-1 does not assign that code, and no emoji exists for it at
+	// any Unicode version — so what is drawn is exactly what the server list
+	// said, "XK", and nothing is invented.
+	flagNode: function (code) {
+		var f = this.countryFlag(code);
+		if (f)
+			return E('span', { class: 'pv-flag' }, nodes(f));
+		var raw = String(code == null ? '' : code).toUpperCase();
+		return E('span', { class: 'pv-flag pv-flag-code',
+			title: _('Unicode has no flag for this country code') },
+			nodes(raw || '??'));
 	},
 
 	// Localized country name for an ISO code, falling back to the code itself.
@@ -1325,6 +1508,9 @@ return view.extend({
 			return null;
 		var key = this.hopCountKey();
 		var isCountry = /^[A-Za-z]{2}$/.test(code);
+		// Kept for callers that still want a plain string; the picked-location
+		// list and the picker rows draw their own flag through flagNode(),
+		// which falls back to a code badge where Unicode has no flag.
 		var flag = this.countryFlag(code.slice(0, 2));
 		var countries = this.filteredCountries();
 		for (var i = 0; i < countries.length; i++) {
@@ -1337,6 +1523,38 @@ return view.extend({
 					return { code: code, kind: 'city', name: cities[j].name, count: cities[j][key] || 0, flag: flag };
 		}
 		return { code: code, kind: isCountry ? 'country' : 'city', name: null, count: null, flag: flag };
+	},
+
+	// Whether the server list knows this code AT ALL, in any hop mode.
+	//
+	// poolResolve() searches the CURRENT mode only, so it answers null for
+	// two very different situations: a code that exists but is not offered
+	// here (a Secure Core country while Standard is selected), and a code the
+	// cache has never heard of. The first is a filter and the entry is kept
+	// and hidden; the second is a dead entry that the user has to be able to
+	// delete, and telling them apart is the whole point of this function.
+	//
+	// While the list has not loaded, nothing is known and nothing is
+	// condemned: every code would look dead against an empty cache, and a
+	// slow page load is the worst possible moment to say so.
+	poolCodeOffered: function (code) {
+		var l = this.locations || {};
+		if (!l.available || !Array.isArray(l.countries))
+			return true;
+		var cc = String(code || '').split('-')[0];
+		for (var i = 0; i < l.countries.length; i++) {
+			var c = l.countries[i];
+			if (c.code !== cc)
+				continue;
+			if (c.code === code)
+				return true;
+			var cities = c.cities || [];
+			for (var j = 0; j < cities.length; j++)
+				if (cities[j].code === code)
+					return true;
+			return false;
+		}
+		return false;
 	},
 
 	/* ---- country-first set mutations ---------------------------------- */
@@ -1438,27 +1656,55 @@ return view.extend({
 		this.filteredCountries().forEach(L.bind(function(c) {
 			this._ccData[c.code] = c;
 		}, this));
-		// Keep an open panel in sync with the set (✓ marks, counts, city lists).
+		// Keep an open panel in sync with the set (✓ marks, counts, city
+		// lists) AND with the hop mode, whose change disables the IPv6-only
+		// toggle in the panel head. poolRenderPanel() carries focus and the
+		// filter text across, so repainting the whole thing under the user's
+		// hands is safe.
 		if (this._poolOpen)
 			this.poolRenderPanel();
 
+		// The row a user just removed cannot be restored by key, so focus
+		// lands on the control that adds a new one rather than on <body>.
+		this.repaintKeepingFocus(this.poolChips, L.bind(function () {
+			this.rebuildPoolRows();
+		}, this), this.poolTrigger);
+	},
+
+	rebuildPoolRows: function() {
 		dom.content(this.poolChips, nodes(''));
-		// One chip per country (country-first model). A whole-country chip shows
-		// just the country; a narrowed one lists its picked cities. Remove drops
-		// the whole country; the pencil opens its city checklist.
-		// Entries not available in the current hop mode are hidden (shown as "not
-		// selected") rather than as broken raw codes; switching modes therefore
-		// reads as an empty set until valid locations are picked. They stay in
-		// poolEntries so a round-trip mode switch does not lose them, and are
-		// dropped from what gets saved (collectIntoUci filters the same way).
-		var groups = [], byCc = {};
-		this.poolEntries.forEach(function(e) {
-			if (e.count == null)
-				return;
+		// One row per country (country-first model). A whole-country row names
+		// the country; a narrowed one lists its picked cities in the same
+		// column.
+		//
+		// An entry that does not resolve in the current hop mode is one of
+		// two things, and they must not be treated alike:
+		//
+		//  * still offered in another mode — hidden, and kept in poolEntries
+		//    so a round-trip mode switch does not lose it. Switching modes
+		//    therefore reads as an empty set until valid locations are picked.
+		//  * not in the server list at all — SHOWN, marked, and removable.
+		//    It used to be dropped from the display while collectIntoUci went
+		//    on writing it back on every save, so the set could not be edited
+		//    to something valid from this page: the only way out was uci.
+		var groups = [], byCc = {}, unknown = [], byDead = {};
+		this.poolEntries.forEach(L.bind(function(e) {
 			var cc = e.kind === 'country' ? e.code : e.code.split('-')[0];
+			if (e.count == null) {
+				if (this.poolCodeOffered(e.code))
+					return;
+				var d = byDead[cc];
+				if (!d) {
+					d = { cc: cc, codes: [] };
+					byDead[cc] = d;
+					unknown.push(d);
+				}
+				d.codes.push(e.code);
+				return;
+			}
 			var g = byCc[cc];
 			if (!g) {
-				g = { cc: cc, flag: e.flag, whole: null, cities: [] };
+				g = { cc: cc, whole: null, cities: [] };
 				byCc[cc] = g;
 				groups.push(g);
 			}
@@ -1466,7 +1712,7 @@ return view.extend({
 				g.whole = e;
 			else
 				g.cities.push(e);
-		});
+		}, this));
 
 		var total = 0;
 		groups.forEach(function(g) {
@@ -1477,27 +1723,39 @@ return view.extend({
 			}
 		});
 
+		// An aligned list, not chips. Chips put one pill per row anyway (their
+		// container was a column flex), and a narrowed country concatenated
+		// every city name into a single nowrap pill with no width bound —
+		// "Germany · Berlin, Frankfurt, Düsseldorf" simply ran off the screen.
+		// Here the columns line up, and only the name column may lose text:
+		// the measured row minimum is 103-127px whatever the name is, against
+		// 304-361px for the picker rows the chips sat under.
+		var list = (groups.length || unknown.length) ? E('div', { class: 'pv-sel' }) : null;
 		groups.forEach(L.bind(function(g) {
 			var cname = this.countryLabel(g.cc);
-			var flag = g.flag || '';
-			var label, stale;
+			var name, detail;
 			if (g.whole) {
-				stale = g.whole.name == null;
-				label = (flag ? flag + ' ' : '') + cname +
-					(g.whole.count != null ? ' (%d)'.format(g.whole.count) : '');
+				name = cname;
+				detail = _('%d servers').format(g.whole.count);
 			} else {
-				stale = g.cities.some(function(e) { return e.name == null; });
-				var cities = g.cities.map(function(e) { return e.name || e.code; }).join(', ');
-				label = (flag ? flag + ' ' : '') + cname + ' · ' + cities;
+				name = cname + ' · ' +
+					g.cities.map(function(e) { return e.name || e.code; }).join(', ');
+				detail = g.cities.length === 1 ? _('1 city')
+					: _('%d cities').format(g.cities.length);
 			}
-			// The whole chip opens this country's editor (cities + remove); no
-			// separate ×/pencil buttons.
-			this.poolChips.appendChild(E('span', {
-				class: 'pv-chip pv-chip-country pv-chip-click' + (stale ? ' pv-chip-stale' : ''),
-				title: _('Edit or remove'),
-				click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(g.cc, true); }, this) },
-				nodes(label)));
+			list.appendChild(this.selRow(g.cc, name, detail, false));
 		}, this));
+		// The rows for codes the server list has never heard of. Same shape as
+		// the rest so the columns still line up, dashed and italic so it is
+		// obvious at a glance which is which — the meaning the old chip
+		// carried with its dashed border — and with the same × as everything
+		// else, because being able to delete it is the entire point.
+		unknown.forEach(L.bind(function(d) {
+			list.appendChild(this.selRow(d.cc, d.codes.join(', '),
+				_('not in the server list'), true));
+		}, this));
+		if (list)
+			this.poolChips.appendChild(list);
 
 		var summary = '';
 		if (groups.length)
@@ -1519,7 +1777,76 @@ return view.extend({
 			this.poolTrigger.disabled = !(this.locations || {}).available;
 	},
 
+	// One row of the picked-location list: flag · name · detail · remove.
+	//
+	// The row keeps its own click so the mouse gets the whole row as a hit
+	// target, while the NAME is the button a keyboard reaches. The name
+	// rather than the row itself, because the row also holds the remove
+	// button and a button inside a button is not a thing; both handlers stop
+	// propagation so a click on the name cannot also fire the row.
+	//
+	// `dead` is for a code the server list no longer knows: same shape, so
+	// the columns still line up, plus the dashed styling the chip this list
+	// replaced used to carry for exactly this case.
+	selRow: function (cc, name, detail, dead) {
+		return E('div', {
+			class: 'pv-selrow' + (dead ? ' pv-sel-stale' : ''),
+			title: _('Edit or remove'),
+			click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(cc, true); }, this) },
+			nodes([
+				this.flagNode(cc),
+				E('button', { type: 'button', class: 'pv-rowbtn pv-selname',
+					title: name, 'data-pv-focus': 'sel:' + cc,
+					click: L.bind(function(ev) {
+						ev.stopPropagation();
+						if (ev.preventDefault)
+							ev.preventDefault();
+						this.poolOpenCountry(cc, true);
+					}, this) }, nodes(name)),
+				E('span', { class: 'pv-seldetail' }, nodes(detail)),
+				E('button', { class: 'pv-selx', type: 'button',
+					title: _('Remove'), 'data-pv-focus': 'selx:' + cc,
+					'aria-label': _('Remove %s').format(name),
+					click: L.bind(function(ev) {
+						ev.stopPropagation();
+						if (ev.preventDefault)
+							ev.preventDefault();
+						this.poolRemoveCountry(cc);
+					}, this) }, nodes('\u00D7'))
+			]));
+	},
+
 	/* ---- pickers ------------------------------------------------------ */
+
+	// Escape closes a panel, from anywhere inside it.
+	//
+	// The mouse has the ✕ and a click outside; this is the keyboard's way out,
+	// and without it a picker could be opened from the keyboard and not
+	// closed from it. Bound to the panel element, which is built once and
+	// outlives every rebuild of its contents, so the handler survives the
+	// repaints that replace the rows under it.
+	//
+	// ONE rule, wherever focus is — including in the filter box. Escape
+	// meaning "clear the field" there and "close the panel" everywhere else
+	// is two behaviours behind one key, and the filter is reset on every open
+	// anyway, so closing costs nothing anybody would want to keep.
+	//
+	// The event is stopped: an Escape that closed this panel must not also
+	// reach whatever is behind it.
+	bindPanelEscape: function (panel, closer) {
+		// Bound on the way in rather than at construction, so every path that
+		// opens a panel gets it; the flag keeps that to a single listener.
+		if (!panel || panel._pvEscapeBound)
+			return;
+		panel._pvEscapeBound = true;
+		panel.addEventListener('keydown', L.bind(function (ev) {
+			if (!ev || ev.key !== 'Escape')
+				return;
+			ev.preventDefault();
+			ev.stopPropagation();
+			this[closer]();
+		}, this));
+	},
 
 	// Both pickers are inline panels rather than modals, so nothing dismisses
 	// them on its own: without this they could only be closed through their own
@@ -1549,9 +1876,15 @@ return view.extend({
 
 	/* ---- location picker panel --------------------------------------- */
 
-	poolTogglePanel: function() {
+	// Opens the panel. NOT a toggle, however much the trigger looks like one:
+	// the trigger hides while the panel is open, so its own click — the only
+	// caller — can never arrive to close it again. The close branch that used
+	// to sit here was unreachable, and a dismissal path that cannot be
+	// reached is worse than no path, because it reads as one. Dismissal is
+	// Escape, the ✕ and a click outside; see poolClosePanel().
+	poolOpenPanel: function() {
 		if (this._poolOpen)
-			return this.poolClosePanel();
+			return;
 		this._poolEdit = false;
 		this._poolCountry = null;
 		this._poolExpanded = {};
@@ -1561,15 +1894,21 @@ return view.extend({
 		// turned right back off; nothing of it reaches uci.
 		this._poolV6Only = this.requireV6Active();
 		this._poolOpen = true;
+		this.bindPanelEscape(this.poolPanel, 'poolClosePanel');
 		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
 		this.poolPanel.classList.remove('hidden');
 		this.poolRenderPanel();
 	},
 
 	poolClosePanel: function() {
+		// Decided BEFORE the panel is hidden: once it is, the element that
+		// held focus is no longer rendered and the answer is already lost.
+		var handBack = this.focusInside(this.poolPanel);
 		this._poolOpen = false;
 		if (this.poolPanel) this.poolPanel.classList.add('hidden');
 		if (this.poolTrigger) this.poolTrigger.classList.remove('hidden');
+		if (handBack && this.poolTrigger && this.poolTrigger.focus)
+			this.poolTrigger.focus();
 	},
 
 	// Open the picker from a chip: the same accordion as the plain add flow,
@@ -1586,6 +1925,7 @@ return view.extend({
 		this._poolFilter = '';
 		this._poolV6Only = this.requireV6Active();
 		this._poolOpen = true;
+		this.bindPanelEscape(this.poolPanel, 'poolClosePanel');
 		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
 		this.poolPanel.classList.remove('hidden');
 		this.poolRenderPanel();
@@ -1609,6 +1949,26 @@ return view.extend({
 		var panel = this.poolPanel;
 		if (!panel)
 			return;
+		// Two different events reach this function. A genuine OPEN, where
+		// focus is somewhere else on the page and belongs in the filter box;
+		// and a repaint under the user's hands — a country toggled, the hop
+		// mode changed — where focus is already inside the panel and must
+		// stay on the control it is on. Focusing the filter on the second
+		// would drag a keyboard user out of the list on every pick.
+		var doc = panel.ownerDocument;
+		var act = doc && doc.activeElement;
+		var hadFocus = !!(act && panel.contains && panel.contains(act));
+		var filt = null;
+		this.repaintKeepingFocus(panel, L.bind(function () {
+			filt = this.poolRenderPanelBody(panel);
+		}, this));
+		if (!hadFocus && filt)
+			setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
+	},
+
+	// Builds the panel's contents and hands back the filter input, which is
+	// the control an open focuses.
+	poolRenderPanelBody: function(panel) {
 		dom.content(panel, nodes([]));
 
 		var title;
@@ -1621,9 +1981,11 @@ return view.extend({
 		panel.appendChild(E('div', { class: 'pv-pool-head' }, nodes([
 			E('span', {}, nodes(title)),
 			E('button', { type: 'button', class: 'pv-pool-x', title: _('Close'),
+				'data-pv-focus': 'panel-close', 'aria-label': _('Close'),
 				click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, nodes('✕'))
 		])));
 		var filt = E('input', { type: 'text', class: 'cbi-input-text pv-pool-filter',
+			'data-pv-focus': 'panel-filter',
 			placeholder: _('Filter') + '…', value: this._poolFilter });
 		filt.addEventListener('input', L.bind(function() {
 			this._poolFilter = filt.value;
@@ -1637,7 +1999,8 @@ return view.extend({
 		// keeps its checked state while disabled, so a mode round trip
 		// restores it.
 		var hop = this.hopMode();
-		var v6box = E('input', { type: 'checkbox', change: L.bind(function() {
+		var v6box = E('input', { type: 'checkbox', 'data-pv-focus': 'panel-v6only',
+			change: L.bind(function() {
 			this._poolV6Only = v6box.checked;
 			this.poolRenderCountryList();
 		}, this) });
@@ -1659,7 +2022,7 @@ return view.extend({
 		this._poolListEl = E('div', {});
 		panel.appendChild(this._poolListEl);
 		this.poolRenderCountryList();
-		setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
+		return filt;
 	},
 
 	// The metadata half of an accordion row: the average-load dot and figure
@@ -1688,6 +2051,16 @@ return view.extend({
 		var el = this._poolListEl;
 		if (!el)
 			return;
+		// Activating a row re-renders the whole list under the finger that
+		// pressed it. Without carrying focus across, the first Enter throws
+		// it to the document and a second country cannot be picked without
+		// reaching for the mouse.
+		this.repaintKeepingFocus(el, L.bind(function () {
+			this.poolRenderCountryRows(el);
+		}, this));
+	},
+
+	poolRenderCountryRows: function(el) {
 		dom.content(el, nodes([]));
 		var f = (this._poolFilter || '').toLowerCase();
 		var any = false;
@@ -1710,17 +2083,30 @@ return view.extend({
 			var st = this.poolCountryHas(cc);
 			var mark = st.whole ? '☑' : (st.has ? '▪' : '');
 			var open = !!(this._poolExpanded || {})[cc];
-			var flag = this.countryFlag(cc);
+			// Two buttons, not two spans with handlers: Tab reaches them,
+			// Enter and Space activate them, and the focus ring is drawn.
+			// aria-pressed carries what the ☑ in the box cell says visually,
+			// which a screen reader never sees; aria-expanded does the same
+			// for the chevron.
 			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row' +
 				(st.has ? ' is-in' : '') + (open ? ' pv-acc-open' : '') }, nodes([
-				E('span', { class: 'pv-acc-hit',
+				E('button', { type: 'button', class: 'pv-rowbtn pv-acc-hit',
+					'data-pv-focus': 'cc:' + cc,
+					// "mixed" is what ARIA has for exactly this: some of the
+					// country's cities are picked and not the whole of it.
+					// The ▪ in the box cell is the sighted cue for it and a
+					// screen reader never sees that.
+					'aria-pressed': st.whole ? 'true' : (st.has ? 'mixed' : 'false'),
 					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, nodes([
 						E('span', { class: 'box' }, nodes(mark)),
-						E('span', { class: 'grow' }, nodes((flag ? flag + ' ' : '') + c.name)),
+						E('span', { class: 'grow' }, nodes([ this.flagNode(cc), ' ' + c.name ])),
 						E('span', { class: 'pv-acc-meta' },
 							nodes(this.poolMetaKids(c.gateway_count || 0, c[loadKey], c)))
 					])),
-				E('span', { class: 'pv-acc-exp',
+				E('button', { type: 'button', class: 'pv-rowbtn pv-acc-exp',
+					'data-pv-focus': 'exp:' + cc,
+					'aria-expanded': open ? 'true' : 'false',
+					'aria-label': _('Show the cities of %s').format(c.name),
 					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleExpand(cc); }, this) },
 					nodes(open ? '▾' : '›'))
 			])));
@@ -1736,9 +2122,15 @@ return view.extend({
 					return;
 				}
 				var on = st.whole || !!st.cities[city.code];
+				// The city's expand cell stays an inert <span>: it is a
+				// spacer that keeps the chevron column aligned, and making it
+				// a button would put a tab stop on something that does
+				// nothing.
 				el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-acc-city' +
 					(on ? ' is-in' : '') }, nodes([
-					E('span', { class: 'pv-acc-hit',
+					E('button', { type: 'button', class: 'pv-rowbtn pv-acc-hit',
+						'data-pv-focus': 'city:' + city.code,
+						'aria-pressed': on ? 'true' : 'false',
 						click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, nodes([
 							E('span', { class: 'box' }, nodes(on ? '☑' : '☐')),
 							E('span', { class: 'grow' }, nodes(city.name)),
@@ -1770,7 +2162,8 @@ return view.extend({
 			var rmcc = this._poolCountry;
 			el.appendChild(E('div', { class: 'pv-pool-sep' }));
 			el.appendChild(E('div', { class: 'pv-pool-row pv-acc-row pv-pool-remove' }, nodes([
-				E('span', { class: 'pv-acc-hit',
+				E('button', { type: 'button', class: 'pv-rowbtn pv-acc-hit',
+					'data-pv-focus': 'rm:' + rmcc,
 					click: L.bind(function(ev) {
 						ev.stopPropagation();
 						this.poolRemoveCountry(rmcc);
@@ -1824,6 +2217,16 @@ return view.extend({
 		var t = this.srvTrigger;
 		if (!t)
 			return;
+		// The × lives inside this trigger and rebuilds itself away when it is
+		// pressed — clearing the pin leaves no × at all. The trigger itself
+		// is the fallback: it is what the × was attached to and what now
+		// offers to pick a server again.
+		this.repaintKeepingFocus(t, L.bind(function () {
+			this.srvRenderTriggerBody(t);
+		}, this), t);
+	},
+
+	srvRenderTriggerBody: function(t) {
 		var host = this._serverChosen;
 		if (!host) {
 			dom.content(t, nodes(_('Automatic server')));
@@ -1842,25 +2245,36 @@ return view.extend({
 		} else {
 			kids = [ E('span', {}, nodes(host + ' ' + _('(not in the set)'))) ];
 		}
-		kids.push(E('button', { type: 'button', class: 'pv-srv-x', title: _('Clear (back to automatic)'),
+		kids.push(E('button', { type: 'button', class: 'pv-srv-x',
+			title: _('Clear (back to automatic)'), 'data-pv-focus': 'srv-clear',
+			'aria-label': _('Clear the pinned server'),
 			click: L.bind(function(ev) { ev.preventDefault(); ev.stopPropagation(); this.srvSetChosen(''); }, this) }, nodes('×')));
 		dom.content(t, nodes(kids));
 	},
 
-	srvTogglePanel: function() {
+	// Opens the panel; see poolOpenPanel() for why this is not a toggle.
+	srvOpenPanel: function() {
 		if (this._srvOpen)
-			return this.srvClosePanel();
+			return;
 		this._srvFilter = '';
 		this._srvOpen = true;
+		this.bindPanelEscape(this.srvPanel, 'srvClosePanel');
 		if (this.srvTrigger) this.srvTrigger.classList.add('hidden');
 		this.srvPanel.classList.remove('hidden');
 		this.srvRenderPanel();
 	},
 
 	srvClosePanel: function() {
+		// Same as the location panel: read it before hiding, hand the
+		// keyboard to the trigger that is reappearing. This is also the path
+		// a keyboard pick takes — srvSetChosen() ends here, and the row that
+		// was just activated stops existing.
+		var handBack = this.focusInside(this.srvPanel);
 		this._srvOpen = false;
 		if (this.srvPanel) this.srvPanel.classList.add('hidden');
 		if (this.srvTrigger) this.srvTrigger.classList.remove('hidden');
+		if (handBack && this.srvTrigger && this.srvTrigger.focus)
+			this.srvTrigger.focus();
 	},
 
 	srvSetChosen: function(host) {
@@ -1877,13 +2291,31 @@ return view.extend({
 		var panel = this.srvPanel;
 		if (!panel)
 			return;
+		// Same two events as the location panel: a genuine OPEN, where the
+		// filter should take the keyboard, and a repaint under the user's
+		// hands — refreshServerList() re-renders an open panel whenever its
+		// answer arrives — where focus has to stay on the control it is on.
+		var hadFocus = this.focusInside(panel);
+		var filt = null;
+		this.repaintKeepingFocus(panel, L.bind(function () {
+			filt = this.srvRenderPanelBody(panel);
+		}, this));
+		if (!hadFocus && filt)
+			setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
+	},
+
+	// Builds the panel's contents and hands back the filter input, which is
+	// the control an open focuses.
+	srvRenderPanelBody: function(panel) {
 		dom.content(panel, nodes(''));
 		panel.appendChild(E('div', { class: 'pv-pool-head' }, nodes([
 			E('span', {}, nodes(_('Pick a server'))),
 			E('button', { type: 'button', class: 'pv-pool-x', title: _('Close'),
+				'data-pv-focus': 'srv-panel-close', 'aria-label': _('Close'),
 				click: L.bind(function(ev) { ev.stopPropagation(); this.srvClosePanel(); }, this) }, nodes('✕'))
 		])));
 		var filt = E('input', { type: 'text', class: 'cbi-input-text pv-pool-filter',
+			'data-pv-focus': 'srv-panel-filter',
 			placeholder: _('Filter servers') + '…', value: this._srvFilter });
 		filt.addEventListener('input', L.bind(function() {
 			this._srvFilter = filt.value;
@@ -1894,7 +2326,7 @@ return view.extend({
 		this._srvListEl = E('div', {});
 		panel.appendChild(this._srvListEl);
 		this.srvRenderList();
-		setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
+		return filt;
 	},
 
 	srvRenderList: function() {
@@ -1906,7 +2338,12 @@ return view.extend({
 		var current = this.srvCurrentGateway();
 		var f = (this._srvFilter || '').toLowerCase();
 
-		el.appendChild(E('div', { class: 'pv-pool-row pv-srv-quick',
+		// Same rule as the location picker: a row that picks is a button, so
+		// Tab reaches it and Enter fires it. The rows that only report
+		// something (group headers, "no matches") stay plain divs — a tab
+		// stop on a sentence is noise.
+		el.appendChild(E('button', { type: 'button', class: 'pv-rowbtn pv-pool-row pv-srv-quick',
+			'data-pv-focus': 'srv:auto', 'aria-pressed': chosen ? 'false' : 'true',
 			click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(''); }, this) }, nodes([
 				E('span', { class: 'box' }, nodes(chosen ? '' : '☑')),
 				E('span', { class: 'grow' }, nodes(_('Automatic (rotation picks)')))
@@ -1914,7 +2351,8 @@ return view.extend({
 		var best = this.srvLowestLoad();
 		if (best) {
 			var bn = this.countryLabel(best.country_code);
-			el.appendChild(E('div', { class: 'pv-pool-row pv-srv-quick',
+			el.appendChild(E('button', { type: 'button', class: 'pv-rowbtn pv-pool-row pv-srv-quick',
+				'data-pv-focus': 'srv:lowest',
 				click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(best.name || best.hostname); }, this) }, nodes([
 					E('span', { class: 'box' }, nodes('⚡')),
 					E('span', { class: 'grow' }, nodes(_('Lowest load') + ' · ' + (best.city || bn) +
@@ -1981,7 +2419,10 @@ return view.extend({
 			g.rows.forEach(L.bind(function(r) {
 				var isCur = current && (r.name === current || r.hostname === current);
 				var isPin = (r.name || r.hostname) === chosen;
-				el.appendChild(E('div', { class: 'pv-pool-row' + (isPin ? ' is-in' : ''),
+				el.appendChild(E('button', { type: 'button',
+					class: 'pv-rowbtn pv-pool-row' + (isPin ? ' is-in' : ''),
+					'data-pv-focus': 'srv:' + (r.name || r.hostname),
+					'aria-pressed': isPin ? 'true' : 'false',
 					click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(r.name || r.hostname); }, this) }, nodes([
 						E('span', { class: 'pv-dot ' + this.srvLoadClass(r.load) }),
 						E('span', { class: 'grow' }, nodes('%s / %s'.format(r.city || '?', r.name || r.hostname))),
@@ -2013,6 +2454,108 @@ return view.extend({
 					: _('No matches'))));
 	},
 
+	// ── card chrome ──────────────────────────────────────────────────────
+
+	// One header line for both cards: led · label · detail · actions.
+	//
+	// An explicit grid, never flex-wrap. The detail is the only column that
+	// flexes, so a long server name is ellipsised in its own column instead of
+	// pushing the buttons onto a second row — which is what left the old
+	// header ragged at narrow widths.
+	//
+	// `primary` is always visible. `secondary` is inline from 34em and behind
+	// the kebab below it, so a desktop where four buttons fit shows four
+	// buttons rather than a menu. The kebab is built only when there is
+	// something for it to reveal.
+	cardLine: function (card, led, label, detail, primary, secondary) {
+		var kids = [
+			E('span', { class: 'pv-led ' + led }),
+			E('span', { class: 'pv-line-label' }, nodes(label)),
+			E('span', { class: 'pv-grow', title: detail || '' }, nodes(detail || ''))
+		];
+		var acts = (primary || []).slice();
+		if ((secondary || []).length)
+			acts.push(E('button', { class: 'pv-kebab', type: 'button',
+				title: _('More actions'), 'aria-label': _('More actions'),
+				'data-pv-focus': 'kebab',
+				click: L.bind(function (ev) {
+					if (ev && ev.preventDefault)
+						ev.preventDefault();
+					card.classList.toggle('pv-acts-open');
+				}, this) }, nodes('\u22EF')));
+		if (acts.length)
+			kids.push(E('span', { class: 'pv-acts' }, nodes(acts)));
+		if ((secondary || []).length)
+			kids.push(E('span', { class: 'pv-sec' }, nodes(secondary)));
+		return E('div', { class: 'pv-line' }, nodes(kids));
+	},
+
+	// Repaint `container` without throwing away the keyboard.
+	//
+	// dom.content() replaces a container's children, and a browser blurs
+	// whatever it removes — even when the very same node goes straight back
+	// in, which is what happens to the client-version control on every
+	// five-second poll. Focus then falls to <body> and a keyboard user loses
+	// their place twelve times a minute.
+	//
+	// Controls carry a stable data-pv-focus key describing WHAT they do, not
+	// where they sit: restoring by position would move focus onto whichever
+	// button happened to take that slot, and on this page that could be
+	// Disable. When the key is gone — the row the user just removed — focus
+	// goes to `fallback` if one is offered, because the alternative is the
+	// document body.
+	repaintKeepingFocus: function (container, build, fallback) {
+		var doc = container && container.ownerDocument;
+		var active = doc && doc.activeElement;
+		var key = null;
+		if (active && active !== container && container.contains &&
+			container.contains(active) && active.getAttribute)
+			key = active.getAttribute('data-pv-focus');
+		build();
+		if (key == null)
+			return;
+		var back = container.querySelector &&
+			container.querySelector('[data-pv-focus="' + key + '"]');
+		if (!back && fallback && fallback.focus)
+			back = fallback;
+		if (back && back.focus)
+			back.focus();
+	},
+
+	// Whether the keyboard is currently somewhere inside this element.
+	//
+	// Both panel-close paths ask this BEFORE hiding themselves, because
+	// hiding a focused element blurs it: focus falls to <body>, the top of
+	// the document and nowhere near what the user was doing. They then hand
+	// the keyboard to the trigger that is being un-hidden at that same
+	// moment. Asking first is what makes it answerable at all, and it is
+	// also what keeps a panel closed by a click ELSEWHERE from yanking focus
+	// away from whatever that click just gave it to.
+	focusInside: function (el) {
+		var doc = el && el.ownerDocument;
+		var active = doc && doc.activeElement;
+		return !!(active && el.contains && el.contains(active));
+	},
+
+	// Both cards are repainted by the five-second status poll, and a repaint
+	// assigns className wholesale. The open-menu flag has to be carried
+	// across or a menu the user has just opened shuts by itself within five
+	// seconds, under the finger reaching for a button inside it.
+	keepOpenFlag: function (card, cls) {
+		return (card && card.classList && card.classList.contains('pv-acts-open'))
+			? cls + ' pv-acts-open' : cls;
+	},
+
+	// A labelled fact for the state card. Label and value are separate
+	// elements on purpose: that is what lets the value ellipsise on its own
+	// rather than the whole line reflowing, and what replaced the middot
+	// run-on that used to carry eight facts in one sentence.
+	fact: function (label, value) {
+		return E('div', { class: 'pv-fact' }, nodes([
+			E('b', {}, nodes(label)), E('span', {}, nodes(value))
+		]));
+	},
+
 	// ── credential banner ────────────────────────────────────────────────
 
 	// Session expiry is NOT an outage: the tunnel and rotation keep working
@@ -2022,68 +2565,87 @@ return view.extend({
 		if (!this.bandEl)
 			return;
 		var st = this.session || {};
-		var title, sub, led, actions, cls = 'pv-acct';
+		var led, detail, explain = null;
+		var primary = [], secondary = [];
+		var cls = 'pv-card pv-acct';
 
 		if (st.state === 'active') {
 			led = 'pv-led-ok';
-			title = _('Signed in to Proton');
-			// The 30-minute access token is refreshed silently, so only the
-			// session horizon is worth showing here.
-			sub = _('Session valid until %s. The router keeps it alive on its own — you will not be asked again unless it stays offline for weeks.')
-				.format(fmtTime(st.session_expires_at));
-			actions = [
+			// One line, because nothing is wrong. The paragraph this replaced
+			// explained the silent token refresh on every page load and cost
+			// 424px of card at 390px wide to say something true once.
+			detail = _('signed in · session to %s').format(fmtDay(st.session_expires_at));
+			secondary = [
 				E('button', { class: 'cbi-button',
+					'data-pv-focus': 'update-list',
 					click: ui.createHandlerFn(this, 'handleRefreshLocations') },
 					nodes(_('Update server list'))),
 				E('button', { class: 'cbi-button cbi-button-remove',
+					'data-pv-focus': 'sign-out',
 					click: ui.createHandlerFn(this, 'handleLogout') }, nodes(_('Sign out')))
 			];
 		} else if (st.state === 'needs_2fa') {
 			cls += ' pv-acct-warn';
 			led = 'pv-led-warn';
-			title = _('Two-factor code required');
-			sub = _('The password was accepted; enter the code from your authenticator to finish.');
-			actions = [
+			detail = _('two-factor code required');
+			explain = _('The password was accepted; enter the code from your authenticator to finish.');
+			primary = [
 				E('button', { class: 'cbi-button cbi-button-apply',
+					'data-pv-focus': 'login',
 					click: ui.createHandlerFn(this, 'showLoginModal', 'totp') }, nodes(_('Enter code')))
 			];
 		} else if (st.state === 'expired') {
 			cls += ' pv-acct-warn';
 			led = 'pv-led-warn';
-			title = _('Proton session expired');
+			detail = _('session expired');
 			// Deliberately calm: an expired session does not drop the tunnel.
-			sub = _('The tunnel keeps running, but the server list cannot be updated and the certificate cannot be renewed. Sign in again to restore that.');
-			actions = [
+			explain = _('The tunnel keeps running, but the server list cannot be updated and the certificate cannot be renewed. Sign in again to restore that.');
+			primary = [
 				E('button', { class: 'cbi-button cbi-button-apply',
+					'data-pv-focus': 'login',
 					click: ui.createHandlerFn(this, 'showLoginModal', 'credentials') },
 					nodes(_('Sign in again')))
 			];
 		} else {
 			cls += ' pv-acct-bad';
 			led = 'pv-led-bad';
-			title = _('Not signed in');
-			sub = _('ProtonVPN needs your account to fetch the server list and register this router as a device.');
-			actions = [
+			detail = _('not signed in');
+			explain = _('ProtonVPN needs your account to fetch the server list and register this router as a device.');
+			primary = [
 				E('button', { class: 'cbi-button cbi-button-apply',
+					'data-pv-focus': 'login',
 					click: ui.createHandlerFn(this, 'showLoginModal', 'credentials') }, nodes(_('Sign in')))
 			];
 		}
 
-		this.bandEl.className = cls;
-		dom.content(this.bandEl, nodes([
-			E('div', { class: 'pv-acct-main' }, nodes([
-				E('div', { class: 'pv-acct-title' }, nodes([
-					E('span', { class: 'pv-led ' + led }), E('span', {}, nodes(title))
-				])),
-				E('div', { class: 'pv-acct-sub' }, nodes(sub))
-			])),
-			// On the card in every session state, and on its own line above the
-			// actions: it is the setting somebody reaches for while looking at
-			// a sign-in that has just failed, so it must not be reachable only
-			// from one of those states.
-			this.buildClientVersion(),
-			E('div', { class: 'pv-acct-actions' }, nodes(actions))
-		]));
+		this.bandEl.className = this.keepOpenFlag(this.bandEl, cls);
+		var kids = [ this.cardLine(this.bandEl, led, _('Proton account'), detail,
+			primary, secondary) ];
+		// The explanation is kept only where it is an instruction. In the
+		// healthy state there is nothing to do about it, and a standing
+		// paragraph is permanent furniture.
+		if (explain)
+			kids.push(E('div', { class: 'pv-acct-sub' }, nodes(explain)));
+		// On the card in every session state: it is the setting somebody
+		// reaches for while looking at a sign-in that has just failed, so it
+		// must not be reachable only from one of those states. Behind a
+		// disclosure, because it is also the setting almost nobody touches.
+		// The version this package stamps, which the backend now carries on
+		// session_state — a call the page already makes when it loads. Read
+		// before the control is built so its very first label can name it,
+		// and re-filled when it changes, because a repaint is how a page that
+		// loaded against an older backend picks it up.
+		var builtin = st.app_version_builtin || '';
+		if (builtin && builtin !== this.appVerBuiltIn) {
+			this.appVerBuiltIn = builtin;
+			if (this.appVerSel)
+				this.fillClientVersions(this.appVerSel.value);
+		}
+		kids.push(this.buildClientVersion());
+		this.repaintKeepingFocus(this.bandEl, L.bind(function () {
+			dom.content(this.bandEl, nodes(kids));
+		}, this));
+		this.syncClientVersionSummary();
 	},
 
 	// ── connection status ────────────────────────────────────────────────
@@ -2101,42 +2663,58 @@ return view.extend({
 	//   * running — Reconnect, Rotate and Disable.
 	// "Disable", not "Disconnect": the button does not merely drop the tunnel,
 	// it turns the instance off, and the daemon will not bring it back.
+	// Returns { primary, secondary }. The split is what lets the card follow
+	// available width: the primary action is always on screen, the rest are
+	// inline from 34em and behind the kebab below it. Refresh is primary only
+	// when it is the only action there is — a kebab that opens onto nothing
+	// would be an extra click for nothing.
 	actionButtons: function (st, disp) {
-		var btns = [ E('button', { class: 'cbi-button',
-			click: ui.createHandlerFn(this, 'refreshStatus') }, nodes(_('Refresh'))) ];
+		// Each button is keyed by what it does. A repaint restores focus by
+		// that key and never by position: the action set changes with the
+		// state, and landing on "whatever took slot 2" could put focus on
+		// Disable.
+		var refresh = E('button', { class: 'cbi-button', 'data-pv-focus': 'refresh',
+			click: ui.createHandlerFn(this, 'refreshStatus') }, nodes(_('Refresh')));
 
 		if (!st.configured)
-			return btns;
+			return { primary: [ refresh ], secondary: [] };
 
-		if (st.enabled === false) {
-			btns.push(E('button', { class: 'cbi-button cbi-button-apply',
-				click: ui.createHandlerFn(this, 'handleConnect') }, nodes(_('Enable'))));
-			return btns;
-		}
+		if (st.enabled === false)
+			return {
+				primary: [ E('button', { class: 'cbi-button cbi-button-apply',
+					'data-pv-focus': 'connect',
+					click: ui.createHandlerFn(this, 'handleConnect') }, nodes(_('Enable'))) ],
+				secondary: [ refresh ]
+			};
 
-		btns.push(E('button', { class: 'cbi-button cbi-button-apply',
-			click: ui.createHandlerFn(this, 'handleConnect') }, nodes(_('Reconnect'))));
-
+		var secondary = [ refresh ];
 		// Rotation cannot work on a pinned server — the backend refuses it — so
 		// that case drops the button entirely. Otherwise it stays put and is
 		// merely greyed while there is no live tunnel: a control that appears
 		// and disappears under a 5-second poll is worse than a dead one.
 		if (!st.fixed) {
 			var live = (disp === 'connected' || disp === 'degraded');
-			btns.push(E('button', { class: 'cbi-button', disabled: !live || null,
+			secondary.push(E('button', { class: 'cbi-button', disabled: !live || null,
+				'data-pv-focus': 'rotate',
 				click: ui.createHandlerFn(this, 'handleRotateNow') }, nodes(_('Rotate now'))));
 		}
-
-		btns.push(E('button', { class: 'cbi-button cbi-button-remove',
+		secondary.push(E('button', { class: 'cbi-button cbi-button-remove',
+			'data-pv-focus': 'disable',
 			click: ui.createHandlerFn(this, 'handleDisconnect') }, nodes(_('Disable'))));
-		return btns;
+
+		return {
+			primary: [ E('button', { class: 'cbi-button cbi-button-apply',
+				'data-pv-focus': 'connect',
+				click: ui.createHandlerFn(this, 'handleConnect') }, nodes(_('Reconnect'))) ],
+			secondary: secondary
+		};
 	},
 
 	updateStatusBand: function () {
 		if (!this.stateEl)
 			return;
 		var st = this.status || {};
-		var sub = [], cls = 'pv-state';
+		var cls = 'pv-card pv-state';
 
 		// One source of truth for "what state is this in": the instances table
 		// and this card must never disagree, and an administratively disabled
@@ -2145,7 +2723,7 @@ return view.extend({
 		var titles = {
 			connected:      _('Connected'),
 			connecting:     _('Connecting…'),
-			degraded:       _('Degraded — no recent handshake'),
+			degraded:       _('Degraded'),
 			disconnected:   _('Disconnected'),
 			disabled:       _('Disabled'),
 			error:          _('Error'),
@@ -2163,59 +2741,62 @@ return view.extend({
 		if (disp === 'degraded')
 			cls += ' pv-acct-warn';
 
+		// The header's flexing column: where the tunnel is, in one line. With
+		// several tunnels running side by side it also has to say which one
+		// the card is describing.
+		var head = [];
+		if ((this.instances || []).length > 1)
+			head.push(this.instance);
+		// Ordered by what identifies the tunnel: this column is the one that
+		// ellipsises, so at 320px only its beginning is read.
 		if (st.gateway)
-			sub.push(_('Server %s').format(st.gateway));
+			head.push(st.gateway);
 		if (st.location && st.location.country) {
 			var where = this.locationNames(st.location.country, st.location.city)
 				.filter(Boolean).join(' / ');
 			var flag = this.countryFlag(st.location.country);
 			if (where)
-				sub.push((flag ? flag + ' ' : '') + where);
+				head.push((flag ? flag + ' ' : '') + where);
 		}
 		if (st.endpoint)
-			sub.push(st.endpoint);
+			head.push(st.endpoint);
+
+		// The facts, as labelled pairs. This replaced a single sentence that
+		// joined up to eight of them with middots: it wrapped to four lines on
+		// a phone, and no value in it could be found by eye.
+		var facts = [];
 		var hs = this.fmtHandshake(st.latest_handshake_seconds);
 		if (hs)
-			sub.push(hs);
-		// A Tor exit is a different product, not a flag on an ordinary server —
-		// the extra latency and the sites that reject Tor need explaining.
-		if (st.hop_mode === 'tor')
-			sub.push(_('🧅 Tor over VPN'));
+			facts.push(this.fact(_('Handshake'), hs));
 		// IPv6 is the one routing decision that changes from server to server,
 		// so the card has to say what it is doing right now — and, when it is
 		// doing nothing, that the server is the reason rather than a setting.
 		var v6 = st.ipv6 || {};
+		var v6note = null;
 		if (v6.mode === 'auto') {
 			if (v6.active)
-				sub.push(_('IPv6 through the tunnel'));
+				facts.push(this.fact(_('IPv6'), _('through the tunnel')));
 			// Distinct from the line below on purpose: with the requirement on
 			// there is no connected server to blame, and saying there is sends
 			// the user looking for a rotation that will never come.
 			else if (v6.reason === 'ipv6_required_unavailable') {
 				var unmet = this.ipv6Unmet(st);
-				sub.push(unmet.line);
-				if (unmet.exposure)
-					sub.push(unmet.exposure);
+				v6note = unmet.line + (unmet.exposure ? ' ' + unmet.exposure : '');
 			}
 			else if (v6.reason === 'gateway_no_ipv6')
-				sub.push(_('IPv6 blocked — this server does not forward it'));
+				facts.push(this.fact(_('IPv6'), _('blocked — this server does not forward it')));
 		}
-		// From the LAN a working kill switch looks exactly like a broken
-		// internet connection, so name it whenever it is the reason.
-		if (disp !== 'connected' && st.routing && st.routing.killswitch)
-			sub.push(_('Kill switch is blocking LAN traffic'));
+		if (st.rotation && st.rotation.enabled)
+			facts.push(this.fact(_('Rotation'), this.rotationFact()));
+		if (st.certificate && st.certificate.present && st.certificate.days_left != null)
+			facts.push(this.fact(_('Certificate'), _('%d days left').format(st.certificate.days_left)));
 		if (disp === 'connected') {
 			var ipKey = this.instance + '|' + (st.gateway || '');
 			if (this.extIp && this.extIp.key === ipKey)
-				sub.push(_('external IP %s').format(this.extIp.ip));
+				facts.push(this.fact(_('External IP'), this.extIp.ip));
 			else
 				this.maybeFetchExternalIp(ipKey);
 		}
-		if (st.rotation && st.rotation.enabled)
-			sub.push(_('Automatic rotation is on'));
-		if (st.certificate && st.certificate.present && st.certificate.days_left != null)
-			sub.push(_('certificate %d days left').format(st.certificate.days_left));
-
 		// Two separate facts, deliberately NOT phrased as one budget: the count
 		// is the WireGuard configurations registered on the account (what the
 		// dashboard lists under Downloads), while the allowance is the plan's
@@ -2225,32 +2806,62 @@ return view.extend({
 		// it asserted a relationship that was not there. It read from the
 		// legacy OpenVPN/IKEv2 session list, which stays empty however many
 		// WireGuard tunnels are up.
-		var quota = '';
 		if (this.account && this.account.max_connect)
-			quota = _('%s · %s WireGuard configurations · up to %s devices').format(
+			facts.push(this.fact(_('Plan'), _('%s · %s configurations · up to %s devices').format(
 				this.account.plan || '', this.account.devices_used != null
-					? this.account.devices_used : '?', this.account.max_connect);
+					? this.account.devices_used : '?', this.account.max_connect)));
 
-		var actions = this.actionButtons(st, disp);
+		// Sentences, not facts: these are the two things the card has to say
+		// in full because acting on them depends on the wording.
+		var notes = [];
+		// A Tor exit is a different product, not a flag on an ordinary server —
+		// the extra latency and the sites that reject Tor need explaining.
+		if (st.hop_mode === 'tor')
+			notes.push(_('🧅 Tor over VPN'));
+		if (v6note)
+			notes.push(v6note);
+		// Said only while it is true, and only while IPv6 really is on the
+		// tunnel. The reported defect was this card announcing IPv6 as active
+		// the moment the rules existed while four of five clients were still
+		// holding their old address — a line saying so would have saved the
+		// whole investigation. The backend forces the advertisement now, so
+		// this is seconds rather than the ten minutes it was, and it stops
+		// being said a few minutes later rather than standing there forever.
+		if (v6.active && v6.clients_settling)
+			notes.push(_('Clients are moving to the tunnel address; one that was asleep may take a few minutes.'));
+		// From the LAN a working kill switch looks exactly like a broken
+		// internet connection, so name it whenever it is the reason.
+		if (disp !== 'connected' && st.routing && st.routing.killswitch)
+			notes.push(_('Kill switch is blocking LAN traffic'));
 
-		var heading = [
-			E('span', { class: 'pv-led ' + led }),
-			E('span', { class: 'pv-state-label' }, nodes(title))
-		];
-		// With several tunnels running side by side the card has to say which
-		// one it is describing.
-		if ((this.instances || []).length > 1)
-			heading.push(E('span', { class: 'pv-tagline' }, nodes(this.instance)));
+		var acts = this.actionButtons(st, disp);
 
-		this.stateEl.className = cls;
-		dom.content(this.stateEl, nodes([
-			E('div', { class: 'pv-state-main' }, nodes([
-				E('div', { class: 'pv-state-title' }, nodes(heading)),
-				E('div', { class: 'pv-state-sub' }, nodes(sub.join(' · ') || _('No tunnel yet.'))),
-				quota ? E('div', { class: 'pv-quota' }, nodes(quota)) : ''
-			])),
-			E('div', { class: 'pv-state-actions' }, nodes(actions))
-		]));
+		this.stateEl.className = this.keepOpenFlag(this.stateEl, cls);
+		var kids = [ this.cardLine(this.stateEl, led, title,
+			head.join(' · ') || _('No tunnel yet.'), acts.primary, acts.secondary) ];
+		if (facts.length)
+			kids.push(E('div', { class: 'pv-facts' }, nodes(facts)));
+		notes.forEach(function (n) {
+			kids.push(E('div', { class: 'pv-state-note' }, nodes(n)));
+		});
+		this.repaintKeepingFocus(this.stateEl, L.bind(function () {
+			dom.content(this.stateEl, nodes(kids));
+		}, this));
+	},
+
+	// The rotation fact is the RELATIVE time only. nextRotationText() also
+	// carries the full local timestamp, which belongs in the rotation section
+	// further down the page and not in a column that has to sit beside five
+	// others at 320px.
+	rotationFact: function () {
+		var r = ((this.status || {}).rotation) || {};
+		if (!r.next_run)
+			return _('on schedule');
+		var diff = Math.floor((r.next_run * 1000 - Date.now()) / 1000);
+		if (diff < 90)
+			return _('due now');
+		var h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60);
+		return h > 0 ? _('in %dh %dm').format(h, m) : _('in %dm').format(m);
 	},
 
 	// Fetch the tunnel's public IP once per instance+gateway combination. The
@@ -2538,7 +3149,7 @@ return view.extend({
 			click: L.bind(function (ev) {
 				ev.preventDefault();
 				ev.stopPropagation();
-				this.poolTogglePanel();
+				this.poolOpenPanel();
 			}, this) }, nodes('+ ' + _('Add a location')));
 		this.poolPanel = E('div', { class: 'pv-pool-panel pv-pool-acc hidden' });
 		this.poolWrap = E('div', { class: 'pv-pool-wrap' }, nodes([ this.poolTrigger, this.poolPanel ]));
@@ -2547,7 +3158,7 @@ return view.extend({
 			click: L.bind(function (ev) {
 				ev.preventDefault();
 				ev.stopPropagation();
-				this.srvTogglePanel();
+				this.srvOpenPanel();
 			}, this) }, nodes(_('Automatic server')));
 		this.srvPanel = E('div', { class: 'pv-pool-panel hidden' });
 
@@ -3128,11 +3739,13 @@ return view.extend({
 		return found || 'main';
 	},
 
-	// What the control says about itself. Long, because it is the answer to
-	// "Proton will not let me in and I do not know why": the three codes are
-	// the ones a failing sign-in actually returns, and only one of them is
-	// fixed here.
-	CLIENT_VERSION_HELP: _('Shared by all instances — the version this router reports to Proton as x-pm-appversion. The version built into the package is right for almost everyone. Change it only when Proton answers a sign-in with Code 5003 "this version of the app is no longer supported" and no package update is available yet; Code 2028 is a temporary limit on your account and Code 8002 is a wrong username or password, and neither is fixed here. "Fetch available versions" asks the official Linux client\'s repository what exists; it only fills the list, you pick a value and press Save.'),
+	// What the control says about itself, in one sentence. It used to be five
+	// lines and was the single biggest item on the account card — permanent
+	// furniture for a setting almost nobody touches. It now sits inside the
+	// disclosure, so it is read by the one person who opened it, and it keeps
+	// the only fact that is actionable: 5003 is the code this control fixes,
+	// and the other two a failing sign-in returns are not.
+	CLIENT_VERSION_HELP: _('Change this only when Proton answers a sign-in with Code 5003 "this version of the app is no longer supported"; Code 2028 and Code 8002 are not fixed here.'),
 
 	// The Proton client version (x-pm-appversion), on the account card next to
 	// the sign-in controls.
@@ -3160,21 +3773,65 @@ return view.extend({
 		this.refs = this.refs || {};
 		this.appVerList = [];
 		this.appVerCurrent = '';
-		this.appVerSel = E('select', { class: 'cbi-input-select pv-appver-list' });
-		this.appVerSel.addEventListener('change', L.bind(this.markDirty, this));
+		// May already be known: renderBand() reads it off the session state
+		// before it builds this, so the first fill can name it.
+		this.appVerBuiltIn = this.appVerBuiltIn || '';
+		this.appVerSel = E('select', { class: 'cbi-input-select pv-appver-list',
+			'data-pv-focus': 'appver-select' });
+		this.appVerSel.addEventListener('change', L.bind(function () {
+			this.markDirty();
+			this.syncClientVersionSummary();
+		}, this));
 		this.appVerBtn = E('button', { class: 'cbi-button pv-appver-fetch',
+			'data-pv-focus': 'appver-fetch',
 			click: L.bind(this.handleFetchClientVersions, this) },
-			nodes(_('Fetch available versions')));
+			nodes(_('Fetch versions')));
 		this.appVerNote = E('div', { class: 'cbi-value-description pv-appver-note' },
 			nodes(this.CLIENT_VERSION_HELP));
 		this.syncClientVersion();
 
-		this.appVerBox = E('div', { class: 'pv-acct-appver' }, nodes([
-			E('div', { class: 'pv-acct-appver-label' }, nodes(_('Client version'))),
-			E('div', { class: 'pv-inline' }, nodes([ this.appVerSel, this.appVerBtn ])),
+		// A grid, not .pv-inline: flex-wrap put the button on a line of its
+		// own as soon as the select's longest option outgrew the row, which
+		// is what the owner photographed. Here the select is the only column
+		// that may shrink and the button is sized to its text.
+		this.appVerSummary = E('summary', { class: 'pv-more-summary',
+			'data-pv-focus': 'appver-summary' });
+		this.appVerBox = E('details', { class: 'pv-more' }, nodes([
+			this.appVerSummary,
+			E('div', { class: 'pv-verrow' }, nodes([ this.appVerSel, this.appVerBtn ])),
 			this.appVerNote
 		]));
+		this.syncClientVersionSummary();
 		return this.appVerBox;
+	},
+
+	// The summary says which version is in force, so the disclosure does not
+	// have to be opened to find out — a closed <details> that hides the value
+	// it controls is worse than the paragraph it replaced.
+	syncClientVersionSummary: function () {
+		if (!this.appVerSummary || !this.appVerSel)
+			return;
+		// The labels are kept beside the options rather than read back off the
+		// DOM: a Map, because the values come from uci and from upstream and
+		// one of them can perfectly well be "toString".
+		var labels = this.appVerLabels || new Map();
+		var v = this.appVerSel.value || '';
+		var shown = labels.has(v) ? labels.get(v) : (v || this.builtInLabel());
+		dom.content(this.appVerSummary,
+			nodes(_('Client version — %s').format(shown)));
+	},
+
+	// The label for "no override": it names the version when the page knows
+	// it, and says plainly what it is when it does not. The built-in string
+	// lives in the backend (api.uc PM_APPVERSION) and arrives on
+	// session_state, which the page calls on load — so it is normally known
+	// before anybody presses anything. A backend too old to send it leaves
+	// the label unnumbered rather than guessing: claiming a version that is
+	// not the one being stamped is the one thing this control must never do.
+	builtInLabel: function () {
+		return this.appVerBuiltIn
+			? _('Built into the package (%s)').format(this.appVerBuiltIn)
+			: _('Built into the package');
 	},
 
 	// Re-read what uci holds and put the control back on it. Called from
@@ -3206,19 +3863,24 @@ return view.extend({
 		// from the list, and the control then shows a different value than the
 		// one in force — which the next Save writes.
 		var opts = [], seen = new Set();
+		this.appVerLabels = new Map();
+		var labels = this.appVerLabels;
 		var add = function (v, label) {
 			if (seen.has(v))
 				return;
 			seen.add(v);
-			opts.push(E('option', { value: v }, nodes(label ||
-				((v === self.appVerCurrent) ? _('%s — current release').format(v) : v))));
+			var shown = label ||
+				((v === self.appVerCurrent) ? _('%s — current release').format(v) : v);
+			labels.set(v, shown);
+			opts.push(E('option', { value: v }, nodes(shown)));
 		};
-		add('', _('Version built into the package (recommended)'));
+		add('', this.builtInLabel());
 		if (this.appVerSaved)
 			add(this.appVerSaved);
 		(this.appVerList || []).forEach(function (v) { add(v); });
 		dom.content(this.appVerSel, nodes(opts));
 		this.appVerSel.value = seen.has(keep) ? keep : '';
+		this.syncClientVersionSummary();
 	},
 
 	// Ask upstream which client versions the official Linux app has released.
@@ -3245,7 +3907,7 @@ return view.extend({
 			self.appVerBusy = false;
 			if (btn) {
 				btn.disabled = false;
-				dom.content(btn, nodes(_('Fetch available versions')));
+				dom.content(btn, nodes(_('Fetch versions')));
 			}
 		};
 		return callClientVersions().then(function (res) {
@@ -3268,6 +3930,11 @@ return view.extend({
 	renderClientVersions: function (res) {
 		var list = res.versions || [];
 		this.appVerCurrent = res.current || '';
+		// `configured` is the value the backend actually stamps. With no uci
+		// override in force that IS the version built into the package, which
+		// is the only way this page can learn it.
+		if (!this.appVerSaved && res.configured)
+			this.appVerBuiltIn = res.configured;
 		if (list.length)
 			this.appVerList = list;
 		this.fillClientVersions(this.appVerSel.value);
@@ -3373,6 +4040,23 @@ return view.extend({
 
 		// The location set is the single source of truth; the legacy
 		// country/city options are cleared so both paths agree.
+		//
+		// EVERY code is written back, including ones the page could not
+		// resolve against the server list. That is deliberate, and it is the
+		// second time it has been read as a bug, so: the display rule in
+		// rebuildPoolWidget() is what makes it safe. A code that does not
+		// resolve in the current hop mode but exists in another is kept and
+		// hidden, so a mode round trip does not lose it; a code absent from
+		// the server list entirely is SHOWN, marked "not in the server list",
+		// and removable with its own ×.
+		//
+		// Filtering here instead would mean that opening this page against a
+		// stale, partial or still-loading server list and saving anything at
+		// all silently deleted locations the user never touched — a worse
+		// failure than the one this replaced. The original defect was writing
+		// these codes back while they were INVISIBLE, leaving uci as the only
+		// way to remove one. They are visible now, so the write is honest:
+		// nothing is in uci that the page does not show and cannot delete.
 		var codes = (this.poolEntries || []).map(function (e) { return e.code; });
 		if (codes.length)
 			uci.set('protonvpn', inst, 'locations', codes);

@@ -581,3 +581,50 @@ test('a save the control does not block still goes through', () => {
 	assert.equal(ctx.collected, 0, 'the location check was lost');
 	assert.match((ctx._notices || []).map((n) => n.text).join(' '), /at least one location/);
 });
+
+// ── naming the built-in version without a network round trip ──────────────
+//
+// The label on the "no override" option is the version this package stamps.
+// It used to be learnable only from client_versions(), which is a fetch the
+// user has to ask for — so the option read "Built into the package" and left
+// them to guess which version that was, on the one control they reach for
+// when a sign-in has just been refused for being too old. The backend now
+// carries it on session_state, which the page already calls on load.
+
+const BUILTIN = 'linux-vpn-gtk@4.18.2';
+
+test('the built-in option names the version, straight from the session state', () => {
+	const { ctx } = card({ session: { state: 'active',
+		session_expires_at: 1900000000, app_version_builtin: BUILTIN } });
+	assert.equal(text(ctx.appVerSel.children[0]),
+		'Built into the package (' + BUILTIN + ')');
+});
+
+test('and the disclosure summary names it too, unopened', () => {
+	const { ctx, band } = card({ session: { state: 'active',
+		session_expires_at: 1900000000, app_version_builtin: BUILTIN } });
+	void ctx;
+	assert.match(text(findOneClass(band, 'pv-more-summary')),
+		/Built into the package \(linux-vpn-gtk@4\.18\.2\)/);
+});
+
+test('a backend too old to send it still gives a usable label', () => {
+	// Degrade honestly: the option is still the right one to pick, it just
+	// cannot say which version it is.
+	const { ctx } = card({ session: { state: 'active', session_expires_at: 1900000000 } });
+	assert.equal(text(ctx.appVerSel.children[0]), 'Built into the package');
+});
+
+test('an override in force does not make the built-in label lie', () => {
+	// The stored value is what is stamped; the built-in is what the empty
+	// option means. Naming the built-in on the "no override" option is right
+	// either way, and the summary follows the SELECTION, not the built-in.
+	const { ctx, band } = card({
+		uci: { protonvpn: { main: { '.type': 'instance',
+			app_version: 'linux-vpn-gtk@4.18.1' } } },
+		session: { state: 'active', session_expires_at: 1900000000,
+			app_version_builtin: BUILTIN } });
+	assert.equal(text(ctx.appVerSel.children[0]),
+		'Built into the package (' + BUILTIN + ')');
+	assert.match(text(findOneClass(band, 'pv-more-summary')), /4\.18\.1/);
+});

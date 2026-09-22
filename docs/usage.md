@@ -47,9 +47,36 @@ comes before `NL#27`, not after it:
 
 ![Choosing a server](screenshots/server-picker.png)
 
-The status band shows the connected server, the handshake age and the external
-IP as seen through the tunnel — the one check that proves traffic really
-leaves through the VPN, which a handshake alone does not.
+The **Proton account** card at the top of the page is a single line while the
+session is healthy — the state and the date the session runs to. It grows an
+explanation only in the states that ask you to do something: an expired
+session, a pending two-factor code, or no session at all. The client version
+lives on that card under a disclosure whose summary always names the version
+in force.
+
+The state card below it is one line too — what the tunnel is doing, the server
+it is on and where that server is — with the facts underneath as labelled
+pairs: handshake age, IPv6, rotation, certificate, external IP and plan. The
+external IP as seen through the tunnel is the one check that proves traffic
+really leaves through the VPN, which a handshake alone does not. **Reconnect**
+is always on the line; **Refresh**, **Rotate now** and **Disable** join it as
+soon as the window is wide enough, and move behind the **⋯** button below
+about 34em.
+
+The locations you have chosen are listed under the picker, one row per
+country: flag, name, how much of that country is in the set, and a × that
+removes it. The row and the × are both reachable with Tab and activated with
+Enter, as are the rows in both pickers. **Escape** closes either picker, and
+so do its ✕ and picking a server — every one of them puts the keyboard back on
+the button that opens that picker, never on the page behind it. Clicking the row reopens
+that country's cities. A saved location the server list no longer knows is shown
+dashed and reads *not in the server list*: it is still in the saved set and
+still written back on every save, so it is shown rather than hidden — its ×
+is the way to get rid of it. Proton lists a few
+countries under codes Unicode has no flag for — Kosovo, which it sends as
+`XK`, is the live case — and those show the two-letter code in a small badge
+rather than the white-flag-with-a-question-mark glyph a made-up flag renders
+as.
 
 ## Multiple instances
 

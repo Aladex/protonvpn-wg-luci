@@ -37,10 +37,14 @@ function refusedStatus(over) {
 	}, over, { ipv6, routing });
 }
 
+// What the card says in prose. The IPv6 findings are sentences rather than
+// facts — acting on them depends on the wording — so when the card was
+// rebuilt around labelled facts they kept their own note lines instead of
+// being folded into the middot run-on that used to carry everything.
 function band(status) {
 	const ctx = makeCtx(spec, { status });
 	ctx.updateStatusBand();
-	return findClass(ctx.stateEl, 'pv-state-sub') || '';
+	return findAllClass(ctx.stateEl, 'pv-state-note').map(text).join(' · ');
 }
 
 // ── the blocking finding: the exposure has to come from status ───────────
@@ -67,11 +71,19 @@ test('with the kill switch on the band does not claim an exposure', () => {
 });
 
 test('a connected tunnel with IPv6 working says nothing about an exposure', () => {
-	const sub = band(refusedStatus({
+	// "IPv6 is working" is a fact, not a finding: it became a labelled pair
+	// when the card stopped joining everything with middots. The exposure
+	// sentences stay in the notes, and there must be none of them here.
+	const status = refusedStatus({
 		state: 'connected', gateway: 'NL#1', latest_handshake_seconds: 3,
 		ipv6: { active: true, gateway_ipv6: true, reason: null, required_cause: null }
-	}));
-	assert.match(sub, /IPv6 through the tunnel/, sub);
+	});
+	const ctx = makeCtx(spec, { status });
+	ctx.updateStatusBand();
+	const ipv6Fact = findAllClass(ctx.stateEl, 'pv-fact')
+		.filter((f) => text(f.children[0]) === 'IPv6').map((f) => text(f.children[1]));
+	assert.deepEqual(ipv6Fact, [ 'through the tunnel' ]);
+	const sub = findAllClass(ctx.stateEl, 'pv-state-note').map(text).join(' · ');
 	assert.doesNotMatch(sub, /provider/i, sub);
 	assert.doesNotMatch(sub, /kill switch/i, sub);
 });
@@ -375,4 +387,50 @@ test('saving steering with an empty table fills it from the interface, field inc
 		'Automatic must survive: with the table filled, the backend honours it');
 	assert.deepEqual(uciData.protonvpn.main.source_network, [ 'guest' ],
 		'the steered network the table was filled for is not stored');
+});
+
+// ── the clients are not on the new address the instant the rules exist ─────
+//
+// The reported defect: "IPv6 does not work through the VPN after enabling
+// lan". It did work; it took up to ten minutes to start, because a client
+// that missed the router advertisement carrying the switch kept its ISP
+// address until the next one. The page said IPv6 was active throughout, which
+// is what sent the investigation everywhere except at the actual cause.
+//
+// The backend now forces an advertisement on both claim and release and
+// reports, for a few minutes afterwards, that the clients are still moving.
+
+test('the card says the clients are moving while they still are', () => {
+	const ctx = makeCtx(spec, { status: refusedStatus({
+		state: 'connected', gateway: 'NL#1', latest_handshake_seconds: 3,
+		ipv6: { active: true, gateway_ipv6: true, reason: null,
+			required_cause: null, clients_settling: true }
+	}) });
+	ctx.updateStatusBand();
+	const notes = findAllClass(ctx.stateEl, 'pv-state-note').map(text).join(' ');
+	assert.match(notes, /moving to the tunnel address/i, notes);
+});
+
+test('and stops saying it once they have', () => {
+	// It is a statement about the last few minutes, not a standing one: the
+	// card it sits on was cut from 748px of permanent explanation to 248.
+	const ctx = makeCtx(spec, { status: refusedStatus({
+		state: 'connected', gateway: 'NL#1', latest_handshake_seconds: 3,
+		ipv6: { active: true, gateway_ipv6: true, reason: null,
+			required_cause: null, clients_settling: false }
+	}) });
+	ctx.updateStatusBand();
+	const notes = findAllClass(ctx.stateEl, 'pv-state-note').map(text).join(' ');
+	assert.doesNotMatch(notes, /moving to the tunnel address/i, notes);
+});
+
+test('it is never said while IPv6 is not on the tunnel', () => {
+	// The backend already refuses to set it in that case; the page must not
+	// reintroduce it by reading the flag on its own.
+	const ctx = makeCtx(spec, { status: refusedStatus({
+		ipv6: { active: false, clients_settling: true }
+	}) });
+	ctx.updateStatusBand();
+	const notes = findAllClass(ctx.stateEl, 'pv-state-note').map(text).join(' ');
+	assert.doesNotMatch(notes, /moving to the tunnel address/i, notes);
 });

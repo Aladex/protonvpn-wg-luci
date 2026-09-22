@@ -53,10 +53,37 @@ numerisch — `NL#5` steht also vor `NL#27`, nicht dahinter:
 
 ![Server wählen](screenshots/server-picker.png)
 
-Das Statusband zeigt den verbundenen Server, das Alter des Handshakes und die
-durch den Tunnel sichtbare externe IP — die einzige Prüfung, die belegt, dass
-der Traffic wirklich über das VPN hinausgeht, was ein Handshake allein nicht
-tut.
+Die Karte **Proton-Konto** am Seitenanfang ist eine einzige Zeile, solange die
+Sitzung in Ordnung ist — der Zustand und das Datum, bis zu dem sie läuft. Eine
+Erklärung kommt nur in den Zuständen dazu, die etwas von Ihnen verlangen: eine
+abgelaufene Sitzung, ein ausstehender Zwei-Faktor-Code oder gar keine Sitzung.
+Die Client-Version sitzt auf derselben Karte hinter einer Aufklappzeile, deren
+Kopf immer die wirksame Version nennt.
+
+Die Zustandskarte darunter ist ebenfalls eine Zeile — was der Tunnel tut, auf
+welchem Server er ist und wo dieser Server steht — und darunter die Fakten als
+beschriftete Paare: Handshake-Alter, IPv6, Rotation, Zertifikat, externe IP
+und Tarif. Die durch den Tunnel sichtbare externe IP ist die einzige Prüfung,
+die belegt, dass der Traffic wirklich über das VPN hinausgeht, was ein
+Handshake allein nicht tut. **Neu verbinden** steht immer in der Zeile;
+**Aktualisieren**, **Jetzt rotieren** und **Deaktivieren** treten daneben,
+sobald das Fenster breit genug ist, und rücken unterhalb von etwa 34em hinter
+die Schaltfläche **⋯**.
+
+Die gewählten Standorte stehen unter der Auswahl, eine Zeile je Land: Flagge,
+Name, wie viel von diesem Land im Satz ist, und ein × zum Entfernen. Zeile und
+× sind beide mit Tab erreichbar und mit Enter auslösbar, ebenso die Zeilen in
+beiden Auswahllisten. **Escape** schliesst jede der beiden, ebenso ihr ✕ und
+das Auswählen eines Servers — und jeder dieser Wege gibt die Tastatur an die
+Schaltfläche zurück, die diese Liste öffnet, nicht an die Seite dahinter. Ein Klick auf die
+Zeile öffnet wieder die Städte dieses Landes. Ein gespeicherter Standort, den die Serverliste nicht mehr kennt, wird
+gestrichelt und mit *not in the server list* angezeigt: er steht weiterhin im
+gespeicherten Satz und wird bei jedem Speichern zurückgeschrieben, wird also
+gezeigt statt versteckt — sein × ist der Weg, ihn loszuwerden. Ein paar Länder liefert
+Proton unter Codes, für die Unicode keine Flagge kennt — der reale Fall ist
+Kosovo, das als `XK` kommt — und die zeigen den Zwei-Buchstaben-Code in einem
+kleinen Feld statt des Glyphs „weisse Flagge mit Fragezeichen", zu dem eine
+erfundene Flagge wird.
 
 ## Mehrere Instanzen
 

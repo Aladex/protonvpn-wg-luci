@@ -9,3 +9,12 @@ PLAN_PROTONVPN_LUCI.md
 
 # Design notes: local working documents, not part of the public repository.
 docs/superpowers/
+
+# Browser layout harness (luci-app-protonvpn/tests/browser): the router's own
+# theme stylesheets and everything derived from them. They belong to whatever
+# theme the router runs, and a stale vendored copy would measure a page
+# nobody has. See that directory's README.md for how to fetch them.
+luci-app-protonvpn/tests/browser/cascade.css
+luci-app-protonvpn/tests/browser/mobile.css
+luci-app-protonvpn/tests/browser/mobile-emulated.css
+luci-app-protonvpn/tests/browser/page.html

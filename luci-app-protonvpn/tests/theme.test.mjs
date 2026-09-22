@@ -87,9 +87,12 @@ test('the load dots follow the success/warn/error theme colours', () => {
 	'pv-dot-hi background must be var(--error-color-medium,#c0392b)');
 });
 
-test('the country chip takes its fill from the theme primary colour', () => {
-	assert.ok(src.includes(
-		'.pv-chip-country{background:var(--primary-color-medium,#0069d6);' +
-		'color:#fff}'),
-	'pv-chip-country background must be var(--primary-color-medium,#0069d6)');
+// The country chip this rule used to cover is gone — the selected set is an
+// aligned list now. The rule that inherited its job is the one colour left in
+// that block: the per-row remove ×, which has to read as destructive on both
+// themes and so must come from the theme's own error colour.
+test('the row remove button takes its red from the theme error colour', () => {
+	assert.ok(/\.pv-selrow \.pv-selx\{[^}]*color:var\(--error-color-medium,#c0392b\)\}/
+		.test(src),
+	'pv-selx color must be var(--error-color-medium,#c0392b)');
 });

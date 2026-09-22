@@ -16,7 +16,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { El, text, htmlAssignments, isElem, loadView } from './luci-harness.mjs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { El, text, htmlAssignments, isElem, loadView, fakeDocument, resetFocus } from './luci-harness.mjs';
 
 const { globals } = loadView();
 const dom = globals.dom;
@@ -146,4 +149,77 @@ test('a function child receives the node it is appending into', () => {
 	let seen = null;
 	const el = El('p', {}, (node) => { seen = node; return [ 'x' ]; });
 	assert.equal(seen, el, 'the function was not given the target node');
+});
+
+// ── loading a different revision of the view ──────────────────────────────
+//
+// The browser harness takes its "before" numbers by rendering an older
+// overview.js through this same rig. That documented path was inert once
+// already — README and render.mjs both named PV_VIEW and nothing read it, so
+// a before/after comparison that nobody could reproduce was presented as if
+// it could be. This is what stops that recurring.
+
+test('loadView reads the source file it is pointed at', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'pv-view-'));
+	const alt = join(dir, 'overview.js');
+	try {
+		// A whole view, small enough to assert on: view.extend() hands the
+		// spec straight back, exactly as the real one relies on.
+		writeFileSync(alt, "return view.extend({ marker: 'from the override' });\n");
+		const loaded = loadView({ view: alt });
+		assert.equal(loaded.spec.marker, 'from the override',
+			'the spec did not come from the file loadView was pointed at');
+		assert.match(loaded.src, /from the override/,
+			'src must be the overridden file too — the stylesheet is read out of it');
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('without an override it still reads the view in this checkout', () => {
+	const loaded = loadView();
+	assert.match(loaded.src, /x-pm-appversion|countryFlag/,
+		'the default path must remain the real view');
+	assert.equal(typeof loaded.spec.countryFlag, 'function');
+});
+
+// ── what can take focus ───────────────────────────────────────────────────
+//
+// A browser refuses focus to anything that is not rendered, and this page
+// hides things with the `hidden` class (display:none!important). Without
+// modelling that, a fake DOM cannot tell "un-hide the trigger, then focus it"
+// apart from "focus it, then un-hide it" — and the second one loses the
+// keyboard on a real router.
+
+test('a hidden element cannot take focus', () => {
+	resetFocus();
+	const el = El('button', { class: 'cbi-button hidden' });
+	el.focus();
+	assert.equal(fakeDocument.activeElement, null);
+	el.classList.remove('hidden');
+	el.focus();
+	assert.equal(fakeDocument.activeElement, el);
+});
+
+test('nor can anything inside something hidden', () => {
+	resetFocus();
+	const panel = El('div', { class: 'pv-pool-panel hidden' });
+	const row = El('button', {});
+	panel.appendChild(row);
+	row.focus();
+	assert.equal(fakeDocument.activeElement, null,
+		'a row inside a closed panel is not a place focus can be');
+	panel.classList.remove('hidden');
+	row.focus();
+	assert.equal(fakeDocument.activeElement, row);
+});
+
+test('focus that is refused stays where it already was', () => {
+	resetFocus();
+	const here = El('input', {});
+	here.focus();
+	const gone = El('button', { class: 'hidden' });
+	gone.focus();
+	assert.equal(fakeDocument.activeElement, here,
+		'a refused focus() must not blank the document either');
 });
