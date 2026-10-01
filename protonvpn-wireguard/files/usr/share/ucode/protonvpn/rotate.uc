@@ -50,7 +50,8 @@ const bring_up = _apply.bring_up,
       teardown_note = _apply.teardown_note,
       connect_one = _apply.connect_one,
       verify_handshake = _apply.verify_handshake,
-      restore_wan_default = _apply.restore_wan_default;
+      restore_wan_default = _apply.restore_wan_default,
+      wan_default_snapshot = _apply.wan_default_snapshot;
 
 const ROTATE_LOCK = _common.RUN_DIR + '/protonvpn_rotate.lock';
 const ROTATE_STATE = _common.RUN_DIR + '/protonvpn_rotate_state.json';
@@ -298,6 +299,8 @@ function rotate(uci, instance) {
 	if (!lock)
 		return { skipped: true, reason: 'rotation already running' };
 
+	// Before anything here reloads netifd: what the heal puts back.
+	let snap = wan_default_snapshot();
 	let res;
 	try {
 		res = rotate_inner(uci, instance);
@@ -305,7 +308,7 @@ function rotate(uci, instance) {
 		res = { error: 'rotation error: ' + e };
 	}
 	release_lock(lock);
-	restore_wan_default();
+	restore_wan_default(snap);
 	return res;
 }
 

@@ -549,38 +549,300 @@ function wan_has_ipv6() {
 	return r.code == 0 && length(trim(r.stdout || '')) > 0;
 }
 
-// L3-device MTU of the WAN uplink (the path WireGuard's UDP actually takes to
-// the endpoint — NOT the tunnel). Found via the WAN firewall zone's networks so
-// an active auto-routing default through the tunnel does not mislead us. Returns
-// the smallest MTU across WAN devices, or null when it cannot be determined.
-function wan_l3_mtu(uci) {
-	let wannets = {};
-	uci.foreach('firewall', 'zone', function(sec) {
-		if (sec[MARK] == '1')
-			return;
-		if (sec.masq == '1' || sec.name == 'wan')
-			for (let n in as_list(sec.network))
-				wannets[n] = 1;
-	});
+// `ubus call network.interface dump`, parsed; null when netifd cannot be asked.
+function netifd_dump() {
 	let d = run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network.interface', 'dump' ]);
 	if (d.code != 0)
 		return null;
-	let data;
 	try {
-		data = json(d.stdout);
+		return json(d.stdout);
 	} catch (e) {
 		return null;
 	}
-	let best = null;
+}
+
+// Protocols that attach this router to a provider: netifd's handlers for
+// access lines (DHCP, a static gateway, PPP in its forms), for mobile modems,
+// and for the IPv4-over-IPv6 transitions a provider hands out (DS-Lite, MAP,
+// 464XLAT). What they have in common, and what makes an interface an uplink,
+// is that the protocol itself obtains the way to the internet from the
+// provider — the default route is the provider's answer, not something laid
+// on top of another way out.
+//
+// Deliberately a list of what an uplink IS. Every overlay — our WireGuard
+// tunnels, a user's OpenVPN, a tun started outside netifd (`proto none`), GRE
+// — rides on an uplink, so its default, if it has one, is carried by the very
+// route being restored; and each of them can sit in a masquerading zone, so
+// the zone cannot tell them apart. A protocol missing here fails safe: the
+// interface is not treated as an uplink, which costs an MTU hint.
+//
+// Necessary, not sufficient: `static` and `dhcp` describe how an interface is
+// addressed, not what it runs on, and an overlay can be configured with
+// either. See UPLINK_KINDS for the second fact.
+const UPLINK_PROTOS = [
+	'dhcp', 'static',
+	'pppoe', 'pppoa', 'ppp', 'l2tp', 'pptp',
+	'3g', 'qmi', 'mbim', 'ncm', 'wwan', 'modemmanager', 'directip',
+	'dslite', 'map', '464xlat'
+];
+
+// Kernel link kinds a provider attachment runs on, as `ip -d link` reports
+// them (`linkinfo.info_kind`). The protocol says "this is a provider
+// attachment"; the kind says "and the device is not a VPN overlay". A `proto
+// static` tun passes the first and fails this one, which is the case that
+// made the protocol alone unsafe: at equal metric and with a name sorting
+// before `dslite`, it replaced the lost DS-Lite default and the heal reported
+// success.
+//
+//   ''               a device with no kind: a hardware driver (Ethernet,
+//                    Wi-Fi, a USB modem's network function). No overlay
+//                    driver lacks one — tun/tap, wireguard, gre/gretap, vti,
+//                    vxlan all register a kind.
+//   vlan bridge macvlan bond dsa
+//                    access media built on hardware ports.
+//   ppp              PPPoE/PPPoA/3G sessions.
+//   ip6tnl sit ipip  the provider's own transition tunnels: DS-Lite and MAP-E
+//                    (ip6tnl — the owner's ds-dslite reports `ip6tnl ipip6`),
+//                    6rd (sit). Tunnels are NOT excluded as a class; these are
+//                    provider attachments.
+//   wwan rmnet       LTE/5G modems: the kernel's WWAN framework (MHI, t7xx,
+//                    iosm) and Qualcomm data channels.
+//
+// Again a list of what an uplink IS, for the reason UPLINK_PROTOS gives: a
+// kind missing here is not restored through and says so in the log, while a
+// list of overlay kinds would admit the next overlay driver nobody listed.
+// netifd's own `network.device status` was measured and rejected as the
+// source: it calls ds-dslite a "tunnel" and the WireGuard tunnel an ordinary
+// "Network device", the opposite of what is needed.
+//
+// The kind of the TOP device is not enough, and every kind here that is not
+// hardware is the reason: a vlan, a bridge, a bond or a tunnel says nothing
+// about what it is built on. A VLAN on a tap and a bridge with a tap port
+// both passed a top-level check and displaced the lost DS-Lite default (the
+// gate reproduced both on real devices). So the rule is applied to the whole
+// stack — see stack_refusal().
+const UPLINK_KINDS = [ '', 'vlan', 'bridge', 'macvlan', 'bond', 'dsa', 'ppp',
+	'ip6tnl', 'sit', 'ipip', 'wwan', 'rmnet' ];
+
+// Kinds that carry traffic through every one of their ports, so every port
+// is part of the stack.
+const PORT_KINDS = [ 'bridge', 'bond' ];
+// Kinds that are always built on a parent device; one the kernel does not
+// report a parent for cannot be judged.
+const PARENT_KINDS = [ 'vlan', 'macvlan', 'rmnet' ];
+// Tunnel kinds, and the address family of their remote endpoint. Bound to a
+// device (DS-Lite's `tunlink`, the owner's `dev eth1`) the device is the
+// parent; unbound, the packets go wherever the route to the endpoint goes,
+// and that device is.
+const TUNNEL_KINDS = { ip6tnl: '-6', sit: '-4', ipip: '-4' };
+// No real uplink is stacked deeper than a few levels (a VLAN on a DSA port on
+// its conduit); a deeper stack is not one this rule can vouch for.
+const MAX_STACK = 8;
+
+// Reported once per process: an ip that cannot answer in JSON makes every
+// device unidentifiable, and saying so per device would bury the cause.
+let nojson_reported = false;
+
+// What the kernel says about `dev`: { kind, link, foreign, remote }, or null
+// when it cannot be established (no such device, `ip` failing or printing
+// something unreadable). `kind` is '' for a device without one; `link` is the
+// parent device's name; `foreign` is true when the parent lives in another
+// network namespace; `remote` is a tunnel's endpoint. Null is never treated
+// as an answer: callers fail closed on it.
+//
+// Read as JSON, never as text: values come back as values, so no device name
+// can be mistaken for part of the output's syntax.
+//
+// Not given a time bound: OpenWrt has no `timeout` (see
+// test_target_commands.uc), and unlike the ubus calls, which go through a
+// daemon that can wedge, `ip` here makes netlink requests the kernel itself
+// answers.
+function ip_json(argv) {
+	let r = run_ip(argv);
+	if (r.code != 0)
+		return null;
+	try {
+		return json(r.stdout);
+	} catch (e) {
+		if (!nojson_reported && length(trim(r.stdout || '')) > 0) {
+			nojson_reported = true;
+			_common.log('`ip` did not answer in JSON (`ip -j`), so the WAN uplink cannot be ' +
+				'identified and MTU advice is unavailable; the default-route self-heal ' +
+				'cannot read the routing table either. Install ip-full (a current iproute2).');
+		}
+		return null;
+	}
+}
+
+function link_info(dev) {
+	let j = ip_json([ '-d', '-j', 'link', 'show', 'dev', dev ]);
+	if (type(j) != 'array' || type(j[0]) != 'object')
+		return null;
+	let o = j[0], li = o.linkinfo;
+	let kind = '';
+	if (li != null) {
+		if (type(li) != 'object' || type(li.info_kind) != 'string')
+			return null;
+		kind = li.info_kind;
+	}
+	let data = (type(li) == 'object' && type(li.info_data) == 'object') ? li.info_data : {};
+	return {
+		kind: kind,
+		link: (type(o.link) == 'string' && o.link != '') ? o.link : null,
+		foreign: o.link_netnsid != null || o.link_index != null,
+		remote: (type(data.remote) == 'string' && data.remote != '') ? data.remote : null
+	};
+}
+
+// Names of the ports enslaved to `dev`, or null when they cannot be listed.
+function port_names(dev) {
+	let j = ip_json([ '-j', 'link', 'show', 'master', dev ]);
+	if (type(j) != 'array')
+		return null;
+	let out = [];
+	for (let o in j) {
+		if (type(o) != 'object' || type(o.ifname) != 'string')
+			return null;
+		push(out, o.ifname);
+	}
+	return out;
+}
+
+// The device the kernel routes `addr` through, or null.
+function route_device(family, addr) {
+	let j = ip_json([ '-j', family, 'route', 'get', addr ]);
+	return (type(j) == 'array' && type(j[0]) == 'object' && type(j[0].dev) == 'string')
+		? j[0].dev : null;
+}
+
+// Why the device stack under `dev` is not a provider attachment, or null when
+// every device in it is. The same UPLINK_KINDS rule is applied to every link:
+// the parent of anything built on one, every port of a bridge or bond, the
+// device a tunnel's packets actually leave through. Whatever cannot be
+// established — a device the kernel does not know, ports that cannot be
+// listed, a parent in another namespace, an unbound tunnel with no route to
+// its endpoint, a loop, a stack deeper than MAX_STACK — refuses, for the same
+// reason an unreadable kind does: the advice uses only what has been
+// established.
+// `path` holds the devices above `dev`, for loop detection and the message.
+function stack_refusal(dev, path) {
+	let chain = [ ...(path || []), dev ];
+	let where = (length(chain) > 1) ? join(' > ', chain) + ': ' : '';
+	if (index(path || [], dev) >= 0)
+		return where + 'device stack loops';
+	if (length(chain) > MAX_STACK)
+		return where + 'device stack is deeper than ' + MAX_STACK;
+	let li = link_info(dev);
+	if (li == null)
+		return where + 'device kind could not be determined';
+	if (index(UPLINK_KINDS, li.kind) < 0)
+		return where + 'device kind ' + li.kind + ' is not a provider attachment';
+	if (li.foreign)
+		return where + 'parent device is in another network namespace';
+	let under;
+	if (index(PORT_KINDS, li.kind) >= 0) {
+		under = port_names(dev);
+		if (under == null)
+			return where + 'ports could not be listed';
+		if (!length(under))
+			return where + li.kind + ' has no ports';
+	} else if (li.link != null) {
+		under = [ li.link ];
+	} else if (exists(TUNNEL_KINDS, li.kind)) {
+		if (li.remote == null)
+			return where + 'tunnel reports no remote endpoint';
+		let d = route_device(TUNNEL_KINDS[li.kind], li.remote);
+		if (d == null)
+			return where + 'no route to tunnel endpoint ' + li.remote;
+		under = [ d ];
+	} else if (index(PARENT_KINDS, li.kind) >= 0) {
+		return where + li.kind + ' reports no parent device';
+	} else {
+		under = [];
+	}
+	for (let u in under) {
+		let why = stack_refusal(u, chain);
+		if (why != null)
+			return why;
+	}
+	return null;
+}
+
+// For every up interface of a netifd dump (`data`, from netifd_dump()) with
+// an L3 device: { ifc, why }, where `why` is null for a WAN uplink and
+// otherwise says why it is not one. It feeds the MTU advice, where a wrong
+// answer costs a hint. The default-route self-heal deliberately does NOT ask
+// here (see restore_wan_default in apply.uc): five review rounds each found an
+// uplink shape this classification got wrong — the cases kept below are those
+// shapes — and there a wrong answer cost the WAN. All three facts must hold:
+//
+//   * the protocol is a provider attachment (UPLINK_PROTOS);
+//   * netifd's interface is in a firewall zone that is not ours and
+//     masquerades or is named 'wan' — listed in the zone's `network` option,
+//     or placed there at runtime through the interface's `data.zone`, which is
+//     how DS-Lite and the modem protocols' dynamic children join a zone and
+//     which fw4 honours just the same; this keeps out, for example, a DHCP
+//     client on a management network that happens to learn a gateway;
+//   * no device in its stack is an overlay (UPLINK_KINDS, applied to every
+//     link by stack_refusal()), established from the kernel; anything that
+//     cannot be established counts as not established.
+//
+// Found through netifd, the zones and the kernel's device rather than through
+// the routing table because the routing table is exactly what cannot be
+// trusted: on the owner's router three interfaces report an identical
+// gateway-less default (see restore_wan_default). WireGuard fails the first
+// and the third fact, so a tunnel is never the uplink even when the user
+// listed it in the wan zone by hand: it is the path WireGuard's UDP rides ON.
+// Counting it creates a feedback loop in the MTU advice — setting the
+// recommended tunnel MTU makes the tunnel the smallest "WAN" device, dragging
+// the next recommendation down 80.
+function wan_verdicts(uci, data) {
+	let wannets = {}, wanzones = {};
+	uci.foreach('firewall', 'zone', function(sec) {
+		if (sec[MARK] == '1')
+			return;
+		if (sec.masq == '1' || sec.name == 'wan') {
+			if (sec.name)
+				wanzones[sec.name] = 1;
+			for (let n in as_list(sec.network))
+				wannets[n] = 1;
+		}
+	});
+	let out = [];
 	for (let ifc in ((data ? data.interface : null) || [])) {
-		if (!ifc.up || !ifc.l3_device || !wannets[ifc.interface])
+		if (!ifc.up || !ifc.l3_device)
 			continue;
-		// Never count a WireGuard tunnel as the WAN uplink: it is the path
-		// WireGuard's UDP rides ON, not the uplink itself. Counting it creates
-		// a feedback loop — setting the recommended tunnel MTU makes the tunnel
-		// the smallest "WAN" device, dragging the next recommendation down 80.
-		if (ifc.proto == 'wireguard')
-			continue;
+		let why = null;
+		let zone = (type(ifc.data) == 'object') ? ifc.data.zone : null;
+		if (index(UPLINK_PROTOS, ifc.proto) < 0)
+			why = 'protocol ' + ifc.proto + ' is not a provider attachment';
+		else if (!wannets[ifc.interface] && !(zone && wanzones[zone]))
+			why = 'not in a WAN firewall zone';
+		else
+			why = stack_refusal(ifc.l3_device);
+		push(out, { ifc: ifc, why: why });
+	}
+	return out;
+}
+
+// The WAN uplinks of a netifd dump: the interfaces wan_verdicts() admits.
+function wan_uplinks(uci, data) {
+	let out = [];
+	for (let v in wan_verdicts(uci, data))
+		if (v.why == null)
+			push(out, v.ifc);
+	return out;
+}
+
+// L3-device MTU of the WAN uplink (the path WireGuard's UDP actually takes to
+// the endpoint — NOT the tunnel; see wan_uplinks). Returns the smallest MTU
+// across WAN devices, or null when it cannot be determined.
+function wan_l3_mtu(uci) {
+	let data = netifd_dump();
+	if (data == null)
+		return null;
+	let best = null;
+	for (let ifc in wan_uplinks(uci, data)) {
 		let l = run_ip([ 'link', 'show', 'dev', ifc.l3_device ]);
 		if (l.code != 0)
 			continue;
@@ -2340,4 +2602,4 @@ return { detect, enforce, reconcile_ipv6, ipv6_state, v6_hint, ra_refresh,
 	device_is_lan_side, device_way_out_reason, networks_on_device,
 	has_default_route, zones_of, zone_is_uplink, net_device, device_path,
 	find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu,
-	ensure_rt_table, drop_rt_table };
+	ensure_rt_table, drop_rt_table, netifd_dump, wan_verdicts, wan_uplinks };

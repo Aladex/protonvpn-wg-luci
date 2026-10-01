@@ -764,9 +764,270 @@ function drop_noncompliant_peer(uci, s) {
 
 // A global netifd reload has been observed (OpenWrt 24.10) to remove the
 // kernel's main IPv4 default route while netifd still reports it as
-// installed, cutting WAN connectivity. Self-heal: when the kernel lost the
-// default but netifd claims a gateway route on an up interface, re-add it.
-function restore_wan_default() {
+// installed, cutting WAN connectivity. Self-heal: put back what the
+// operation's own reload took.
+//
+// ── Why a snapshot, and not classification ──────────────────────────────
+// Five review rounds tried to IDENTIFY the uplink from the router's state
+// and restore its default: by route shape, then protocol, then the kernel's
+// device kind, then the whole device stack. Every round found a configuration
+// the identification got wrong — our own WireGuard tunnels (three interfaces
+// on the owner's router report an identical gateway-less default), a static
+// tun, a VLAN or bridge on a tap, PPPoE over a tap, a DS-Lite tunnel whose
+// packets leave through a source-policy tun — and there is no reason to think
+// the list ends. So the heal identifies nothing. The route that was in the
+// main table before this operation's reload is the right default by
+// definition: it is the one that was working. Each caller takes
+// wan_default_snapshot() before it reloads anything and hands it here.
+//
+// A snapshot route is put back only if netifd still claims it: an up
+// interface on the same device reporting a main-table default with the same
+// gateway (or none) and metric, and only if it was netifd's (`proto static`).
+// That intersection is exactly the defect — a route netifd says is installed
+// and the kernel no longer has — and it is what keeps out a default the
+// operation removed ON PURPOSE (auto routing turned off: netifd no longer
+// claims the tunnel's default, so it stays gone). It is also why a changed
+// claim (a renewed gateway, another metric or table) restores nothing rather
+// than either version: the two sources disagree and neither is guessed at.
+//
+// The fallback, when there is no snapshot to go by — it could not be read, or
+// the main default was already missing before the operation — refuses
+// outright and says so. That is safe because refusing never installs a route:
+// the worst it leaves is the state this operation found, and an outage this
+// operation's reload did not cause is not one it can know the answer to.
+// It never falls back to classifying interfaces.
+//
+// What is put back is what was there — device, gateway, metric, preferred
+// source, onlink, route MTU (see wan_default_snapshot for every attribute and
+// why each is or is not carried), with netifd's source and MTU where netifd
+// now states different ones (see restore_plan) — as `proto static`, so it is
+// indistinguishable
+// from netifd's own route: netifd deletes its routes with `proto static` and
+// their metric and the kernel removes only an exact match (measured in a
+// namespace: a `proto boot` copy survives netifd's deletion and then sits in
+// the slot netifd's next install needs). Netifd's runtime state, never uci,
+// decides the table and metric of a claim: netifd reports a route's own table
+// and metric only when the route sets them, and otherwise the interface-level
+// ip4table and metric in force.
+function main_table(t) {
+	return t == null || t == '' || t == 'main' || t == 254 || t == '254';
+}
+
+// The main table's IPv4 defaults as the kernel holds them right now, or null
+// when they cannot be read. Read as JSON, so a device named like a keyword of
+// the route grammar (`dev metric`) is a value and nothing else.
+//
+// Each entry: { dev, gw, metric, proto, src, onlink, mtu, uncarried }.
+// Every attribute `ip -j route` reports for a default is either taken here
+// and put back by the heal, or listed in `uncarried` so the heal refuses the
+// route instead of putting back a different one under its name:
+//   * carried — dev, gateway, metric, protocol (iproute2 leaves out the
+//     protocol of a `proto boot` route; that is what a missing one means),
+//     prefsrc, the onlink flag, and the route MTU: everything a netifd route
+//     can have (netifd sets mtu, source and onlink, and nothing else);
+//   * derived, so not carried — `scope`: the kernel gives a gateway route
+//     universe scope and a device route link scope, as netifd's own install
+//     does; any other scope is uncarried. The state flags are the kernel's
+//     and the driver's report on the route, not configuration, and come back
+//     on their own: `linkdown` and `dead` with the link, the hardware offload
+//     marks (`offload`, `trap`, `rt_offload`, `rt_trap`, `rt_offload_failed`)
+//     and `unresolved` with the driver and the neighbour;
+//   * not visible, so not carried — a `mtu lock`: JSON does not show the lock
+//     (measured), and netifd never locks a route MTU, so a netifd route has
+//     none to lose;
+//   * uncarried — any other route metric (advmss, hoplimit, window, ...),
+//     any other flag, a route type other than unicast (blackhole and the like
+//     have no device to put back), and any key not named here.
+const SNAPSHOT_KEYS = [ 'dst', 'gateway', 'dev', 'protocol', 'scope', 'metric', 'prefsrc',
+	'flags', 'metrics', 'type' ];
+const STATE_FLAGS = [ 'linkdown', 'dead', 'unresolved', 'offload', 'trap',
+	'rt_offload', 'rt_trap', 'rt_offload_failed' ];
+
+function snapshot_entry(o) {
+	let uncarried = [];
+	for (let k in o)
+		if (index(SNAPSHOT_KEYS, k) < 0)
+			push(uncarried, k);
+	if (o.type != null && o.type != 'unicast')
+		push(uncarried, 'type ' + o.type);
+	let gw = (type(o.gateway) == 'string') ? o.gateway : null;
+	let scope = (o.scope != null) ? '' + o.scope : (gw ? null : 'universe');
+	if (scope != (gw ? null : 'link') && scope != null)
+		push(uncarried, 'scope ' + scope);
+	let onlink = false;
+	for (let f in ((type(o.flags) == 'array') ? o.flags : [])) {
+		if (f == 'onlink')
+			onlink = true;
+		else if (index(STATE_FLAGS, f) < 0)
+			push(uncarried, 'flag ' + f);
+	}
+	let mtu = null;
+	for (let m in ((type(o.metrics) == 'array') ? o.metrics : [])) {
+		if (type(m) != 'object') {
+			push(uncarried, 'metrics');
+			continue;
+		}
+		for (let k in m) {
+			if (k == 'mtu')
+				mtu = int(m[k]);
+			else
+				push(uncarried, k);
+		}
+	}
+	return {
+		dev: (type(o.dev) == 'string') ? o.dev : null,
+		gw: gw,
+		metric: int(o.metric || 0),
+		proto: (type(o.protocol) == 'string') ? o.protocol : 'boot',
+		src: (type(o.prefsrc) == 'string') ? o.prefsrc : null,
+		onlink: onlink,
+		mtu: mtu,
+		uncarried: uncarried
+	};
+}
+
+function wan_default_snapshot() {
+	let r = run_ip([ '-j', '-4', 'route', 'show', 'default' ]);
+	if (r.code != 0)
+		return null;
+	let routes;
+	try {
+		routes = json(r.stdout);
+	} catch (e) {
+		return null;
+	}
+	if (type(routes) != 'array')
+		return null;
+	let out = [];
+	for (let o in routes)
+		if (type(o) == 'object' && o.dst == 'default')
+			push(out, snapshot_entry(o));
+	return out;
+}
+
+// What netifd states about the route's preferred source and route MTU. Each
+// is one of three things, and they must not be confused:
+//   { state: 'value', value }  netifd states this value;
+//   { state: 'none' }          netifd states the route has NONE — the
+//                              attribute is to be cleared, not inherited;
+//   { state: 'unknown' }       netifd does not say — the snapshot stands.
+// Read from what netifd's dump means, not what it looks like (netifd
+// ubus.c interface_ip_dump_route_list, system-linux.c system_rt):
+//   * `source` is always dumped as "addr/len", and netifd installs a
+//     preferred source only when len > 0 — so "0.0.0.0/0", or any address
+//     with length 0, states none. A missing or unreadable `source` is not
+//     something netifd produces: unknown.
+//   * `mtu` is dumped exactly when netifd sets a route MTU (DEVROUTE_MTU),
+//     and is what it installs — so a missing `mtu` states none, and so does
+//     0, which installs no MTU. Only a value that cannot be read is unknown.
+function claim_attrs(rt) {
+	let src = { state: 'unknown' };
+	let m = match('' + (rt.source ?? ''), /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\/([0-9]+)$/);
+	if (m)
+		src = (int(m[2]) > 0 && m[1] != '0.0.0.0') ? { state: 'value', value: m[1] } : { state: 'none' };
+	let mtu;
+	if (rt.mtu == null)
+		mtu = { state: 'none' };
+	else if (type(rt.mtu) == 'int')
+		mtu = (rt.mtu > 0) ? { state: 'value', value: rt.mtu } : { state: 'none' };
+	else
+		mtu = { state: 'unknown' };
+	return { src: src, mtu: mtu };
+}
+
+// The value to restore for one attribute: netifd's when it states one, none
+// when it states none, the snapshot's when it does not say. Pushes a note
+// whenever netifd's statement changes what the snapshot had.
+function resolve_attr(label, was, claim, notes) {
+	if (claim.state == 'unknown')
+		return was;
+	let want = (claim.state == 'value') ? claim.value : null;
+	if (want != was)
+		push(notes, (want != null ? label + ' ' + want : 'no ' + label) +
+			' as netifd now claims (was ' + (was ?? 'none') + ')');
+	return want;
+}
+
+// netifd's claim of snapshot route `s`: an up interface on the same device
+// with a main-table default of the same gateway (or none) and metric. Returns
+// claim_attrs() of that route, or null when netifd does not claim it.
+function netifd_claim(data, s) {
+	for (let ifc in ((data ? data.interface : null) || [])) {
+		if (!ifc.up || ifc.l3_device != s.dev)
+			continue;
+		for (let rt in (ifc.route || [])) {
+			if (rt.target != '0.0.0.0' || rt.mask != 0)
+				continue;
+			if (!main_table((rt.table != null) ? rt.table : ifc.ip4table))
+				continue;
+			let gw = (rt.nexthop && rt.nexthop != '0.0.0.0') ? rt.nexthop : null;
+			let metric = int((rt.metric != null) ? rt.metric : (ifc.metric || 0));
+			if (gw == s.gw && metric == s.metric)
+				return claim_attrs(rt);
+		}
+	}
+	return null;
+}
+
+// Which snapshot routes to put back, in the order the kernel listed them, and
+// what was passed over and why: { routes, passed }.
+//
+// The device, gateway, metric and table are the route's identity — they are
+// what netifd's deletion matches on — so the snapshot and netifd must agree
+// on them or nothing is put back (netifd_claim). The preferred source and the
+// route MTU are attributes of that same route, and for each netifd either
+// states a value, states none, or does not say (claim_attrs). A statement is
+// the current truth and the snapshot is stale — a source the uplink no longer
+// owns, an MTU the provider has since changed or removed — so netifd's value,
+// or the absence netifd states, is what is restored, and the note says so.
+// Only where netifd does not say does the snapshot stand. "States none" and
+// "does not say" are different answers: collapsing them resurrects a removed
+// attribute and reports it restored.
+function restore_plan(snap, data) {
+	let routes = [], passed = [];
+	for (let s in snap) {
+		let who = s.dev || 'default';
+		let what = who + (s.gw ? ' via ' + s.gw : '') + (s.metric ? ' metric ' + s.metric : '');
+		if (length(s.uncarried)) {
+			push(passed, who + ': carries ' + join(', ', s.uncarried) +
+				', which cannot be put back exactly');
+			continue;
+		}
+		if (s.proto != 'static') {
+			push(passed, who + ': not netifd\'s route (proto ' + s.proto + ')');
+			continue;
+		}
+		let claim = netifd_claim(data, s);
+		if (claim == null) {
+			push(passed, who + ': netifd no longer claims the default ' + what);
+			continue;
+		}
+		let notes = [];
+		push(routes, { dev: s.dev, gw: s.gw, metric: s.metric, onlink: s.onlink,
+			src: resolve_attr('source', s.src, claim.src, notes),
+			mtu: resolve_attr('mtu', s.mtu, claim.mtu, notes),
+			notes: notes });
+	}
+	return { routes: routes, passed: passed };
+}
+
+// Whether the main table now holds exactly the default `c` describes: every
+// attribute the heal carries, as intended (netifd's where it was preferred),
+// as `proto static`, and nothing it does not carry. An `ip route add` that
+// exits 0 is not taken as proof — success is only claimed for a route that is
+// visibly there as intended.
+function default_installed(c) {
+	for (let s in (wan_default_snapshot() || []))
+		if (s.dev == c.dev && s.proto == 'static' && s.gw == c.gw &&
+		    s.metric == c.metric && s.src == c.src && s.onlink == c.onlink &&
+		    s.mtu == c.mtu && !length(s.uncarried))
+			return true;
+	return false;
+}
+
+// `snap` is the caller's wan_default_snapshot() from before its reload; null
+// or absent when it could not be read or was not taken.
+function restore_wan_default(snap) {
 	// The reload applies asynchronously; the route can disappear a moment
 	// after an immediate check passes, so probe a few times.
 	for (let attempt = 0; attempt < 3; attempt++) {
@@ -776,28 +1037,57 @@ function restore_wan_default() {
 			return false;
 		if (length(trim(r.stdout || '')) > 0)
 			continue;
-		let d = run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network.interface', 'dump' ]);
-		if (d.code != 0)
-			return false;
-		let data;
-		try {
-			data = json(d.stdout);
-		} catch (e) {
+		if (type(snap) != 'array') {
+			log('main IPv4 default route is missing, and could not read the main-table ' +
+				'default before this operation reloaded netifd, so nothing is known to put ' +
+				'back; restored nothing');
 			return false;
 		}
-		for (let ifc in ((data ? data.interface : null) || [])) {
-			if (!ifc.up || !ifc.l3_device)
-				continue;
-			for (let rt in (ifc.route || [])) {
-				if (rt.target == '0.0.0.0' && rt.mask == 0 && rt.nexthop && rt.nexthop != '0.0.0.0') {
-					let res = run_ip([ 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
-					if (res.code != 0)
-						return false;
-					// Only claim success once the route really went in.
-					log('restored missing WAN default route via ' + rt.nexthop +
-						' on ' + ifc.l3_device);
-				}
+		if (!length(snap)) {
+			log('main IPv4 default route is missing, and was already missing before this ' +
+				'operation, so its reload did not take it; restored nothing');
+			return false;
+		}
+		let data = _routing.netifd_dump();
+		if (data == null) {
+			log('main IPv4 default route was lost during this operation, and could not ask ' +
+				'netifd what it still claims; restored nothing');
+			return false;
+		}
+		let plan = restore_plan(snap, data);
+		if (!length(plan.routes)) {
+			log('main IPv4 default route was lost during this operation; restored nothing: ' +
+				join('; ', plan.passed));
+			return false;
+		}
+		if (length(plan.passed))
+			log('not restoring part of the lost main IPv4 default: ' + join('; ', plan.passed));
+		for (let c in plan.routes) {
+			let argv = [ 'route', 'add', 'default' ];
+			if (c.gw)
+				push(argv, 'via', c.gw);
+			push(argv, 'dev', c.dev, 'proto', 'static');
+			if (c.metric > 0)
+				push(argv, 'metric', '' + c.metric);
+			if (c.mtu != null)
+				push(argv, 'mtu', '' + c.mtu);
+			if (c.src)
+				push(argv, 'src', c.src);
+			if (c.onlink)
+				push(argv, 'onlink');
+			let what = (c.gw ? 'via ' + c.gw + ' ' : '') + 'on ' + c.dev;
+			let res = run_ip(argv);
+			if (res.code != 0) {
+				log('could not restore the missing WAN default route ' + what);
+				return false;
 			}
+			if (!default_installed(c)) {
+				log('could not confirm the restored WAN default route ' + what +
+					': it is not in the main table as added');
+				return false;
+			}
+			log('restored missing WAN default route ' + what +
+				(length(c.notes) ? ' (' + join('; ', c.notes) + ')' : ''));
 		}
 	}
 	return true;
@@ -968,8 +1258,10 @@ function apply_inner(uci, instance) {
 }
 
 function apply(uci, instance) {
+	// Before anything here reloads netifd: what the heal puts back.
+	let snap = wan_default_snapshot();
 	let res = apply_inner(uci, instance);
-	restore_wan_default();
+	restore_wan_default(snap);
 	return res;
 }
 
@@ -1151,6 +1443,8 @@ function disconnect(uci, instance) {
 	let iface = validate_interface(s.interface);
 	if (!iface)
 		return { error: 'invalid interface name' };
+	// Before anything here reloads netifd: what the heal puts back.
+	let snap = wan_default_snapshot();
 	uci.set('protonvpn', s.name, 'enabled', '0');
 	uci.commit('protonvpn');
 
@@ -1163,7 +1457,7 @@ function disconnect(uci, instance) {
 		uci.commit('network');
 	}
 	run([ 'ifdown', iface ]);
-	restore_wan_default();
+	restore_wan_default(snap);
 	return { ok: true, interface: iface };
 }
 
@@ -1245,6 +1539,8 @@ function delete_instance(uci, name) {
 	if (!iface)
 		return { error: 'invalid interface name' };
 
+	// Before anything here reloads netifd: what the heal puts back.
+	let snap = wan_default_snapshot();
 	// Remove stamped artifacts by enforcing the all-off state.
 	s.auto_routing = false;
 	s.killswitch = false;
@@ -1273,13 +1569,13 @@ function delete_instance(uci, name) {
 			uci.delete('protonvpn', 'main', k);
 		}
 		uci.commit('protonvpn');
-		restore_wan_default();
+		restore_wan_default(snap);
 		return { ok: true, reset: name, interface: iface };
 	}
 
 	uci.delete('protonvpn', name);
 	uci.commit('protonvpn');
-	restore_wan_default();
+	restore_wan_default(snap);
 	return { ok: true, deleted: name, interface: iface };
 }
 
@@ -1290,7 +1586,7 @@ return {
 	mark_ipv6_unmet,
 	write_apply_status, read_apply_status, apply_running, apply_status_report,
 	run_apply, start_apply,
-	create_instance, delete_instance, restore_wan_default,
+	create_instance, delete_instance, restore_wan_default, wan_default_snapshot,
 	renew_certificate, retire_certificate,
 	read_cert_state, record_cert_state, forget_cert_state, migrate_legacy_key
 };
