@@ -299,6 +299,126 @@ const doc = normalize(raw.LogicalServers);
 		length(location_candidates(doc2, [ 'nl', 'nl-amsterdam' ], 'standard')), 4);
 }
 
+// 6c. page_relays cuts a relay list into replies that fit one ubus message
+// (issue #4). The rpcd-level walk lives in test_rpcd.uc; these pin the edges.
+// Sizes are blobmsg bytes, the unit ubusd enforces, so blob_size() is pinned
+// first on values worked out by hand from libubox's attribute layout:
+// 4-byte blob_attr header, then u16 name length + name + NUL padded to 4,
+// then the payload, the whole padded to 4.
+{
+	let blob_size = _cache.blob_size;
+	eq('blob_size: unnamed u32', blob_size('', 7), 12);
+	eq('blob_size: named bool', blob_size('tor', false), 4 + 8 + 4);
+	eq('blob_size: a 64-bit integer', blob_size('', 5000000000), 16);
+	eq('blob_size: a double', blob_size('', 1.5), 16);
+	eq('blob_size: a string pays its NUL', blob_size('', 'abc'), 12);
+	eq('blob_size: a NUL that crosses a word costs a word', blob_size('', 'abcd'), 16);
+	eq('blob_size: null is an empty attribute', blob_size('', null), 8);
+	eq('blob_size: nesting adds every child', blob_size('a', [ 'x', 1 ]), 4 + 4 + 12 + 12);
+	eq('reply_size adds the ubus envelope', _cache.reply_size({ a: 1 }), 16 + 12);
+
+	let page_relays = _cache.page_relays;
+	let list = [];
+	for (let i = 0; i < 10; i++)
+		push(list, { name: sprintf('X#%d', i) });
+	let one = blob_size('', list[0]);   // every entry is this size
+
+	let p = page_relays(list, 0, one * 4);
+	eq('a page holds as many relays as the budget allows', length(p.relays), 4);
+	eq('a page says where the next one starts', p.next, 4);
+	eq('a page reports the whole list size', p.total, 10);
+	p = page_relays(list, 8, one * 4);
+	eq('the last page holds the rest', length(p.relays), 2);
+	eq('the last page has no continuation', p.next, null);
+	// One record the budget cannot hold would otherwise go out alone and
+	// oversized. It is refused, and the refusal carries no relays at all.
+	let big = page_relays(list, 0, one - 1);
+	ok('a relay larger than the whole budget is an error', type(big.error) == 'string');
+	eq('and is not sent', big.relays, null);
+	let mixed = [ list[0], { name: 'Y', blob: [ 1, 2, 3, 4, 5, 6, 7, 8 ] }, list[1] ];
+	ok('an unsendable relay is refused even when it would start the next page',
+		type(page_relays(mixed, 0, one * 2).error) == 'string');
+	eq('the budget is never exceeded when two relays would not fit',
+		page_relays(list, 0, one * 2 - 1).next, 1);
+	eq('an offset past the end is an empty page at the end',
+		page_relays(list, 99, one * 4), { relays: [], total: 10, offset: 10 });
+	eq('a negative offset is the beginning', page_relays(list, -3, one).offset, 0);
+	eq('a non-integer offset is the beginning', page_relays(list, '4', one).offset, 0);
+	eq('an empty list is one empty page', page_relays([], 0, one),
+		{ relays: [], total: 0, offset: 0 });
+	ok('a full page plus its envelope stays under the bus limit',
+		_cache.SERVERS_PAGE_BUDGET + 4096 <= _cache.REPLY_LIMIT &&
+		_cache.REPLY_LIMIT <= 1048576);
+}
+
+// 6d. Normalization keeps every relay field a bounded scalar. Proton's API is
+// the input here, and a field of the wrong type or an absurd length survives
+// into the cache and from there into a reply (issue #4 review): a Name of 1.1
+// million characters made one relay larger than a ubus message, and a Name
+// that was an array of 90 000 zeros was small as JSON but over 1 MB as blob.
+// Such a logical is dropped; its well-formed neighbours are kept.
+{
+	let long_name = 'x';
+	for (let i = 0; i < 21; i++)
+		long_name += long_name;
+	long_name = substr(long_name, 0, 1100000);
+	let zeros = [];
+	for (let i = 0; i < 90000; i++)
+		push(zeros, 0);
+	let mk = function(over, srv_over) {
+		let srv = { Status: 1, EntryIP: '10.0.0.1', Domain: 'node-us-01.protonvpn.net',
+			X25519PublicKey: 'key' };
+		for (let k, v in (srv_over || {}))
+			srv[k] = v;
+		let l = { Name: 'US#1', ExitCountry: 'US', EntryCountry: 'US', City: 'Chicago',
+			Features: 0, Tier: 2, Load: 10, Score: 1.5, Status: 1, Servers: [ srv ] };
+		for (let k, v in (over || {}))
+			l[k] = v;
+		return l;
+	};
+	let relays_of = function(d) {
+		let out = [];
+		for (let c in d.countries)
+			for (let city in c.cities)
+				for (let r in city.relays)
+					push(out, r);
+		return out;
+	};
+	eq('a well-formed logical is kept', length(relays_of(normalize([ mk() ]))), 1);
+	let rejected = [
+		[ 'a 1.1M-character Name', { Name: long_name } ],
+		[ 'a Name that is an array of 90 000 zeros', { Name: zeros } ],
+		[ 'a City that is an object', { City: { a: 1 } } ],
+		[ 'an over-long City', { City: substr(long_name, 0, 4096) } ],
+		[ 'an ExitCountry that is an array', { ExitCountry: [ 'US' ] } ],
+		[ 'an EntryCountry that is an array', { EntryCountry: zeros } ]
+	];
+	for (let c in rejected)
+		eq(`a logical with ${c[0]} is dropped, its neighbour kept`,
+			map(relays_of(normalize([ mk(c[1]), mk({ Name: 'US#2' }) ])), (r) => r.name),
+			[ 'US#2' ]);
+	let srv_rejected = [
+		[ 'a Domain that is an array', { Domain: zeros } ],
+		[ 'an over-long Domain', { Domain: substr(long_name, 0, 4096) } ],
+		[ 'an EntryIP that is an object', { EntryIP: { ip: 1 } } ],
+		[ 'an over-long public key', { X25519PublicKey: substr(long_name, 0, 4096) } ]
+	];
+	for (let c in srv_rejected)
+		eq(`a server with ${c[0]} is dropped`,
+			length(relays_of(normalize([ mk(null, c[1]) ]))), 0);
+	// Numbers are numbers: anything else counts as absent rather than being
+	// carried along in whatever shape it arrived.
+	let r = relays_of(normalize([ mk({ Load: zeros, Score: { s: 1 }, Tier: [ 2 ],
+		Features: 'many' }) ]))[0];
+	eq('non-numeric numbers become zero',
+		[ r.load, r.score, r.tier, r.features ], [ 0, 0, 0, 0 ]);
+	ok('every relay field in the cache is a scalar',
+		length(filter(values(r), (v) => type(v) == 'array' || type(v) == 'object')) == 0);
+	ok('a normal relay is far below the page budget',
+		_cache.blob_size('', _cache.trim_relay(relays_of(normalize([ mk() ]))[0])) * 100 <
+			_cache.SERVERS_PAGE_BUDGET);
+}
+
 // 7. lookup and picking
 {
 	let r = by_hostname(doc, 'NL#85');
@@ -347,6 +467,18 @@ const doc = normalize(raw.LogicalServers);
 	require('protonvpn.common').atomic_write(path, 'not json at all');
 	eq('malformed cache is rejected', read_cache(path), null);
 	eq('write_cache rejects a non-document', write_cache({ nope: true }, path), false);
+
+	// Every publication gets its own generation, also two within one second:
+	// the view tells caches apart by it while it pages through one (issue #4).
+	ok('write_cache stamps a generation', write_cache(doc, path) == true);
+	let g1 = read_cache(path).generation;
+	ok('write_cache again', write_cache(doc, path) == true);
+	let g2 = read_cache(path).generation;
+	ok('a generation is a non-empty string', type(g1) == 'string' && length(g1) > 0);
+	ok('two publications in a row have different generations', g1 != g2);
+	let back2 = read_cache(path);
+	ok('the token names the cache and its generation',
+		_cache.cache_generation(path, back2) != _cache.cache_generation(path + '.b', back2));
 	unlink(path);
 }
 

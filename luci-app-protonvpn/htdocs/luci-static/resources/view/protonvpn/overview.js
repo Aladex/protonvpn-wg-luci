@@ -20,9 +20,28 @@ var callStatus = rpc.declare({ object: 'protonvpn', method: 'status', params: [ 
 var callInstances = rpc.declare({ object: 'protonvpn', method: 'instances' });
 var callSessionState = rpc.declare({ object: 'protonvpn', method: 'session_state' });
 var callLocations = rpc.declare({ object: 'protonvpn', method: 'locations' });
+// Without `offset` the reply is the whole list, or { error, paged } when that
+// does not fit one ubus message (issue #4); with it, one page that carries
+// `next` until the last. fetchServerPages() decides which.
 var callServers = rpc.declare({
-	object: 'protonvpn', method: 'servers', params: [ 'locations', 'hop_mode' ]
+	object: 'protonvpn', method: 'servers', params: [ 'locations', 'hop_mode', 'offset' ]
 });
+
+// The relays of one `servers` reply, or an exception saying why there are
+// none. Without `reject: true` LuCI resolves a failed call too — with the
+// bare ubus status code when no data came — so every shape that is not a
+// relay list is turned into an error here.
+function serverList(res) {
+	if (typeof res === 'number')
+		throw new Error('ubus code %d'.format(res));
+	if (!res || typeof res !== 'object')
+		throw new Error(_('no response'));
+	if (res.error)
+		throw new Error(String(res.error));
+	if (!Array.isArray(res.relays))
+		throw new Error(_('no response'));
+	return res.relays;
+}
 var callAuthInfo = rpc.declare({ object: 'protonvpn', method: 'auth_info', params: [ 'username' ] });
 var callAuthFinish = rpc.declare({
 	object: 'protonvpn', method: 'auth_finish',
@@ -990,17 +1009,84 @@ return view.extend({
 		return out;
 	},
 
+	// The relay list for `codes`, complete, or a rejection saying why not.
+	// Asked for unpaged first: that is the only call a backend from before the
+	// paging accepts (rpcd refuses an undeclared argument such as `offset`),
+	// and a current one answers it with the whole list whenever that fits one
+	// ubus message. Only when it answers `paged` is the list walked page by
+	// page (issue #4). `stale()` is asked after every reply; a walk that a
+	// newer refresh superseded stops there and resolves to null.
+	fetchServerPages: function (codes, hop, stale) {
+		return callServers(codes, hop).then(L.bind(function (res) {
+			if (stale())
+				return null;
+			if (res && typeof res === 'object' && res.paged && res.error)
+				return this.walkServerPages(codes, hop, stale);
+			return serverList(res);
+		}, this));
+	},
+
+	// Follow `next` from offset 0 to the last page. Offsets index one
+	// particular cache, so a page from another one (its `generation` differs:
+	// a refresh was published mid-walk) restarts the walk rather than splicing
+	// two lists. Anything that leaves the list unproven complete — a cache
+	// that keeps changing, a page that does not advance, pages that do not add
+	// up to their total — rejects: a partial list must never be mistaken for
+	// the whole one, because the pin check would then drop a valid pin.
+	walkServerPages: function (codes, hop, stale) {
+		var relays = [], generation = null, restarts = 0, pages = 0;
+		var step = function (offset) {
+			return callServers(codes, hop, offset).then(function (res) {
+				if (stale())
+					return null;
+				var page = serverList(res);
+				pages++;
+				if (generation !== null && res.generation !== generation) {
+					if (restarts >= 3)
+						throw new Error(_('the list kept changing while it was being read'));
+					restarts++;
+					relays = [];
+					generation = null;
+					return step(0);
+				}
+				generation = res.generation;
+				Array.prototype.push.apply(relays, page);
+				var next = res.next;
+				if (next == null) {
+					if (typeof res.total === 'number' && relays.length !== res.total)
+						throw new Error(_('the router sent an incomplete list'));
+					return relays;
+				}
+				// A page that does not move forward would repeat forever.
+				if (typeof next !== 'number' || next <= offset || pages >= 1000)
+					throw new Error(_('the router sent an incomplete list'));
+				return step(next);
+			});
+		};
+		return step(0);
+	},
+
 	// Fetch the union server list for the location set and repaint the picker.
 	// A pin the user cannot reach any more is dropped, but only when they
 	// changed the locations themselves: on a plain repaint the persisted pin is
-	// restored as-is, so a slow or empty response never silently unpins.
+	// restored as-is, so a slow or empty response never silently unpins. When
+	// the list cannot be loaded completely nothing is decided about the pin at
+	// all, and the panel says what went wrong and offers to try again. The
+	// last complete list stays on offer only if it answered the same query
+	// (locations and hop mode): a list for another selection would let the
+	// user pin a server outside the one now configured — the backend resolves
+	// fixed_server across the whole cache, so the tunnel would follow it there.
 	refreshServerList: function () {
 		if (!this.srvTrigger)
 			return;
 		var codes = (this.poolEntries || []).map(function (e) { return e.code; });
 		var req = ++this._serversReq;
 		var userEdit = !this._building;
+		var hop = this.hopMode();
+		var query = JSON.stringify([ codes, hop ]);
+		var previous = this._serverData;
 		this._serverData = null;
+		this._serverError = null;
 		this.srvTrigger.disabled = !codes.length;
 		if (!codes.length) {
 			this.srvRenderTrigger();
@@ -1011,10 +1097,19 @@ return view.extend({
 			this._building = false;
 			return;
 		}
-		callServers(codes, this.hopMode()).then(L.bind(function (res) {
-			if (req !== this._serversReq)
+		var stale = L.bind(function () { return req !== this._serversReq; }, this);
+		var repaint = L.bind(function () {
+			this.srvRenderTrigger();
+			if (this._srvOpen)
+				this.srvRenderPanel();
+			this._building = true;
+			this.updateRotationAvailability();
+			this._building = false;
+		}, this);
+		return this.fetchServerPages(codes, hop, stale).then(L.bind(function (relays) {
+			if (stale())
 				return;                 // a newer rebuild superseded this response
-			this._serverData = { relays: ((res && res.relays) || []).slice() };
+			this._serverData = { relays: relays, query: query };
 			// Restoring the persisted pin is not a user edit.
 			var pinned = uci.get('protonvpn', this.instance, 'fixed_server') || '';
 			// A pin the requirement excludes is as unreachable as one in a
@@ -1036,13 +1131,14 @@ return view.extend({
 			} else {
 				this._serverChosen = pinned;
 			}
-			this.srvRenderTrigger();
-			if (this._srvOpen)
-				this.srvRenderPanel();
-			this._building = true;
-			this.updateRotationAvailability();
-			this._building = false;
-		}, this)).catch(function () {});
+			repaint();
+		}, this)).catch(L.bind(function (e) {
+			if (stale())
+				return;
+			this._serverData = (previous && previous.query === query) ? previous : null;
+			this._serverError = (e && e.message) ? e.message : String(e);
+			repaint();
+		}, this));
 	},
 
 	markDirty: function () {
@@ -2242,6 +2338,9 @@ return view.extend({
 					'%s / %s'.format(r.city || '?', r.name || r.hostname) +
 					(r.load != null ? ' (%d%%)'.format(r.load) : '')))
 			];
+		} else if (this._serverError) {
+			// Not found in a list that failed to load says nothing about the set.
+			kids = [ E('span', {}, nodes(host)) ];
 		} else {
 			kids = [ E('span', {}, nodes(host + ' ' + _('(not in the set)'))) ];
 		}
@@ -2334,6 +2433,17 @@ return view.extend({
 		if (!el)
 			return;
 		dom.content(el, nodes(''));
+		// A list that could not be loaded completely says so above whatever
+		// it still shows (the last complete one), with the way out next to it.
+		if (this._serverError)
+			el.appendChild(E('div', { class: 'pv-pool-row is-in pv-srv-error', role: 'alert' }, nodes([
+				E('span', { class: 'grow' }, nodes(
+					_('The server list could not be loaded: %s').format(this._serverError))),
+				E('button', { type: 'button', class: 'cbi-button pv-srv-retry',
+					'data-pv-focus': 'srv-retry',
+					click: L.bind(function (ev) { ev.stopPropagation(); this.refreshServerList(); }, this) },
+					nodes(_('Try again')))
+			])));
 		var chosen = this._serverChosen;
 		var current = this.srvCurrentGateway();
 		var f = (this._srvFilter || '').toLowerCase();

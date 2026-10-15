@@ -198,6 +198,260 @@ ok('fixture cache written', _cache.write_cache(cache, cdir + '/protonvpn_servers
 	global.MOCK_UCI.protonvpn.main.cache_dir = cdir;
 }
 
+// 3b. A servers reply has to fit in ONE ubus message (issue #4). ubusd drops a
+//     client that sends a frame larger than UBUS_MAX_MSGLEN (ubusd_main.c,
+//     client_cb), and rpcd, having lost its bus connection, leaves uloop and
+//     exits: every LuCI session dies with it and procd reports a crash loop.
+//     The United States alone has more gateways than one message can carry,
+//     so the reply is paged, and walking the pages must yield the same set
+//     the unpaged selection would have.
+//
+//     The size is computed the way rpcd encodes the reply (ucode.c,
+//     rpc_ucode_ucv_to_blob) using libubox's blobmsg layout, not estimated
+//     from the JSON text: that is the number ubusd compares.
+{
+	const UBUS_MAX_MSGLEN = 1048576;
+	let align4 = (n) => (n + 3) & ~3;
+	// Padded length of one blobmsg attribute: blob_attr header, blobmsg_hdr
+	// (u16 name length + name + NUL, aligned) and the payload.
+	function blob_len(name, v) {
+		let payload = 0, t = type(v);
+		if (t == 'bool')
+			payload = 1;
+		else if (t == 'int')
+			payload = (v >= -2147483648 && v <= 2147483647) ? 4 : 8;
+		else if (t == 'double')
+			payload = 8;
+		else if (t == 'string')
+			payload = length(v) + 1;
+		else if (t == 'array')
+			for (let e in v)
+				payload += blob_len('', e);
+		else if (t == 'object')
+			for (let k, e in v)
+				payload += blob_len(k, e);
+		return align4(4 + align4(2 + length(name) + 1) + payload);
+	}
+	// ubus_send_reply(): message root + UBUS_ATTR_OBJID + UBUS_ATTR_DATA
+	// headers around the fields rpcd put in its blob_buf.
+	function ubus_reply_len(reply) {
+		let n = 4 + 8 + 4;
+		for (let k, v in reply)
+			n += blob_len(k, v);
+		return n;
+	}
+	// The model pinned on values worked out by hand from libubox's layout.
+	eq('blob model: one u32 field', ubus_reply_len({ a: 1 }), 16 + 12);
+	eq('blob model: an array of one short string', ubus_reply_len({ relays: [ 'x' ] }), 16 + 28);
+
+	// A fleet the size of Proton's US one: thousands of logicals, one server
+	// each, spread over a dozen cities, plus a small neighbour for set unions.
+	let cities = [ 'New York City', 'Los Angeles', 'Chicago', 'Dallas', 'Miami',
+		'Seattle', 'Atlanta', 'Denver', 'Phoenix', 'Secaucus', 'Ashburn', 'San Jose' ];
+	function logical(cc, i, city) {
+		return {
+			Name: sprintf('%s-%s#%d', uc(cc), uc(substr(city, 0, 2)), i),
+			EntryCountry: uc(cc), ExitCountry: uc(cc), City: city,
+			Tier: (i % 10) ? 2 : 0, Features: (i % 3) ? 0 : 16,
+			Score: 1.0 + i / 10000.0, Load: i % 100, Status: 1,
+			Servers: [ { EntryIP: sprintf('10.%d.%d.1', (i >> 8) & 255, i & 255),
+				Domain: sprintf('node-%s-%02d.protonvpn.net', cc, i % 90),
+				X25519PublicKey: 'lDqI02+FFU6CeisxCSKxVgi28TKT9SowZybo1M4abEU=',
+				Status: 1 } ]
+		};
+	}
+	let fleet = [];
+	for (let i = 1; i <= 5000; i++)
+		push(fleet, logical('us', i, cities[i % length(cities)]));
+	for (let i = 1; i <= 400; i++)
+		push(fleet, logical('ca', i, 'Toronto'));
+	let big = _cache.normalize(fleet);
+	let bdir = RUN + '/pvrpcd_big_' + time();
+	mkdir(bdir);
+	ok('large fixture cache written',
+		_cache.write_cache(big, bdir + '/protonvpn_servers_cache.json') == true);
+	big = _cache.read_cache(bdir + '/protonvpn_servers_cache.json');
+	global.MOCK_UCI.protonvpn.main.cache_dir = bdir;
+
+	// What the old single reply would have weighed: the reason for the paging.
+	let unpaged = [];
+	for (let r in _cache.pool_relays(big, [ 'us' ], 'standard'))
+		push(unpaged, _cache.trim_relay(r));
+	ok('the unpaged US selection does not fit one ubus message',
+		ubus_reply_len({ relays: unpaged, available: true }) > UBUS_MAX_MSGLEN);
+
+	// Walk the pages the way the view does. Returns the collected names and
+	// what went wrong, if anything.
+	function walk(args) {
+		let names = [], pages = 0, offset = 0, oversized = 0, stamps = {}, bad = null;
+		while (pages < 1000) {
+			let a = {};
+			for (let k, v in args)
+				a[k] = v;
+			a.offset = offset;
+			let rep = m.servers.call({ args: a });
+			pages++;
+			if (ubus_reply_len(rep) > UBUS_MAX_MSGLEN)
+				oversized++;
+			stamps['' + rep.generation] = true;
+			for (let r in rep.relays)
+				push(names, r.name + '@' + r.hostname);
+			if (rep.next == null)
+				break;
+			if (type(rep.next) != 'int' || rep.next <= offset) {
+				bad = sprintf('next %J after offset %d', rep.next, offset);
+				break;
+			}
+			offset = rep.next;
+		}
+		return { names, pages, oversized, stamps: length(keys(stamps)), bad };
+	}
+	function names_of(list) {
+		let out = [];
+		for (let r in list)
+			push(out, r.name + '@' + r.hostname);
+		return out;
+	}
+	let cases = [
+		[ 'country us', { country: 'us' },
+			names_of(_cache.city_relays(big, 'us', '', '')) ],
+		[ 'locations us', { locations: [ 'us' ], hop_mode: 'standard' },
+			names_of(_cache.pool_relays(big, [ 'us' ], 'standard')) ],
+		[ 'locations us+ca', { locations: [ 'us', 'ca' ], hop_mode: 'standard' },
+			names_of(_cache.pool_relays(big, [ 'us', 'ca' ], 'standard')) ]
+	];
+	for (let c in cases) {
+		let w = walk(c[1]);
+		eq(`servers ${c[0]}: every page fits one ubus message`, w.oversized, 0);
+		ok(`servers ${c[0]}: the selection is split over several pages`, w.pages > 1);
+		eq(`servers ${c[0]}: pages advance`, w.bad, null);
+		eq(`servers ${c[0]}: the pages together are exactly the selection`, w.names, c[2]);
+		eq(`servers ${c[0]}: every page names the same cache`, w.stamps, 1);
+	}
+
+	let first = m.servers.call({ args: { locations: [ 'us' ], hop_mode: 'standard', offset: 0 } });
+	eq('servers report the size of the whole selection', first.total, 5000);
+	eq('servers at offset 0 start at the beginning', first.offset, 0);
+	let past = m.servers.call({ args: { locations: [ 'us' ], offset: 6000 } });
+	eq('servers past the end are an empty last page',
+		[ past.relays, past.total, past.offset, past.next, past.available ],
+		[ [], 5000, 5000, null, true ]);
+	eq('servers treat a negative offset as the beginning',
+		m.servers.call({ args: { locations: [ 'us' ], offset: -5 } }).offset, 0);
+	eq('servers treat a non-numeric offset as the beginning',
+		m.servers.call({ args: { locations: [ 'us' ], offset: 'x' } }).offset, 0);
+
+	// Paging is opt-in. A caller that sends no offset is a client written
+	// before it existed — an already-open LuCI page, a script — and reads
+	// `relays` as the whole list. Handing it the first page would be read as
+	// "these are all the servers", and the view drops a pin it cannot find in
+	// the list. So it gets an explicit error it can act on instead, small
+	// enough to cross the bus.
+	let legacy_big = m.servers.call({ args: { locations: [ 'us' ], hop_mode: 'standard' } });
+	ok('servers without an offset refuse a selection too large for one reply',
+		type(legacy_big.error) == 'string' && length(legacy_big.error) > 0);
+	eq('servers without an offset never send a partial list', legacy_big.relays, null);
+	eq('servers without an offset say the list is available in pages', legacy_big.paged, true);
+	ok('the refusal is small', ubus_reply_len(legacy_big) < 4096);
+	ok('the refusal says what to do',
+		index(legacy_big.error, 'reload') >= 0 || index(legacy_big.error, 'Reload') >= 0);
+	let legacy_cc = m.servers.call({ args: { country: 'us' } });
+	eq('servers country call without an offset refuses too', legacy_cc.paged, true);
+
+	// The page budget is not the last line of defence: whatever a page ends up
+	// weighing, the reply is measured once more before it is sent. Shown by
+	// raising the budget past the bus limit — the module object is shared with
+	// the rpcd program, so it pages with the raised value.
+	let saved_budget = _cache.SERVERS_PAGE_BUDGET;
+	_cache.SERVERS_PAGE_BUDGET = 4 * UBUS_MAX_MSGLEN;
+	let unguarded = m.servers.call({ args: { locations: [ 'us' ], offset: 0 } });
+	_cache.SERVERS_PAGE_BUDGET = saved_budget;
+	ok('an oversized page is never sent, whatever the budget',
+		ubus_reply_len(unguarded) <= UBUS_MAX_MSGLEN);
+	ok('an oversized page becomes an explicit error',
+		type(unguarded.error) == 'string' && unguarded.relays == null);
+
+	// The same race the view guards against, at its source: two caches
+	// published within one second must not look like one. Replace the cache
+	// with another list, then give it the timestamp of the old one — the walk
+	// has to see a different generation all the same.
+	let gen1 = m.servers.call({ args: { locations: [ 'us' ], offset: 0 } }).generation;
+	let again = _cache.normalize([ logical('us', 9001, 'Austin') ]);
+	ok('replacement cache written',
+		_cache.write_cache(again, bdir + '/protonvpn_servers_cache.json') == true);
+	let raw = json(readfile(bdir + '/protonvpn_servers_cache.json'));
+	raw.cached_at_epoch = big.cached_at_epoch;
+	raw.cached_at = big.cached_at;
+	_common.atomic_write(bdir + '/protonvpn_servers_cache.json', sprintf('%J', raw));
+	let gen2 = m.servers.call({ args: { locations: [ 'us' ], offset: 0 } }).generation;
+	ok('a generation is a non-empty string', type(gen1) == 'string' && length(gen1) > 0);
+	ok('a cache replaced within the same second has another generation', gen1 != gen2);
+	// The same document published at another path is another cache: the
+	// setting that picks the directory can change between two pages.
+	let bdir2 = bdir + '_copy';
+	mkdir(bdir2);
+	_common.atomic_write(bdir2 + '/protonvpn_servers_cache.json', sprintf('%J', raw));
+	global.MOCK_UCI.protonvpn.main.cache_dir = bdir2;
+	ok('the same cache at another path has another generation',
+		m.servers.call({ args: { locations: [ 'us' ], offset: 0 } }).generation != gen2);
+
+	// A selection that fits is answered as before: the whole list, nothing
+	// added, which is exactly what a client from before the paging expects.
+	global.MOCK_UCI.protonvpn.main.cache_dir = cdir;
+	let small = m.servers.call({ args: { locations: [ 'nl' ], hop_mode: 'standard' } });
+	let small_list = [];
+	for (let r in _cache.pool_relays(cache, [ 'nl' ], 'standard'))
+		push(small_list, _cache.trim_relay(r));
+	eq('servers without an offset answer a small selection in the old shape',
+		small, { relays: small_list, available: true });
+	let small_paged = m.servers.call({ args: { locations: [ 'nl' ], hop_mode: 'standard', offset: 0 } });
+	eq('servers fitting one page carry no continuation', small_paged.next, null);
+	eq('servers fitting one page carry the whole selection',
+		length(small_paged.relays), small_paged.total);
+
+	// 3c. Nothing that reaches the bus may exceed it, whatever the cache holds.
+	//     A cache on disk is not necessarily one this version normalized (an
+	//     older package wrote it, or it was edited by hand), so the reply path
+	//     cannot rely on normalization alone. Both records below are the
+	//     reviewer's: one field of 1.1 million characters, and one field that
+	//     is an array of 90 000 zeros — 270 KB as JSON but over 1 MB as blob.
+	let long_name = 'x';
+	for (let i = 0; i < 21; i++)
+		long_name += long_name;
+	long_name = substr(long_name, 0, 1100000);
+	let zeros = [];
+	for (let i = 0; i < 90000; i++)
+		push(zeros, 0);
+	// A relay record as the cache stores it.
+	let cached_relay = (name) => ({ hostname: 'node-us-01.protonvpn.net',
+		ip_address: '10.0.0.1', name: name, public_key: 'k', load: 10, score: 1.5,
+		features: 0, secure_core: false, tor: false, entry_country: 'us', tier: 2,
+		location: 'us-chicago', port: 51820, active: true, country_code: 'us',
+		city_code: 'us-chicago', city: 'Chicago' });
+	for (let bad in [ [ 'an oversized name', long_name ], [ 'a nested name', zeros ] ]) {
+		let doc = { countries: [ { code: 'us', name: 'US', display_name: 'US',
+			gateway_count: 2, cities: [ { code: 'us-chicago', name: 'Chicago',
+				country: 'US', country_code: 'us', gateway_count: 2,
+				relays: [ cached_relay('US#1'), cached_relay(bad[1]) ] } ] } ],
+			stats: { countries: 1, cities: 1, gateways: 2, servers_seen: 2 } };
+		let hdir = sprintf('%s/pvrpcd_hostile_%d_%d', RUN, time(), length(bad[0]));
+		mkdir(hdir);
+		_cache.write_cache(doc, hdir + '/protonvpn_servers_cache.json');
+		global.MOCK_UCI.protonvpn.main.cache_dir = hdir;
+		for (let args in [ { country: 'us' }, { country: 'us', offset: 0 },
+		                   { locations: [ 'us' ] }, { locations: [ 'us' ], offset: 0 },
+		                   { locations: [ 'us' ], offset: 1 } ]) {
+			let rep = m.servers.call({ args: args });
+			let what = sprintf('%s, %J', bad[0], keys(args));
+			ok(`servers with ${what}: the reply fits one ubus message`,
+				ubus_reply_len(rep) <= UBUS_MAX_MSGLEN);
+			ok(`servers with ${what}: an unsendable record is an explicit error`,
+				type(rep.error) == 'string' && rep.relays == null);
+		}
+	}
+	global.MOCK_UCI.protonvpn.main.cache_dir = cdir;
+}
+
 // 4. refresh_status: the UI polls this while a fetch runs, so the idle answer
 //    must be a state object rather than null.
 {

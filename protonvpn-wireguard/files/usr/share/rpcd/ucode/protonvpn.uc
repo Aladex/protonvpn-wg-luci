@@ -105,15 +105,57 @@ methods.locations = {
 	}
 };
 
+// Relays for a location set (or the legacy country/city pair). No reply may
+// exceed one ubus message: ubusd disconnects rpcd for a larger one, and rpcd
+// exits (issue #4). A large country does not fit, so the list is paged — but
+// only for a caller that asks with `offset`, then follows `next` as `offset`
+// until a page comes back without it. `generation` names the cache a page was
+// cut from; pages of two different caches do not belong in one list.
+//
+// Without `offset` the answer is the original one, { relays, available }, as
+// long as it fits. A caller from before the paging — an already-open LuCI
+// page, a script — reads `relays` as the whole list, so a selection too large
+// for one reply is refused with { error, paged: true } rather than cut short.
+const SERVERS_TOO_LARGE = 'too many servers for one reply: reload the page to load ' +
+	'them in pages (scripts: pass "offset", then follow "next")';
+
 methods.servers = {
-	args: { country: '', city: '', hop_mode: '', locations: [] },
+	args: { country: '', city: '', hop_mode: '', locations: [], offset: 0 },
 	call: function(request) {
 		let a = request.args;
 		let uci = cursor();
-		let cache = _cache.read_cache(cache_file_path(load_settings(uci)));
+		let path = cache_file_path(load_settings(uci));
+		let cache = _cache.read_cache(path);
 		if (!cache)
 			return { relays: [], available: false };
 
+		let answer = function(list) {
+			let budget = _cache.SERVERS_PAGE_BUDGET;
+			if (a.offset == null) {
+				// One pass over the exact wire size of { relays, available }.
+				let size = _cache.reply_size({ available: true }) + _cache.blob_size('relays', []);
+				for (let i = 0; i < length(list); i++) {
+					let n = _cache.blob_size('', list[i]);
+					if (n > budget)
+						return { error: sprintf('server entry %d is too large to send', i),
+							available: true };
+					size += n;
+				}
+				if (size > _cache.REPLY_LIMIT)
+					return { error: SERVERS_TOO_LARGE, paged: true, available: true };
+				return { relays: list, available: true };
+			}
+			let p = _cache.page_relays(list, a.offset, budget);
+			if (p.error)
+				return { error: p.error, available: true };
+			p.available = true;
+			p.generation = _cache.cache_generation(path, cache);
+			// The page budget leaves room for these fields; this is the check
+			// that holds whatever they turn out to weigh.
+			if (_cache.reply_size(p) > _cache.REPLY_LIMIT)
+				return { error: 'page too large to send', available: true };
+			return p;
+		};
 		let hop = '' + (a.hop_mode || '');
 		// A location set wins over the single country/city arguments, mirroring
 		// how the backend itself selects.
@@ -134,15 +176,14 @@ methods.servers = {
 			let out = [];
 			for (let r in _cache.pool_relays(cache, set, hop))
 				push(out, _cache.trim_relay(r));
-			return { relays: out, available: true };
+			return answer(out);
 		}
 
 		let cc = validate_country_code('' + (a.country || ''));
 		let city = a.city ? validate_location_code('' + a.city) : '';
 		if (!cc && !city)
 			return { relays: [], available: true };
-		return { relays: _cache.city_relays(cache, cc || '', city || '', hop),
-			available: true };
+		return answer(_cache.city_relays(cache, cc || '', city || '', hop));
 	}
 };
 

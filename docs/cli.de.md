@@ -32,6 +32,20 @@ ubus call protonvpn create_instance '{"instance":"media"}'
 ubus call protonvpn delete_instance '{"instance":"media"}'
 ```
 
+Ohne `offset` antwortet `servers` wie bisher: die ganze Liste in `relays`. Eine
+Auswahl, die nicht in eine ubus-Nachricht passt (die USA zum Beispiel), wird mit
+einem `error` und `"paged": true` abgelehnt, statt abgeschnitten zu werden. Dann
+seitenweise abfragen: `"offset": 0` übergeben und, solange eine Antwort `next`
+enthält, diesen Wert als `offset` zurückgeben. `total` ist die Größe der
+gesamten Auswahl, `generation` bezeichnet den Server-Cache, aus dem die Seite
+stammt: Ändert er sich zwischen zwei Seiten, wurde der Cache ersetzt — dann bei
+0 neu beginnen. Ein Eintrag, der zu groß zum Senden ist, wird ebenfalls als
+`error` gemeldet:
+
+```bash
+ubus call protonvpn servers '{"locations":["us"],"hop_mode":"standard","offset":0}'
+```
+
 ## Dienste und Logs
 
 ```sh

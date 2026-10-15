@@ -32,6 +32,19 @@ ubus call protonvpn create_instance '{"instance":"media"}'
 ubus call protonvpn delete_instance '{"instance":"media"}'
 ```
 
+Without `offset`, `servers` answers as it always did: the whole list in
+`relays`. A selection too large for one ubus message (the United States is one)
+is refused with an `error` and `"paged": true` instead of being cut short. Ask
+for pages then: pass `"offset": 0`, and as long as a reply carries `next`, pass
+that back as `offset`. `total` is the size of the whole selection, and
+`generation` identifies the server-list cache a page was cut from: when it
+changes between two pages the cache was replaced, so start again at 0. An entry
+too large to send at all is reported as an `error` too:
+
+```bash
+ubus call protonvpn servers '{"locations":["us"],"hop_mode":"standard","offset":0}'
+```
+
 ## Services and logs
 
 ```sh

@@ -119,6 +119,28 @@ function ensure_city(acc, country, city_code, city_name, country_code) {
 //     secure_core, tor (decoded flags), tier (0=free), location (city code),
 //     port, active (Status != 0), country_code, city_code, city }
 
+// Longest text any relay field may carry. Every real value is far shorter
+// (a public key is 44 characters, a domain about 30, a city name rarely 25);
+// the bound exists because the relay later crosses ubus, which refuses a
+// message over 1 MiB, and one record of unbounded size could reach that on its
+// own (issue #4).
+const MAX_TEXT = 128;
+
+// A text field from the API: the string, '' when absent, or null when it is
+// not a string of bounded length — the caller drops the record then, since a
+// field of the wrong shape cannot be trusted any more than an oversized one.
+function text_field(v) {
+	if (v == null)
+		return '';
+	return (type(v) == 'string' && length(v) <= MAX_TEXT) ? v : null;
+}
+
+// A numeric field from the API; anything that is not a number counts as 0.
+function num_field(v) {
+	let t = type(v);
+	return (t == 'int' || t == 'double') ? v : 0;
+}
+
 // Add one raw logical-server object to the accumulator. Exported for tests.
 function add_server(acc, logical) {
 	acc.stats.servers_seen++;
@@ -129,15 +151,20 @@ function add_server(acc, logical) {
 	if (type(servers) != 'array' || !length(servers))
 		return;
 
+	let name = text_field(logical.Name), exit_cc = text_field(logical.ExitCountry),
+	    entry_cc = text_field(logical.EntryCountry), city_name = text_field(logical.City);
+	if (name == null || exit_cc == null || entry_cc == null || city_name == null)
+		return;                     // malformed: see text_field()
+
 	// Group by the EXIT country: that is the visible IP, and for Secure Core
 	// the entry country changes between rotations while the exit must not.
-	let country_code = lc(logical.ExitCountry || '');
+	let country_code = lc(exit_cc);
 	if (!country_code)
 		return;
-	let city_name = logical.City || 'Unknown';
+	city_name = city_name || 'Unknown';
 	let city_code = city_code_of(country_code, city_name);
 
-	let features = +logical.Features || 0;
+	let features = num_field(logical.Features);
 	let secure_core = (features & FEATURE_SECURE_CORE) ? true : false;
 	let tor = (features & FEATURE_TOR) ? true : false;
 
@@ -147,27 +174,31 @@ function add_server(acc, logical) {
 	for (let srv in servers) {
 		if (type(srv) != 'object' || !srv.Status)
 			continue;               // this physical server is down
-		if (!srv.X25519PublicKey)
+		let domain = text_field(srv.Domain), key = text_field(srv.X25519PublicKey),
+		    entry_ip = text_field(srv.EntryIP), exit_ip = text_field(srv.ExitIP);
+		if (domain == null || key == null || entry_ip == null || exit_ip == null)
+			continue;               // malformed: see text_field()
+		if (!key)
 			continue;               // unusable for WireGuard
-		let endpoint = srv.EntryIP || srv.ExitIP || '';
+		let endpoint = entry_ip || exit_ip;
 		if (!endpoint)
 			continue;
 
 		push(city.relays, {
 			// The logical Name ('NL#85', 'SE-JP#1') is what the user sees and
 			// what a pinned server is stored as; Domain is per physical server.
-			hostname: srv.Domain || logical.Name || '',
+			hostname: domain || name,
 			ip_address: endpoint,
-			name: logical.Name || '',
-			public_key: srv.X25519PublicKey,
-			load: +logical.Load || 0,
+			name: name,
+			public_key: key,
+			load: num_field(logical.Load),
 			// Proton's own Quick Connect picks the LOWEST Score.
-			score: +logical.Score || 0,
+			score: num_field(logical.Score),
 			features: features,
 			secure_core: secure_core,
 			tor: tor,
-			entry_country: lc(logical.EntryCountry || country_code),
-			tier: +logical.Tier || 0,
+			entry_country: lc(entry_cc || country_code),
+			tier: num_field(logical.Tier),
 			location: city_code,
 			port: DEFAULT_PORT,
 			active: true,
@@ -636,6 +667,83 @@ function city_relays(cache, country_code, city_code, hop_mode) {
 	return out;
 }
 
+// ── Reply size (issue #4) ────────────────────────────────────────────────
+// A `servers` reply crosses ubus, and ubusd disconnects any client that sends
+// a frame over UBUS_MAX_MSGLEN (1 MiB) — for rpcd that means losing the bus and
+// exiting, which takes every LuCI session with it. Sizes here are therefore
+// counted in blobmsg bytes, the encoding rpcd sends and ubusd measures, not
+// estimated from JSON: the two differ by a factor that depends on the field
+// types, and an estimate is exactly what a hostile or broken record defeats.
+
+// Padded length of one blobmsg attribute, as rpcd's ucode plugin encodes a
+// value (rpcd ucode.c rpc_ucode_ucv_to_blob, libubox blobmsg layout): a 4-byte
+// blob_attr header, the u16 name length + name + NUL padded to 4, then the
+// payload — 1 for a bool, 4 or 8 for an integer, 8 for a double, the string
+// with its NUL, or the children of an array/object — the whole padded to 4.
+function blob_size(name, v) {
+	let payload = 0, t = type(v);
+	if (t == 'bool')
+		payload = 1;
+	else if (t == 'int')
+		payload = (v >= -2147483648 && v <= 2147483647) ? 4 : 8;
+	else if (t == 'double')
+		payload = 8;
+	else if (t == 'string')
+		payload = length(v) + 1;
+	else if (t == 'array')
+		for (let e in v)
+			payload += blob_size('', e);
+	else if (t == 'object')
+		for (let k, e in v)
+			payload += blob_size(k, e);
+	return (4 + ((2 + length(name) + 1 + 3) & ~3) + payload + 3) & ~3;
+}
+
+// Bytes ubusd sees for a reply object: ubus_send_reply() puts the message
+// root, UBUS_ATTR_OBJID and the UBUS_ATTR_DATA header around the fields.
+function reply_size(reply) {
+	let n = 4 + 8 + 4;
+	for (let k, v in reply)
+		n += blob_size(k, v);
+	return n;
+}
+
+// The largest reply `servers` sends. Kept under UBUS_MAX_MSGLEN by a margin
+// rather than at it: what goes out must never be the frame that kills rpcd.
+const REPLY_LIMIT = 1048576 - 16 * 1024;
+
+// Relay bytes one page may carry; the rest of REPLY_LIMIT is room for the
+// page's own fields. A page of the US list is about 1800 relays.
+const SERVERS_PAGE_BUDGET = 512 * 1024;
+
+// One page of `list` starting at `offset`: as many relays as fit `budget`
+// blobmsg bytes. `next` is present only when relays remain. A negative,
+// missing or non-integer offset means the beginning; one past the end is an
+// empty page. A relay that cannot fit even an empty page is never sent: the
+// page becomes { error } instead, since sending it alone would be the
+// oversized frame this exists to prevent. Normalization keeps such records
+// out of the cache, so this only meets one a cache from elsewhere carries.
+function page_relays(list, offset, budget) {
+	let total = length(list);
+	let start = (type(offset) == 'int' && offset > 0) ? offset : 0;
+	if (start > total)
+		start = total;
+	let relays = [], used = 0, i = start;
+	for (; i < total; i++) {
+		let n = blob_size('', list[i]);
+		if (n > budget)
+			return { error: sprintf('server entry %d is too large to send', i) };
+		if (used + n > budget)
+			break;
+		push(relays, list[i]);
+		used += n;
+	}
+	let page = { relays: relays, total: total, offset: start };
+	if (i < total)
+		page.next = i;
+	return page;
+}
+
 // ── Authenticated fetch ──────────────────────────────────────────────────
 
 // GET /vpn/logicals with session headers (via protonvpn.api). Returns the
@@ -744,13 +852,37 @@ function cache_is_stale(path) {
 	return (time() - doc.cached_at_epoch) > CACHE_MAX_AGE;
 }
 
-// Stamp cached_at/schema_version/cache_info and atomically write. Bool.
+// A token no other publication of a cache shares. The kernel's random UUID
+// where there is one (every Linux, the router included); otherwise the
+// wall clock to the nanosecond plus a per-process counter.
+let generation_seq = 0;
+function new_generation() {
+	let uuid = trim(readfile('/proc/sys/kernel/random/uuid') || '');
+	if (length(uuid))
+		return uuid;
+	let c = clock() || [ time(), 0 ];
+	return sprintf('%d.%09d-%d', c[0], c[1], ++generation_seq);
+}
+
+// What tells one published cache from another while a client pages through
+// it (issue #4): the generation write_cache() stamped, which changes on every
+// publication even within one second, qualified by the cache file's path,
+// since the directory is a setting and two files can hold one generation. A
+// cache written before generations existed falls back to its timestamp.
+function cache_generation(path, doc) {
+	let g = (doc && doc.generation != null) ? doc.generation
+		: ('t' + ((doc && doc.cached_at_epoch) || 0));
+	return sprintf('%s#%s', path, g);
+}
+
+// Stamp cached_at/schema_version/generation/cache_info and atomically write. Bool.
 function write_cache(response, path) {
 	if (type(response) != 'object' || type(response.countries) != 'array')
 		return false;
 	response.schema_version = CACHE_SCHEMA_VERSION;
 	response.cached_at = iso_ts();
 	response.cached_at_epoch = time();
+	response.generation = new_generation();
 	response.cache_info = {
 		countries: response.stats ? response.stats.countries : 0,
 		cities: response.stats ? response.stats.cities : 0,
@@ -787,5 +919,7 @@ return {
 	write_fetch_status, read_fetch_status, add_server, normalize, normalize_body,
 	body_parse_mode,
 	locations_tree, city_relays, pool_relays,
+	MAX_TEXT, blob_size, reply_size, REPLY_LIMIT, SERVERS_PAGE_BUDGET, page_relays,
+	cache_generation,
 	fetch_servers, read_cache, cache_is_stale, write_cache, fetch_and_build
 };

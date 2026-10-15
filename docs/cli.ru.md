@@ -32,6 +32,19 @@ ubus call protonvpn create_instance '{"instance":"media"}'
 ubus call protonvpn delete_instance '{"instance":"media"}'
 ```
 
+Без `offset` метод `servers` отвечает как раньше: весь список в `relays`. Выборку,
+которая не помещается в одно сообщение ubus (например, США), он не обрезает, а
+отклоняет с `error` и `"paged": true`. Тогда запрашивайте постранично: передайте
+`"offset": 0` и, пока в ответе есть `next`, передавайте его обратно как
+`offset`. `total` — размер всей выборки, `generation` — кэш списка серверов, из
+которого нарезана страница: если он изменился между страницами, кэш заменили —
+начните заново с 0. Запись, слишком большая для отправки, тоже приходит как
+`error`:
+
+```bash
+ubus call protonvpn servers '{"locations":["us"],"hop_mode":"standard","offset":0}'
+```
+
 ## Сервисы и логи
 
 ```sh

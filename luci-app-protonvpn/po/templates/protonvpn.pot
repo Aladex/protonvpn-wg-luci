@@ -998,6 +998,18 @@ msgid ""
 "a different server, or turn the requirement off."
 msgstr ""
 
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1046
+msgid "the list kept changing while it was being read"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1057
+msgid "the router sent an incomplete list"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2436
+msgid "The server list could not be loaded: %s"
+msgstr ""
+
 #: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1498
 msgid "The server list did not arrive in time."
 msgstr ""
@@ -1065,6 +1077,10 @@ msgstr ""
 #: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3323
 #: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:3347
 msgid "Traffic routing"
+msgstr ""
+
+#: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:2440
+msgid "Try again"
 msgstr ""
 
 #: applications/luci-app-protonvpn/htdocs/luci-static/resources/view/protonvpn/overview.js:1338

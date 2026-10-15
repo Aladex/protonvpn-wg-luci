@@ -36,7 +36,7 @@ let modules = {
 	],
 	'protonvpn.cache': [
 		'write_fetch_status', 'read_fetch_status', 'add_server', 'normalize',
-		'locations_tree', 'city_relays', 'pool_relays',
+		'locations_tree', 'city_relays', 'pool_relays', 'page_relays',
 		'fetch_servers', 'read_cache', 'cache_is_stale', 'write_cache',
 		'fetch_and_build'
 	],
