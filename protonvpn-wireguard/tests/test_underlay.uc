@@ -26,7 +26,7 @@
 
 'use strict';
 
-import { readfile, writefile, unlink, mkdir, rmdir, open, popen } from 'fs';
+import { readfile, writefile, unlink, mkdir, rmdir, lsdir, open, popen } from 'fs';
 import { cursor } from 'uci';
 const _cmn = require('protonvpn.common');
 const _api = require('protonvpn.api');
@@ -877,7 +877,25 @@ for (let n in [ 'main', 'media' ])
 	ok('B1: it is not taken for "nothing owed"', said(/nothing will be brought up until a reload succeeds/) == 1);
 	ok('B1: with a reload that works it is paid on the spot', _apply.bring_up('pv_media', uci) &&
 		index(LOADED, MEDIA_G) >= 0);
-	rmdir(RUN + '/protonvpn_network_pending');
+	// R3-S1: the reload that just succeeded settles the malformed record too,
+	// or every tick would reload netifd for nothing.
+	ok('B1: a successful reload clears the malformed record', !_routing.network_pending());
+	let n0 = RELOADS;
+	_rotate.uplink_reconcile(cursor());
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: and the next unchanged reconciles reload nothing', RELOADS, n0);
+	// A directory that is not empty is renamed aside, not emptied.
+	mkdir(RUN + '/protonvpn_network_pending');
+	writefile(RUN + '/protonvpn_network_pending/keep', 'x');
+	ok('B1: a non-empty one is owed as well', _routing.network_pending());
+	ok('B1: and settled by a successful reload', _routing.activate_network() && !_routing.network_pending());
+	let aside = filter(lsdir(RUN) || [], (f) => index(f, 'protonvpn_network_pending.malformed.') == 0);
+	eq('B1: by moving it aside, contents intact', length(aside) == 1 &&
+		readfile(RUN + '/' + aside[0] + '/keep'), 'x');
+	for (let f in aside) {
+		unlink(RUN + '/' + f + '/keep');
+		rmdir(RUN + '/' + f);
+	}
 
 	// A missing run directory is created rather than read as "nothing owed".
 	let rd = RUN + '/missing-run-' + time();

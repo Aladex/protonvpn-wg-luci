@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { readfile, unlink, mkdir, stat } from 'fs';
+import { readfile, unlink, mkdir, rmdir, rename, stat } from 'fs';
 const _common = require('protonvpn.common');
 
 // Seconds given to any `ubus` call. ubus bounds itself with -t, which is the
@@ -1095,6 +1095,30 @@ function network_pending() {
 	return pending_token() != null;
 }
 
+// A reload has just succeeded while the record's path held something that is
+// not a record of ours (pending_token: 'unreadable'). Left there it would be
+// read as owed again, and every tick would reload netifd for nothing. So it
+// is cleared: a directory removed, or renamed aside when it is not empty
+// (its contents are not ours to delete), anything else unlinked. Only while it
+// is still not a regular file: a regular record at the path now is a newer
+// writer's debt and stays. When it cannot be cleared, say so and report the
+// activation as unsettled rather than reload forever while claiming success.
+function repair_pending() {
+	let st = stat(PENDING_FILE);
+	if (!st || st.type == 'file')
+		return true;
+	let done = (st.type == 'directory')
+		? (rmdir(PENDING_FILE) || rename(PENDING_FILE, PENDING_FILE + '.malformed.' + time()))
+		: unlink(PENDING_FILE);
+	if (done) {
+		_common.log('removed a malformed pending-reload record at ' + PENDING_FILE);
+		return true;
+	}
+	_common.log('cannot clear the malformed pending-reload record at ' + PENDING_FILE +
+		'; every activation will reload netifd until it is removed by hand');
+	return false;
+}
+
 // True when netifd has everything committed so far (or nothing was owed).
 // Called through the module so the suite can stand in for netifd's reload.
 function activate_network() {
@@ -1107,10 +1131,13 @@ function activate_network() {
 			'guards and pins committed so far are not loaded yet — retrying on the next tick');
 		return false;
 	}
+	if (token == 'unreadable')
+		return repair_pending();
 	if (readfile(PENDING_FILE) == token)
 		unlink(PENDING_FILE);
 	return true;
 }
+
 
 // Commit-side helper: record what was just committed and have netifd load it
 // now. True only when netifd has everything committed so far.
