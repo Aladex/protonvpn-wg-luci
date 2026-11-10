@@ -558,6 +558,10 @@ for (let n in [ 'main', 'media' ])
 	uci = reset(config(), router(), null, { [EP]: 'ds-dslite', '146.70.170.2': 'lan5' });
 	_rotate.uplink_reconcile(cursor());
 	eq('P5: the reconcile guards every enabled instance', length(guards(null)), 2);
+	// And reports no change once they are in place: the reconcile reloads
+	// netifd whenever a guard changed, and it runs every 30 seconds.
+	eq('P5: a guard in place is not rewritten', _routing.reconcile_endpoint_guard(cursor(),
+		_cmn.load_settings(cursor(), 'media')), false);
 
 	// Disconnect removes it; delete removes it.
 	uci = reset(config(), router());
