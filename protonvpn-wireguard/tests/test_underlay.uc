@@ -812,6 +812,12 @@ for (let n in [ 'main', 'media' ])
 	eq('B1: nothing loaded before', LOADED, []);
 	_rotate.uplink_reconcile(cursor());
 	eq('B1: the reconcile loads every enabled instance\'s guard', LOADED, [ MAIN_G, MEDIA_G ]);
+	// The same with nothing else to commit (already pinned, nothing to
+	// adopt): the guards alone are what is owed.
+	uci = reset(config({ pv_media: { tunlink: 'dslite', protonvpn_tunlink: 'dslite' } }), router(),
+		null, { [EP]: 'ds-dslite' });
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: guards alone are loaded by the reconcile', LOADED, [ MAIN_G, MEDIA_G ]);
 
 	// S1: removals reach netifd as well.
 	uci = reset(config({ g_main: main_guard }), router());
@@ -847,6 +853,7 @@ for (let n in [ 'main', 'media' ])
 		pv_media: { tunlink: 'dslite', protonvpn_tunlink: 'dslite' },
 		protonvpn: { tunlink: _underlay.NO_UPLINK, protonvpn_tunlink: _underlay.NO_UPLINK },
 		pv_user: { '.type': 'interface', proto: 'wireguard', tunlink: 'wan' },
+		pv_lost: { '.type': 'interface', proto: 'wireguard', tunlink: _underlay.NO_UPLINK },
 		pv_edited: { '.type': 'interface', proto: 'wireguard', tunlink: 'wan', protonvpn_tunlink: 'dslite' },
 		g1: { '.type': 'rule', dest: EP + '/32', action: 'unreachable', priority: '89999',
 			protonvpn_managed: '1', protonvpn_role: 'endpoint_guard', protonvpn_iface: 'pv_media' },
@@ -862,6 +869,7 @@ for (let n in [ 'main', 'media' ])
 	eq('S2: every endpoint guard is gone', guards(null), []);
 	eq('S2: our real pin is gone', [ n.pv_media.tunlink, n.pv_media.protonvpn_tunlink ], [ null, null ]);
 	eq('S2: so is the sentinel', [ n.protonvpn.tunlink, n.protonvpn.protonvpn_tunlink ], [ null, null ]);
+	eq('S2: even one whose stamp was lost: nothing could ever satisfy it', n.pv_lost.tunlink, null);
 	eq('S2: a user tunlink stays', n.pv_user.tunlink, 'wan');
 	eq('S2: an edited one stays, losing only our stamp', [ n.pv_edited.tunlink, n.pv_edited.protonvpn_tunlink ], [ 'wan', null ]);
 	ok('S2: other stamped rules are not this cleanup\'s business', n.steer != null);
