@@ -92,6 +92,9 @@ function loaded_now() {
 let LOADED = [];
 let RELOADS = 0;
 let RELOAD_FAIL = 0;
+// Set to a function to run while a reload is in flight — after netifd has
+// read the configuration, before the reload returns.
+let DURING_RELOAD = null;
 const real_run = _cmn.run;
 _cmn.run = function(argv) {
 	if (argv[0] == 'ubus' && join(' ', slice(argv, -3)) == 'call network reload') {
@@ -101,6 +104,11 @@ _cmn.run = function(argv) {
 			return { code: 4, stdout: '' };
 		}
 		LOADED = loaded_now();
+		if (DURING_RELOAD) {
+			let f = DURING_RELOAD;
+			DURING_RELOAD = null;
+			f();
+		}
 		return { code: 0, stdout: '' };
 	}
 	return real_run(argv);
@@ -244,6 +252,7 @@ function reset(cfg, dump, k, routes) {
 	LOADED = loaded_now();
 	RELOADS = 0;
 	RELOAD_FAIL = 0;
+	DURING_RELOAD = null;
 	return cursor();
 }
 function media() { return global.MOCK_UCI.network.pv_media; }
@@ -784,6 +793,13 @@ for (let n in [ 'main', 'media' ])
 	let n = RELOADS;
 	_rotate.uplink_reconcile(cursor());
 	eq('B1: and the retries stop', RELOADS, n);
+
+	// Someone commits while a reload is already running: that reload read the
+	// configuration before the commit, so what it owes stays owed.
+	uci = reset(config({ g_main: main_guard }), outage());
+	DURING_RELOAD = function() { _routing.mark_network_pending(); };
+	_apply.bring_up('pv_media', uci);
+	ok('B1: a commit made during a reload is still owed afterwards', _routing.network_pending());
 
 	// The endpoint changes while the instance is parked.
 	uci = reset(config({ g_main: main_guard }), outage());
