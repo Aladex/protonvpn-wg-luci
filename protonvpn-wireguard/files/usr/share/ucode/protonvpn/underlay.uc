@@ -57,10 +57,14 @@
 //
 // ── Scope ────────────────────────────────────────────────────────────────
 // nohostroute=1 instances have no host dependency: they ride `main` on
-// purpose (the owner's external failover moves them), and nothing here
-// applies to them except the endpoint guard (routing.reconcile_endpoint_guard).
-// A tunlink the user set is theirs and is never touched; this module only
-// manages a tunlink it stamped itself (TUNLINK_STAMP holds what it wrote).
+// purpose (the owner's external failover moves them), so they are never pinned
+// or parked by the gate. They still get the endpoint guard
+// (routing.reconcile_endpoint_guard), and the leak check (leak(), run by the
+// reconcile for every enabled instance) still takes one down whose endpoint
+// the kernel routes through a tunnel.
+// A tunlink the user set is theirs and is never rewritten, but it is checked
+// like a picked one (user_pin_refusal); this module only writes a tunlink it
+// stamps itself (TUNLINK_STAMP holds what it wrote).
 
 'use strict';
 

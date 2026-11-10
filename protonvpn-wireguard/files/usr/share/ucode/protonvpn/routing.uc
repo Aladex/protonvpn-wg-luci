@@ -1018,10 +1018,14 @@ function reconcile_ipv6_rules(uci, s, iface, steering, table, nets) {
 // For every enabled instance, nohostroute or not: an instance that rides
 // `main` on purpose (nohostroute=1) is just as exposed when `main` is empty.
 // The rule follows the endpoint: bring_up reconciles it before every package
-// ifup, and /sbin/ifup's own `network reload` installs it before the tunnel's
-// setup sends its first handshake; the daemon's uplink reconcile covers an
-// instance no package ifup has touched since an upgrade. A disabled instance
-// carries none (disconnect, delete).
+// ifup and has netifd load it (activate_network below) whether or not the ifup
+// follows; the daemon's uplink reconcile covers an instance no package ifup has
+// touched since an upgrade. A disabled instance carries none (disconnect,
+// delete, clear_credentials, tear_down_peer).
+//
+// It catches what `main` and `default` both miss, and nothing else: a bad
+// route already in `main` wins before this rule is reached. That case is the
+// reconcile's leak check (protonvpn.underlay leak), not this rule's.
 //
 // Deliberately NOT part of enforce(). That is the managed routing, which a
 // manual scheme switches off byte for byte, and the guard is not routing for
