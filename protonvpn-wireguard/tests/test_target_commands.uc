@@ -40,6 +40,7 @@ const SRC = [
 	'/../files/usr/share/ucode/protonvpn/select.uc',
 	'/../files/usr/share/ucode/protonvpn/service.uc',
 	'/../files/usr/share/ucode/protonvpn/status.uc',
+	'/../files/usr/share/ucode/protonvpn/underlay.uc',
 	'/../files/usr/share/rpcd/ucode/protonvpn.uc'
 ];
 

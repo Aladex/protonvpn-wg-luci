@@ -975,5 +975,72 @@ if (trim(sh_out("unshare -rn sh -c 'ip link add pvt0 type dummy && echo yes' 2>/
 		match(out, /helper: true/), out);
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// Part 3 — the endpoint underlay, against the real device classifier
+// ════════════════════════════════════════════════════════════════════════
+//
+// test_underlay.uc decides the underlay with the classifier stubbed; here it
+// is the real one (routing.stack_refusal) reading these fakes, on the owner's
+// router: DS-Lite bound to eth1, the guest instance's tunnel `protonvpn` and
+// the torrent instance `pv_media` both carrying an ip4table'd 0.0.0.0/0, and
+// the user's own wg0.
+
+function underlay(sc, ep) {
+	let cfg = stage(sc);
+	let out = trim(sh_out(helper_cmd(FAKE, cfg, FAKE,
+		'PVT_MODE=underlay PVT_ENDPOINT=' + ep)));
+	try { return json(out); } catch (e) { return { unparsable: out }; }
+}
+function owner_router(extra) {
+	let dump = [
+		ifc('dslite', 'dslite', 'ds-dslite', dflt()),
+		ifc('protonvpn', 'wireguard', 'protonvpn', dflt(), null, { ip4table: 107 }),
+		ifc('pv_media', 'wireguard', 'pv_media', dflt(), null, { ip4table: 108 }),
+		ifc('wg0', 'wireguard', 'wg0', { target: '10.28.0.0', mask: 24, nexthop: '0.0.0.0', source: '0.0.0.0/0' })
+	];
+	for (let e in (extra || []))
+		push(dump, e);
+	return { network: network(), firewall: firewall([ 'wan6', 'dslite' ]), dump: dump };
+}
+{
+	let r = underlay(owner_router(), '79.127.154.1');
+	eq('underlay: the owner\'s router pins the endpoint to DS-Lite', r.iface, 'dslite');
+
+	let sc = owner_router();
+	sc.dump[0] = ifc('dslite', 'dslite', 'ds-dslite', null, false);
+	sc.routes = { '79.127.154.1': 'protonvpn' };
+	r = underlay(sc, '79.127.154.1');
+	eq('underlay: with the cable down nothing carries it', r.iface, null);
+	ok('underlay: the guest tunnel was refused', length(filter(r.refused || [], (x) => x.iface == 'protonvpn')) == 1,
+		sprintf('%J', r));
+	ok('underlay: and the incident\'s route is a leak, named by its interface',
+		match(r.leak || '', /routed through WireGuard interface protonvpn/), sprintf('%J', r));
+
+	// Another VPN's tunnel that netifd does not call wireguard: refused by the
+	// kernel's own account of the device, whatever its protocol says.
+	sc = owner_router([ ifc('aaa', 'static', 'tun0', dflt()) ]);
+	sc.dump[0] = ifc('dslite', 'dslite', 'ds-dslite', null, false);
+	sc.kinds = { tun0: 'tun' };
+	sc.routes = { '79.127.154.1': 'tun0' };
+	r = underlay(sc, '79.127.154.1');
+	eq('underlay: a static tun is not an uplink', r.iface, null);
+	ok('underlay: refused by its kind', match(sprintf('%J', r.refused), /kind tun is not a provider attachment/),
+		sprintf('%J', r));
+	ok('underlay: and a route through it is a leak', match(r.leak || '', /tun0: device kind tun/), sprintf('%J', r));
+
+	// A VLAN on a tap: the whole stack is judged, not the top device.
+	sc = owner_router([ ifc('aaa', 'static', 'tap0.5', dflt()) ]);
+	sc.dump[0] = ifc('dslite', 'dslite', 'ds-dslite', null, false);
+	sc.kinds = { 'tap0.5': { kind: 'vlan', link: 'tap0' }, tap0: 'tun' };
+	r = underlay(sc, '79.127.154.1');
+	eq('underlay: a VLAN built on a tap is not an uplink either', r.iface, null);
+
+	// The healthy route is not a leak.
+	sc = owner_router();
+	sc.routes = { '79.127.154.1': 'ds-dslite' };
+	r = underlay(sc, '79.127.154.1');
+	eq('underlay: a route over DS-Lite is not a leak', r.leak, null);
+}
+
 printf('\n%s\n', fails ? ('FAILURES: ' + fails) : 'ALL WAN DEFAULT TESTS PASSED');
 exit(fails ? 1 : 0);

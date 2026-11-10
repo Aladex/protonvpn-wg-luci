@@ -157,6 +157,11 @@ function watchdog_result_update(result, fails) {
 		return n;
 	if (result && result.skipped && result.reason == 'rotation already running')
 		return n;
+	// Parked by the underlay gate: no uplink covers the endpoint. No server
+	// was tried, so none failed, and counting it would leave the instance a
+	// long cooldown behind when the uplink returns.
+	if (result && result.skipped && result.waiting_for_uplink)
+		return n;
 	return n + 1;
 }
 

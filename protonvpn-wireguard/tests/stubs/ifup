@@ -9,5 +9,12 @@
 # test_ipv6.uc) opts in by creating the marker file, and removes it again
 # afterwards. Opt-in rather than opt-out so no existing test silently changes
 # behaviour by being run next to one that needs a working ifup.
-[ -f "${PROTONVPN_STATE_DIR:-/tmp/protonvpn-test-state}/ifup-ok" ] || exit 1
+#
+# Every call is recorded, succeeding or not, the way the ifdown stub records
+# its own: "the instance was NOT brought up" is a claim the underlay gate makes
+# (test_underlay.uc), and an ifup that fails here looks exactly like one that
+# was never made unless something writes it down.
+state="${PROTONVPN_STATE_DIR:-/tmp/protonvpn-test-state}"
+printf 'ifup %s\n' "$1" >> "$state/ifup.log"
+[ -f "$state/ifup-ok" ] || exit 1
 exit 0

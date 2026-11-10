@@ -50,6 +50,7 @@ const _api = require('protonvpn.api');
 const _routing = require('protonvpn.routing');
 const enforce_routing = _routing.enforce,
       reconcile_ipv6 = _routing.reconcile_ipv6;
+const _underlay = require('protonvpn.underlay');
 
 // Certificate metadata lives next to the session state (same root-only
 // directory), NOT in UCI — it must survive a session loss, because the
@@ -539,9 +540,42 @@ function write_relay(uci, iface, relay, s) {
 	uci.set('network', peer, 'protonvpn_gateway', relay.name || relay.hostname);
 }
 
-// ifup the interface. iface is whitelist-validated, so the argv is
-// injection-safe (no shell).
-function bring_up(iface) {
+// The instance that owns netifd interface `iface`, or null.
+function instance_of(uci, iface) {
+	for (let n in _common.list_instances(uci))
+		if (load_settings(uci, n).interface == iface)
+			return n;
+	return null;
+}
+
+// Why the last bring_up() did not run ifup, or null when it did (or was not
+// gated at all). Read right after a failed connect_one() to tell "parked,
+// waiting for an uplink" from "ifup failed" — the first must stop a candidate
+// loop, the second moves on to the next server.
+let last_park = null;
+function parked() {
+	return last_park;
+}
+
+// ifup the interface — through the underlay gate (protonvpn.underlay
+// prepare): the endpoint guard and the tunlink are reconciled and committed
+// first, and an instance no real uplink covers is not brought up at all.
+// EVERY package ifup of an instance goes through here, which is what lets the
+// gate promise that netifd never resolves our endpoints by itself.
+// iface is whitelist-validated, so the argv is injection-safe (no shell).
+function bring_up(iface, uci) {
+	uci = uci || cursor();
+	last_park = null;
+	let name = instance_of(uci, iface);
+	if (name) {
+		let g = _underlay.prepare(uci, load_settings(uci, name));
+		if (g.changed)
+			uci.commit('network');
+		if (!g.go) {
+			last_park = g.reason;
+			return false;
+		}
+	}
 	return run([ 'ifup', iface ]).code == 0;
 }
 
@@ -596,8 +630,13 @@ function shuffle(list) {
 function connect_one(uci, iface, relay, s) {
 	write_relay(uci, iface, relay, s);
 	uci.commit('network');
-	return bring_up(iface);
+	return bring_up(iface, uci);
 }
+
+// The reply to an apply or rotation that the underlay gate parked. Not an
+// error in the watchdog's sense (see service.watchdog_result_update): nothing
+// was wrong with the server, there was no way to reach it.
+const WAITING = 'waiting for an uplink';
 
 // Reconcile the IPv6 rules with the gateway that is NOW on the interface, and
 // make netifd apply the delta.
@@ -717,6 +756,8 @@ function tear_down_peer(uci, iface) {
 	if (peer)
 		uci.delete('network', peer);
 	uci.delete('network', iface, 'protonvpn_features');
+	// No peer, no endpoint to guard; the next reload drops the kernel rule.
+	_routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
 	uci.commit('network');
 	run([ 'ifdown', iface ]);
 	return peer != null;
@@ -1160,6 +1201,14 @@ function apply_inner(uci, instance) {
 					(down ? teardown_note(s) : '') };
 		}
 		let up = connect_one(uci, iface, relay, s);
+		if (!up && parked()) {
+			// The pin is written and stays: when an uplink covers it, the
+			// reconcile brings this very server up (rotate.uplink_reconcile).
+			settle_ipv6(uci, s);
+			return { state: 'failure', waiting_for_uplink: true, interface: iface,
+				gateway: relay.hostname, endpoint: endpoint_of(relay), restarted: false,
+				error: WAITING + ': ' + parked() };
+		}
 		let ok = up && verify_handshake(iface, s.verify_timeout);
 		// Unconditional, unlike the candidate loop below: a pinned server is
 		// never rolled back — the user asked for that one and the next attempt
@@ -1206,8 +1255,21 @@ function apply_inner(uci, instance) {
 		tries = budget;
 	for (let i = 0; i < tries; i++) {
 		let relay = list[i];
-		if (!connect_one(uci, iface, relay, s))
+		if (!connect_one(uci, iface, relay, s)) {
+			// Parked: no uplink covers this endpoint, and trying the next
+			// server would only rewrite the peer once per candidate for the
+			// same answer. The candidate stays on the interface — it is what
+			// the user's selection asked for, it passed the same filters, and
+			// it is what the reconcile brings up once an uplink returns.
+			// Nothing is rolled back and nothing is brought up.
+			if (parked()) {
+				settle_ipv6(uci, s);
+				return { state: 'failure', waiting_for_uplink: true, interface: iface,
+					gateway: relay.hostname, endpoint: endpoint_of(relay), restarted: false,
+					error: WAITING + ': ' + parked() };
+			}
 			continue;
+		}
 		if (verify_handshake(iface, s.verify_timeout)) {
 			settle_ipv6(uci, s);
 			return {
@@ -1240,7 +1302,7 @@ function apply_inner(uci, instance) {
 	if (saved) {
 		restore_peer(uci, iface, saved);
 		uci.commit('network');
-		bring_up(iface);
+		bring_up(iface, uci);
 	} else {
 		// Nothing to roll back to. connect_one writes the peer BEFORE it tries
 		// to bring the interface up, so the interface is left stamped with the
@@ -1450,6 +1512,9 @@ function disconnect(uci, instance) {
 
 	s.enabled = false;
 	let routing = enforce_routing(uci, s);
+	// A paused instance sends nothing, so its endpoint needs no guard.
+	if (_routing.reconcile_endpoint_guard(uci, s))
+		routing.changed_network = true;
 	uci = commit_routing(uci, routing, iface);
 
 	if (uci.get('network', iface) != null) {
@@ -1485,6 +1550,7 @@ function clear_credentials(uci, instance) {
 	let peer = find_peer(uci, iface);
 	if (peer)
 		uci.delete('network', peer);
+	_routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
 	if (uci.get('network', iface) != null) {
 		uci.delete('network', iface, 'private_key');
 		// Keep the interface itself: the settings that describe it are kept as
@@ -1557,9 +1623,15 @@ function delete_instance(uci, name) {
 	let peer = find_peer(uci, iface);
 	if (peer)
 		uci.delete('network', peer);
+	// The guard is stamped with the interface, not nested in it, so deleting
+	// the interface section does not take it along.
+	let guard = _routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
 	if (uci.get('network', iface) != null && uci.get('network', iface, 'vpn_type') == 'protonvpn')
 		uci.delete('network', iface);
 	uci.commit('network');
+	if (guard)
+		run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+	_underlay.unpark(name);
 
 	if (name == 'main') {
 		let all = uci.get_all('protonvpn', 'main');
@@ -1580,7 +1652,8 @@ function delete_instance(uci, name) {
 }
 
 return {
-	ensure_keypair, current_peer, restore_peer, write_relay, bring_up,
+	ensure_keypair, current_peer, restore_peer, write_relay, bring_up, parked, WAITING,
+	instance_of,
 	verify_handshake, connect_one, apply, disconnect, clear_credentials,
 	tear_down_peer, saved_ipv6_capable, drop_noncompliant_peer, teardown_note,
 	mark_ipv6_unmet,

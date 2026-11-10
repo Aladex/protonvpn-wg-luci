@@ -35,7 +35,9 @@ const load_settings = _common.load_settings,
       require_ipv6_active = _common.require_ipv6_active,
       validate_instance = _common.validate_instance;
 const read_cache = require('protonvpn.cache').read_cache;
-const reconcile_ipv6 = require('protonvpn.routing').reconcile_ipv6;
+const _routing = require('protonvpn.routing');
+const reconcile_ipv6 = _routing.reconcile_ipv6;
+const _underlay = require('protonvpn.underlay');
 const _select = require('protonvpn.select');
 const selection_candidates = _select.selection_candidates,
       selection_report = _select.selection_report;
@@ -224,6 +226,20 @@ function rotate_inner(uci, instance) {
 
 	srand(time());
 	let saved = current_peer(uci, iface);
+
+	// Asked before a single candidate is written. With no uplink to carry the
+	// current endpoint there is none for the next one either, and walking the
+	// plan would rewrite the peer once per server, roll it back, and report a
+	// failure the watchdog then backs off from — for an outage that has
+	// nothing to do with any server. The watchdog recovers through here, so
+	// this is also what keeps a WAN outage from burning its retries.
+	if (saved) {
+		let gate = _underlay.prepare(uci, s, true);
+		if (!gate.go)
+			return { skipped: true, reason: _apply.WAITING, waiting_for_uplink: true,
+				detail: gate.reason };
+	}
+
 	let current_gw = current_key(saved);
 	let plan = plan_candidates(cache, s, current_gw, s.max_retries);
 	if (length(plan) == 0)
@@ -231,14 +247,23 @@ function rotate_inner(uci, instance) {
 		// Keep the working tunnel; this is a no-op, not a failure.
 		return { skipped: true, reason: 'no other server for the current selection' };
 
+	let parked = null;
 	for (let relay in plan) {
 		// Never rotate onto the current server: a successful rotation must change
 		// the gateway. plan_candidates already drops it; this guards the case
 		// where the exclusion key was unknown (unstamped peer).
 		if (current_gw && (relay.name == current_gw || relay.hostname == current_gw))
 			continue;
-		if (!connect_one(uci, iface, relay, s))
+		if (!connect_one(uci, iface, relay, s)) {
+			// Parked on this candidate's endpoint (the check above passed for
+			// the current one, so only an endpoint-specific route can do
+			// this). Stop: the rollback below puts the working peer back, and
+			// its bring_up goes through the same gate.
+			parked = _apply.parked();
+			if (parked)
+				break;
 			continue;
+		}
 		// Verify the tunnel by its WireGuard handshake, not by a ping routed
 		// through it: a routed ping can fail on a perfectly good server, which
 		// made rotation cycle servers.
@@ -285,8 +310,11 @@ function rotate_inner(uci, instance) {
 	if (saved) {
 		restore_peer(uci, iface, saved);
 		uci.commit('network');
-		bring_up(iface);
+		bring_up(iface, uci);
 	}
+	if (parked)
+		return { skipped: true, reason: _apply.WAITING, waiting_for_uplink: true,
+			detail: parked, restored: saved != null };
 	return { error: 'no working server found', restored: saved != null };
 }
 
@@ -312,4 +340,138 @@ function rotate(uci, instance) {
 	return res;
 }
 
-return { shuffle, current_key, plan_candidates, read_state, record, last_attempt_ts, mark_attempt, rotate };
+// ── Uplink reconcile ─────────────────────────────────────────────────────
+// The other half of protonvpn.underlay: what happens AFTER the gate. Run by
+// the daemon on every tick and by the hotplug hook on every interface event
+// (/etc/hotplug.d/iface/95-protonvpn), for every enabled instance that relies
+// on a netifd host route:
+//
+//   * up — ask the kernel where its endpoint goes (underlay.leak). Through a
+//     tunnel, it is a leak, whoever caused it — a boot, a reload or a hand-run
+//     ifup before this package ever pinned the instance: logged as one, taken
+//     down, pinned to NO_UPLINK unless a pin of ours is already in place, and
+//     parked with a backoff that grows per leak (P4). Otherwise an instance
+//     with no tunlink at all is pinned now, which takes effect at netifd's
+//     next setup of it — exactly the setup an outage forces.
+//   * down and waiting — parked by the gate, pinned to NO_UPLINK, or pinned
+//     to an interface that is gone: brought up through the gate as soon as an
+//     uplink covers the endpoint (P3), possibly another one than before.
+//
+// An instance that is down for any other reason is not touched: that is the
+// watchdog's, and an instance that is merely being set up (`pending`) is
+// netifd's.
+const UPLINK_LOCK = _common.RUN_DIR + '/protonvpn_uplink.lock';
+
+function reconcile_one(uci, s, by, data) {
+	let iface = s.interface;
+	let name = s.name;
+	if (!s.enabled || uci.get('network', iface) == null) {
+		_underlay.unpark(name);
+		return 'inactive';
+	}
+	if (uci.get('network', iface, 'nohostroute') == '1' ||
+	    _underlay.pin_owner(uci, iface) == 'user') {
+		_underlay.unpark(name);
+		return 'not managed';
+	}
+	let ep = _routing.endpoint_literal(uci, iface);
+	if (!ep)
+		return 'no endpoint';
+	let st = by[iface];
+
+	if (st && st.up) {
+		let why = _underlay.leak(data, ep.addr);
+		if (why) {
+			_common.log(name + ': LEAK — ' + why + '; taking the tunnel down');
+			if (_underlay.pin_owner(uci, iface) != 'managed' &&
+			    _underlay.set_pin(uci, iface, _underlay.NO_UPLINK))
+				uci.commit('network');
+			_underlay.park_leak(name, why);
+			run([ 'ifdown', iface ]);
+			return 'leak';
+		}
+		if (_underlay.pin_owner(uci, iface) == 'none') {
+			let res = _underlay.pick(data, ep.addr);
+			if (res.iface && _underlay.set_pin(uci, iface, res.iface)) {
+				uci.commit('network');
+				_common.log(name + ': endpoint pinned to uplink ' + res.iface);
+			}
+		}
+		_underlay.unpark(name, 'connected');
+		_underlay.forget_leaks(name);
+		return 'up';
+	}
+	if (st && st.pending)
+		return 'pending';
+
+	let pin = uci.get('network', iface, 'tunlink');
+	let gone = pin != null && (pin == _underlay.NO_UPLINK || !(by[pin] && by[pin].up));
+	if (!_underlay.waiting(name) && !gone)
+		return 'down';
+
+	let res = _underlay.pick(data, ep.addr);
+	if (!res.iface) {
+		_underlay.park(name, _underlay.no_uplink_reason(ep.addr, res));
+		return 'waiting';
+	}
+	let pst = _underlay.park_state(name);
+	if (pst && pst.leaks > 0 && time() - (pst.last_leak || 0) < _underlay.leak_backoff(pst))
+		return 'leak backoff';
+
+	// The rotation lock: rotation and the watchdog bring this instance up
+	// too, and two ifups at once would race each other's peer.
+	let lock = acquire_lock(lock_path(name), 300);
+	if (!lock)
+		return 'busy';
+	let up = false;
+	try {
+		up = bring_up(iface, uci);
+	} catch (e) {
+		_common.log(name + ': bringing the tunnel up failed: ' + e);
+	}
+	release_lock(lock);
+	if (up)
+		_common.log(name + ': bringing the tunnel up through uplink ' + res.iface);
+	return up ? 'brought up' : 'waiting';
+}
+
+// Returns { <instance>: what was done } or { skipped: why }.
+function uplink_reconcile(uci) {
+	let lock = acquire_lock(UPLINK_LOCK, 60);
+	if (!lock)
+		return { skipped: 'already running' };
+	let out = {};
+	try {
+		uci = uci || cursor();
+		let data = _routing.netifd_dump();
+		if (data == null) {
+			out = { skipped: 'netifd did not answer' };
+		} else {
+			let by = {};
+			for (let i in ((type(data.interface) == 'array') ? data.interface : []))
+				if (type(i) == 'object' && type(i.interface) == 'string')
+					by[i.interface] = i;
+			// The endpoint guards first, for every instance — nohostroute ones
+			// and disabled ones (which lose theirs) included. Bring_up keeps
+			// them current for every package ifup; this covers the instances
+			// no package ifup has touched since this version was installed.
+			let guards = false;
+			for (let n in _common.list_instances(uci))
+				if (_routing.reconcile_endpoint_guard(uci, load_settings(uci, n)))
+					guards = true;
+			if (guards) {
+				uci.commit('network');
+				run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+			}
+			for (let n in _common.list_instances(uci))
+				out[n] = reconcile_one(uci, load_settings(uci, n), by, data);
+		}
+	} catch (e) {
+		out = { error: '' + e };
+	}
+	release_lock(lock);
+	return out;
+}
+
+return { shuffle, current_key, plan_candidates, read_state, record, last_attempt_ts, mark_attempt, rotate,
+	uplink_reconcile };

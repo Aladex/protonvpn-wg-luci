@@ -35,6 +35,7 @@ const should_refresh = _service.should_refresh,
 const status = require('protonvpn.status').status;
 const _api = require('protonvpn.api');
 const _apply = require('protonvpn.apply');
+const _underlay = require('protonvpn.underlay');
 
 uloop.init();
 
@@ -72,6 +73,14 @@ function tick() {
 		last_cache = now;
 		uloop.task(function() { fetch_and_build(path); });
 	}
+
+	// Endpoint underlay (protonvpn.underlay): bring back what the gate parked,
+	// take down a tunnel whose endpoint is routed through another one. Every
+	// tick, for every enabled instance, whatever its watchdog option says —
+	// parking is this package's doing and undoing it cannot be opt-in. The
+	// hotplug hook runs the same thing on interface events; both take one
+	// lock, so they never overlap.
+	uloop.task(function() { _rotate.uplink_reconcile(); });
 
 	// Per-instance rotation + watchdog. The rotation clock and the watchdog
 	// timers are persisted (protonvpn.rotate state), not in memory: procd
@@ -123,7 +132,11 @@ function tick() {
 			last_recover = upd.last_recover;
 			fails = upd.recover_fails;
 		}
-		if (active && should_recover(s, state, ds, last_recover, fails, now)) {
+		// A parked instance is down because there is no uplink; recovering it
+		// by rotation would try servers that cannot be reached either. The
+		// reconcile above brings it back.
+		if (active && !_underlay.waiting(inst) &&
+		    should_recover(s, state, ds, last_recover, fails, now)) {
 			// Claim the attempt before forking so overlapping ticks cannot
 			// double-fire. Recovery is rotate(), which takes the same
 			// per-instance lock as scheduled rotation, so they never race.

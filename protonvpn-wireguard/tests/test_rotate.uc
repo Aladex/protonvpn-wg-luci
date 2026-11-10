@@ -26,6 +26,19 @@ const shuffle = _rotate.shuffle,
       plan_candidates = _rotate.plan_candidates,
       rotate = _rotate.rotate;
 const _routing = require('protonvpn.routing');
+
+// The underlay gate (protonvpn.underlay) asks netifd which uplink covers the
+// endpoint before every ifup, and parks the instance when nothing answers —
+// which is what this offline suite looks like to it. This file is not about
+// that decision, so the router it runs on gets one plain uplink: a DHCP WAN
+// with a default route, on a device the kernel would call hardware. The gate
+// itself is tested in test_underlay.uc.
+_routing.netifd_dump = function() {
+	return { interface: [ { interface: 'wan', up: true, proto: 'dhcp',
+		l3_device: 'eth0', metric: 0, route: [ { target: '0.0.0.0', mask: 0,
+			nexthop: '192.0.2.1', source: '0.0.0.0/0' } ] } ] };
+};
+_routing.stack_refusal = function(dev) { return null; };
 const detect_routing = _routing.detect,
       enforce_routing = _routing.enforce,
       recommend_mtu = _routing.recommend_mtu;

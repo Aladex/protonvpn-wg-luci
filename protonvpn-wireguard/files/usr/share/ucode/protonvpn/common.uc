@@ -326,6 +326,87 @@ function validate_dir(d) {
 	return d;
 }
 
+// ── IP literals ──────────────────────────────────────────────────────────
+
+// An IPv4 or IPv6 literal as 16-bit words — two for IPv4, eight for IPv6 —
+// so one prefix comparison serves both families: { v6, words }, or null for
+// anything that is not a plain address (a hostname, a CIDR, an IPv6 zone).
+// Used to decide which netifd route covers a tunnel endpoint, so a lenient
+// parse would be a wrong routing answer rather than a cosmetic one.
+function ip4_words(a) {
+	let m = match(a, /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+	if (!m)
+		return null;
+	let o = [ int(m[1]), int(m[2]), int(m[3]), int(m[4]) ];
+	for (let x in o)
+		if (x > 255)
+			return null;
+	return [ o[0] * 256 + o[1], o[2] * 256 + o[3] ];
+}
+
+function ip_words(addr) {
+	if (type(addr) != 'string' || !one_line(addr))
+		return null;
+	if (index(addr, ':') < 0) {
+		let w = ip4_words(addr);
+		return w ? { v6: false, words: w } : null;
+	}
+	let halves = split(addr, '::');
+	if (length(halves) > 2)
+		return null;
+	let groups = function(s) {
+		if (s == '')
+			return [];
+		let out = [];
+		let parts = split(s, ':');
+		for (let i = 0; i < length(parts); i++) {
+			let p = parts[i];
+			// An IPv4 tail (::ffff:192.0.2.1) is two groups.
+			if (i == length(parts) - 1 && index(p, '.') >= 0) {
+				let w = ip4_words(p);
+				if (!w)
+					return null;
+				push(out, ...w);
+				continue;
+			}
+			if (!match(p, /^[0-9A-Fa-f]{1,4}$/))
+				return null;
+			push(out, hex(p));
+		}
+		return out;
+	};
+	let head = groups(halves[0]);
+	let tail = (length(halves) == 2) ? groups(halves[1]) : [];
+	if (head == null || tail == null)
+		return null;
+	let n = length(head) + length(tail);
+	if (length(halves) == 1 ? n != 8 : n > 7)
+		return null;
+	let words = [ ...head ];
+	for (let i = n; i < 8; i++)
+		push(words, 0);
+	push(words, ...tail);
+	return { v6: true, words: words };
+}
+
+// Whether `addr` (ip_words) lies inside `net`/`mask` (ip_words + prefix
+// length). Different families never match.
+function ip_in_prefix(addr, net, mask) {
+	if (!addr || !net || addr.v6 != net.v6)
+		return false;
+	let bits = int(mask);
+	if (bits < 0 || bits > length(addr.words) * 16)
+		return false;
+	for (let i = 0; i < length(addr.words) && bits > 0; i++) {
+		let take = (bits >= 16) ? 16 : bits;
+		let keep = (0xffff << (16 - take)) & 0xffff;
+		if ((addr.words[i] & keep) != (net.words[i] & keep))
+			return false;
+		bits -= take;
+	}
+	return true;
+}
+
 // ── Relay classification ─────────────────────────────────────────────────
 
 // Classify a normalized relay: 'secure_core', 'tor' or 'standard'. The flags
@@ -737,6 +818,7 @@ return {
 	iface_ipv6_unmet, IPV6_UNMET_CAUSES,
 	validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,
+	ip_words, ip_in_prefix,
 	load_settings, list_instances, globals_section, cache_file_path, iso_ts, redact, log,
 	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run, run_ip
 };

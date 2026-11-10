@@ -993,6 +993,89 @@ function reconcile_ipv6_rules(uci, s, iface, steering, table, nets) {
 	return changed;
 }
 
+// ── The endpoint guard ───────────────────────────────────────────────
+//
+// netifd gives every interface with an ip4table/ip6table a rule
+//     from all iif lo lookup <table>     priority 90000 + ifindex
+// (interface-ip.c set_ip_lo_policy) so that the router's own traffic can
+// reach that table. Our instances all have one, and each of those tables
+// holds the tunnel's 0.0.0.0/0. So a packet the ROUTER sends to an instance's
+// endpoint — WireGuard's own UDP — that finds no route in `main` (and none in
+// `default`) does not fail: it falls through to the first tunnel table by
+// ifindex and leaves inside another tunnel of this package, or inside its
+// own. That is exactly the moment it matters: the uplink is gone, netifd has
+// removed the main default with it, and nothing else is left to catch it.
+//
+// One rule per enabled instance closes that path:
+//     to <endpoint>/32 unreachable     priority 89999
+// Below `main` (32766) and `default` (32767), so it changes nothing while
+// either of them has a route — the cable, or the default route an external
+// failover script puts into `main` — and above netifd's 90000 block, so it
+// is consulted before any tunnel table can be. Next to 90000 rather than
+// next to 32767 so a rule the user placed in between still sees the packet
+// first.
+//
+// For every enabled instance, nohostroute or not: an instance that rides
+// `main` on purpose (nohostroute=1) is just as exposed when `main` is empty.
+// The rule follows the endpoint: bring_up reconciles it before every package
+// ifup, and /sbin/ifup's own `network reload` installs it before the tunnel's
+// setup sends its first handshake; the daemon's uplink reconcile covers an
+// instance no package ifup has touched since an upgrade. A disabled instance
+// carries none (disconnect, delete).
+//
+// Deliberately NOT part of enforce(). That is the managed routing, which a
+// manual scheme switches off byte for byte, and the guard is not routing for
+// the clients: it is about the tunnel's own UDP, and an instance whose user
+// routes everything by hand sends that UDP all the same.
+const GUARD_PRIORITY = '89999';
+
+// The current peer endpoint of `iface` as { addr, v6 }, or null when there is
+// no peer or its endpoint is not an IP literal (a name cannot be a rule).
+function endpoint_literal(uci, iface) {
+	let peer = find_peer(uci, iface);
+	let host = peer ? uci.get('network', peer, 'endpoint_host') : null;
+	let w = _common.ip_words(host);
+	return w ? { addr: host, v6: w.v6 } : null;
+}
+
+function reconcile_endpoint_guard(uci, s) {
+	let iface = s.interface;
+	let want = null;
+	let ep = endpoint_literal(uci, iface);
+	// is_active(), which is declared further down: a missing `enabled`
+	// (test fixtures) counts as on.
+	if (ep && ((s.enabled == null) ? true : !!s.enabled))
+		want = { type: ep.v6 ? 'rule6' : 'rule', dest: ep.addr + (ep.v6 ? '/128' : '/32') };
+	let changed = false, kept = false;
+	for (let t in [ 'rule', 'rule6' ]) {
+		let stale = [];
+		uci.foreach('network', t, function(sec) {
+			if (sec[MARK] != '1' || sec[ROLE] != 'endpoint_guard' || sec.protonvpn_iface != iface)
+				return;
+			if (want && !kept && t == want.type && sec.dest == want.dest &&
+			    sec.action == 'unreachable' && sec.priority == GUARD_PRIORITY)
+				kept = true;
+			else
+				push(stale, sec['.name']);
+		});
+		for (let n in stale) {
+			uci.delete('network', n);
+			changed = true;
+		}
+	}
+	if (want && !kept) {
+		let sec = uci.add('network', want.type);
+		uci.set('network', sec, 'dest', want.dest);
+		uci.set('network', sec, 'action', 'unreachable');
+		uci.set('network', sec, 'priority', GUARD_PRIORITY);
+		uci.set('network', sec, MARK, '1');
+		uci.set('network', sec, ROLE, 'endpoint_guard');
+		uci.set('network', sec, 'protonvpn_iface', iface);
+		changed = true;
+	}
+	return changed;
+}
+
 // ── Making the switch prompt ─────────────────────────────────────────
 //
 // Changing the addressing is not the same as the clients using it. Measured
@@ -2602,4 +2685,6 @@ return { detect, enforce, reconcile_ipv6, ipv6_state, v6_hint, ra_refresh,
 	device_is_lan_side, device_way_out_reason, networks_on_device,
 	has_default_route, zones_of, zone_is_uplink, net_device, device_path,
 	find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu,
-	ensure_rt_table, drop_rt_table, netifd_dump, wan_verdicts, wan_uplinks };
+	ensure_rt_table, drop_rt_table, netifd_dump, wan_verdicts, wan_uplinks,
+	stack_refusal, route_device, reconcile_endpoint_guard, endpoint_literal,
+	GUARD_PRIORITY };

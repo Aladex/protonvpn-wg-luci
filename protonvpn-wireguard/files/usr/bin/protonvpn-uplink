@@ -1,0 +1,12 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: MIT
+// One endpoint-underlay reconcile pass over every instance (see
+// protonvpn.rotate uplink_reconcile). Run by the hotplug hook on interface
+// events and safe to run by hand; prints what it did per instance.
+
+'use strict';
+
+const uplink_reconcile = require('protonvpn.rotate').uplink_reconcile;
+
+printf('%J\n', uplink_reconcile(null));
+exit(0);

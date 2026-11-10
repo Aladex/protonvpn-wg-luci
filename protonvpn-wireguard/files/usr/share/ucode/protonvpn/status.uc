@@ -104,13 +104,18 @@ function required_action(session, cert) {
 	return null;
 }
 
+function uplink_wait(name) {
+	let st = require('protonvpn.underlay').park_state(name);
+	return (st && st.reason != null) ? { reason: st.reason, since: st.since || 0 } : null;
+}
+
 // Runtime status of one instance. Return shape:
 //   { instance, configured, enabled, fixed, interface, hop_mode,
 //     ipv6: { mode, active, gateway_ipv6, reason },
 //     state: 'not_configured'|'disconnected'|'connecting'|'connected'|'degraded',
 //     location: { country, city }, gateway, endpoint ('host:port' or null),
 //     latest_handshake_seconds (null or int),
-//     session: {...}, certificate: {...}, action_required,
+//     session: {...}, certificate: {...}, action_required, uplink_wait,
 //     rotation: { enabled, mode, interval, time, next_run: null } }
 // State machine: no key -> 'not_configured'; interface down -> 'disconnected';
 // no handshake -> 'connecting'; handshake <= 180 s -> 'connected'; else
@@ -158,6 +163,10 @@ function status(uci, instance) {
 		session: session,
 		certificate: cert,
 		action_required: required_action(session, cert),
+		// Parked by the underlay gate: no real uplink covers the endpoint,
+		// so the tunnel is kept down rather than resolved through another
+		// one. { reason, since } or null.
+		uplink_wait: uplink_wait(s.name),
 		rotation: {
 			enabled: s.rotation_enabled,
 			mode: s.rotation_mode,

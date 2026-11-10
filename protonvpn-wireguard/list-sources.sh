@@ -32,10 +32,11 @@
 # predicate that derives it. A file in the floor that the predicate missed is
 # reported BY NAME and fails the run. The floors:
 #
-#   shell  — everything shipped under etc/init.d or etc/uci-defaults, plus every
-#            *.sh in the tree. OpenWrt executes the contents of those two
-#            directories with sh, so membership IS the claim "this is a shell
-#            script"; .sh is the extension this repository gives its tooling.
+#   shell  — everything shipped under etc/init.d, etc/uci-defaults or
+#            etc/hotplug.d, plus every *.sh in the tree. OpenWrt executes (or,
+#            for hotplug.d, sources) the contents of those directories with sh,
+#            so membership IS the claim "this is a shell script"; .sh is the
+#            extension this repository gives its tooling.
 #
 #   ucode  — everything shipped under usr/bin or ending in .uc.
 #
@@ -129,7 +130,7 @@ derive_ucode() {
 floor_shell() {
 	payload | while read -r f; do
 		case "$f" in
-			*/etc/init.d/*|*/etc/uci-defaults/*) echo "$f" ;;
+			*/etc/init.d/*|*/etc/uci-defaults/*|*/etc/hotplug.d/*) echo "$f" ;;
 		esac
 	done
 	find $roots -type f -name '*.sh' -not -path '*/.git/*'
@@ -153,6 +154,7 @@ classify() {
 			*/etc/config/*)       continue ;;   # uci configuration, not code
 			*/etc/init.d/*)       continue ;;   # floor_shell, `sh -n`
 			*/etc/uci-defaults/*) continue ;;   # floor_shell, `sh -n`
+			*/etc/hotplug.d/*)    continue ;;   # floor_shell, `sh -n`
 			*/usr/bin/*|*.uc)     continue ;;   # floor_ucode, `ucode -c`
 			*.json)               continue ;;   # the "Validate all JSON" step
 			*.js)                 continue ;;   # eslint

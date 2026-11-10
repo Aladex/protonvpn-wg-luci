@@ -93,6 +93,11 @@ define Package/protonvpn-wireguard/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/etc/uci-defaults/90-protonvpn-migrate $(1)/etc/uci-defaults/90-protonvpn-migrate
 
+	# Interface events into the endpoint-underlay reconcile; hotplug-call
+	# sources it, so data rather than an executable, like the stock hooks.
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_DATA) ./files/etc/hotplug.d/iface/95-protonvpn $(1)/etc/hotplug.d/iface/95-protonvpn
+
 	# Keep the runtime secret store (session + WireGuard certificates) across
 	# sysupgrade; without this the user has to re-run the SRP login by hand.
 	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
@@ -112,6 +117,7 @@ define Package/protonvpn-wireguard/install
 	$(INSTALL_BIN) ./files/usr/bin/protonvpn-instance-owners $(1)/usr/bin/protonvpn-instance-owners
 	$(INSTALL_BIN) ./files/usr/bin/protonvpn-rotate $(1)/usr/bin/protonvpn-rotate
 	$(INSTALL_BIN) ./files/usr/bin/protonvpn-service $(1)/usr/bin/protonvpn-service
+	$(INSTALL_BIN) ./files/usr/bin/protonvpn-uplink $(1)/usr/bin/protonvpn-uplink
 endef
 
 $(eval $(call BuildPackage,protonvpn-wireguard))

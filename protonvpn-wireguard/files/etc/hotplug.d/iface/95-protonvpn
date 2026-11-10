@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Interface events into the ProtonVPN endpoint reconcile (protonvpn.rotate
+# uplink_reconcile): an uplink that comes up brings back the instances that
+# were parked waiting for it, and an instance that comes up is checked for an
+# endpoint routed through another tunnel. The daemon runs the same reconcile
+# every 30 seconds; this only makes it immediate.
+#
+# A trigger and nothing else — the decisions and their tests live in ucode.
+# Detached, because hotplug-call runs these scripts one after another and a
+# slow one delays every handler behind it; the worker takes its own lock, so
+# a burst of events costs one run, not one per event.
+case "$ACTION" in
+	ifup|ifupdate|ifdown) ;;
+	*) exit 0 ;;
+esac
+[ -x /usr/bin/protonvpn-uplink ] || exit 0
+/usr/bin/protonvpn-uplink >/dev/null 2>&1 &

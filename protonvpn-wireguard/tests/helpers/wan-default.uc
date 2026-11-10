@@ -11,6 +11,9 @@
 //       no snapshot, as when it could not be read. Prints the heal's result.
 //   PVT_MODE=uplinks
 //       Prints wan_verdicts() as [ { name, why } ].
+//   PVT_MODE=underlay
+//       Prints the endpoint underlay pick for PVT_ENDPOINT and the
+//       leak verdict on the kernel's route to it, as { iface, refused, leak }.
 //
 // Why a separate process: the code under test shells out to `ip` and `ubus`,
 // and the test has to decide what those answer. ucode cannot change its own
@@ -27,6 +30,17 @@ import { cursor } from 'uci';
 
 const _apply = require('protonvpn.apply');
 const _routing = require('protonvpn.routing');
+
+// The endpoint underlay against the same fakes: which interface carries
+// PVT_ENDPOINT, and whether the kernel's route to it is a leak.
+if (getenv('PVT_MODE') == 'underlay') {
+	const _underlay = require('protonvpn.underlay');
+	let data = _routing.netifd_dump();
+	let ep = getenv('PVT_ENDPOINT');
+	let res = _underlay.pick(data, ep);
+	printf('%J\n', { iface: res.iface, refused: res.refused, leak: _underlay.leak(data, ep) });
+	exit(0);
+}
 
 if (getenv('PVT_MODE') == 'uplinks') {
 	let data = _routing.netifd_dump();
