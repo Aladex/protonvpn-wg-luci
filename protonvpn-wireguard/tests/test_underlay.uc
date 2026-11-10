@@ -748,7 +748,7 @@ for (let n in [ 'main', 'media' ])
 	let st = _underlay.park_state('main');
 	st.last_leak = time() - _cmn.WATCHDOG_COOLDOWN_BASE - 1;
 	writefile(RUN + '/protonvpn_uplink_main.json', sprintf('%J', st));
-	eq('B2b: while the route still goes into a tunnel it stays down', _rotate.uplink_reconcile(cursor()).main, 'waiting');
+	eq('B2b: while the route still goes into a tunnel it stays down', _rotate.uplink_reconcile(cursor()).main, 'leak backoff');
 	eq('B2b: no ifup', ifups(), []);
 	// The route is sane again (main via the SIM): it comes back, still unpinned.
 	ROUTES = { [GEP]: 'lan5' };
@@ -778,6 +778,11 @@ for (let n in [ 'main', 'media' ])
 	r = _apply.apply(cursor(), 'main');
 	ok('R2-B2: a manual connect during the hold is refused', r.state == 'failure' && length(ifups()) == 0);
 	ok('R2-B2: saying it is a leak hold', match(r.error || '', /^held after a leak \(/), r.error);
+	// Within the pause even a sane route does not release it.
+	ROUTES = { [GEP]: 'lan5', [EP]: 'lan5', '79.127.154.2': 'lan5', '79.127.154.3': 'lan5' };
+	ok('R2-B2: within the pause a sane route still holds it', _rotate.rotate(cursor(), 'main').held == true &&
+		length(ifups()) == 0);
+	ROUTES = into_tunnel;
 	// Pause over but the route still bad: still held.
 	let lst = _underlay.park_state('main');
 	lst.last_leak = time() - _cmn.WATCHDOG_COOLDOWN_BASE - 1;

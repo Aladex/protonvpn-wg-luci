@@ -422,34 +422,23 @@ function reconcile_one(uci, s, by, data) {
 	if (st && st.pending)
 		return 'pending';
 
+	// Ours to bring back: what is waiting (parked by the gate, held after a
+	// leak, a failed reload) and, for an instance we pin, a pin whose
+	// interface is gone. Whether it may come back now is the gate's own
+	// decision — the leak hold included — so the reconcile can be no more
+	// lenient than rotation, the watchdog or a manual connect.
 	let waiting = _underlay.waiting(name) != null;
-	let via = null;
-	if (nohost) {
-		if (!waiting)
-			return 'down';
-		// It rides `main`; the question is only whether `main` (or whatever
-		// else the kernel would use) still sends its endpoint into a tunnel.
-		let why = _underlay.leak(data, ep.addr);
-		if (why) {
-			_underlay.park(name, 'leak: ' + why);
-			return 'waiting';
-		}
-	} else {
-		let pin = uci.get('network', iface, 'tunlink');
-		let gone = owner == 'managed' &&
-			(pin == _underlay.NO_UPLINK || !(by[pin] && by[pin].up));
-		if (!waiting && !gone)
-			return 'down';
-		let d = _underlay.decide(uci, s, data);
-		if (!d.go) {
-			_underlay.park(name, d.reason);
-			return d.hold ? 'leak backoff' : 'waiting';
-		}
-		via = d.to;
+	let pin = uci.get('network', iface, 'tunlink');
+	let gone = !nohost && owner == 'managed' &&
+		(pin == _underlay.NO_UPLINK || !(by[pin] && by[pin].up));
+	if (!waiting && !gone)
+		return 'down';
+	let d = _underlay.decide(uci, s, data);
+	if (!d.go) {
+		_underlay.park(name, d.reason);
+		return d.hold ? 'leak backoff' : 'waiting';
 	}
-	let pst = _underlay.park_state(name);
-	if (pst && pst.leaks > 0 && time() - (pst.last_leak || 0) < _underlay.leak_backoff(pst))
-		return 'leak backoff';
+	let via = d.to;
 
 	// The rotation lock: rotation and the watchdog bring this instance up
 	// too, and two ifups at once would race each other's peer.
