@@ -6,23 +6,29 @@
 //
 // `--uninstall` instead takes back what the underlay wrote into
 // /etc/config/network (protonvpn.underlay uninstall_cleanup) and has netifd
-// load the result. Run by the package's prerm on a real removal only.
+// load the result. Run by the package's prerm on a real removal only. It
+// exits non-zero unless netifd accepted the reload — including one an earlier
+// run still owed — so the prerm can fail the removal while the modules that
+// can retry it are still installed. The reconcile is held off from the first
+// moment (rotate.hold_for_uninstall) so that neither a hotplug event nor a
+// manual run can write back what this removed; starting the service lifts it.
 
 'use strict';
 
 import { cursor } from 'uci';
 
+const _rotate = require('protonvpn.rotate');
+
 if (length(ARGV) > 0 && ARGV[0] == '--uninstall') {
 	const _routing = require('protonvpn.routing');
-	if (require('protonvpn.underlay').uninstall_cleanup(cursor())) {
-		_routing.mark_network_pending();
-		_routing.activate_network();
-	}
-	printf('%J\n', { uninstalled: true, reloaded: !_routing.network_pending() });
-	exit(0);
+	_rotate.hold_for_uninstall();
+	let ok = require('protonvpn.underlay').uninstall_cleanup(cursor())
+		? _routing.settle_network() : _routing.activate_network();
+	printf('%J\n', { uninstalled: true, reloaded: ok });
+	exit(ok ? 0 : 1);
 }
 
-const uplink_reconcile = require('protonvpn.rotate').uplink_reconcile;
+const uplink_reconcile = _rotate.uplink_reconcile;
 
 printf('%J\n', uplink_reconcile(null));
 exit(0);

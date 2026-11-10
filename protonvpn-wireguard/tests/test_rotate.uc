@@ -7,7 +7,7 @@
 
 'use strict';
 
-import { unlink, mkdir, rmdir } from 'fs';
+import { unlink, mkdir, rmdir, writefile } from 'fs';
 import { cursor } from 'uci';
 const _cmn = require('protonvpn.common');
 const load_settings = _cmn.load_settings;
@@ -39,6 +39,9 @@ _routing.netifd_dump = function() {
 			nexthop: '192.0.2.1', source: '0.0.0.0/0' } ] } ] };
 };
 _routing.stack_refusal = function(dev) { return null; };
+// And a netifd that accepts `network reload` (stubs/ubus opt-in): the gate
+// will not bring a tunnel up while a reload it owes has failed.
+writefile((getenv('PROTONVPN_STATE_DIR') || '/tmp/protonvpn-test-state') + '/ubus-reload-ok', '');
 const detect_routing = _routing.detect,
       enforce_routing = _routing.enforce,
       recommend_mtu = _routing.recommend_mtu;

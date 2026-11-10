@@ -65,7 +65,10 @@ endef
 # still installed, and with the service stopped first so its next tick cannot
 # put a guard back. Never on upgrade — the new version keeps them — and never
 # into a staging root. default_prerm hands this script its own path first, so
-# the upgrade word is looked for in every argument.
+# the upgrade word is looked for in every argument. If netifd does not accept
+# the reload, the removal fails (opkg: "prerm script failed") and can be
+# retried: the modules are still there, and the service stays stopped and the
+# hotplug hook inert meanwhile.
 define Package/protonvpn-wireguard/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
@@ -74,7 +77,7 @@ for a in "$$@"; do
 	[ "$$a" = upgrade ] && exit 0
 done
 /etc/init.d/protonvpn stop >/dev/null 2>&1
-/usr/bin/protonvpn-uplink --uninstall >/dev/null 2>&1
+/usr/bin/protonvpn-uplink --uninstall >/dev/null 2>&1 || exit 1
 exit 0
 endef
 

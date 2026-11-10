@@ -236,8 +236,10 @@ function rotate_inner(uci, instance) {
 	if (saved) {
 		let gate = _underlay.prepare(uci, s, true);
 		if (!gate.go)
-			return { skipped: true, reason: _apply.WAITING, waiting_for_uplink: true,
-				detail: gate.reason };
+			// A leak hold refuses a manual rotation the same way it refuses
+			// the schedule and the watchdog; only the wording differs.
+			return { skipped: true, reason: gate.hold ? 'held after a leak' : _apply.WAITING,
+				waiting_for_uplink: true, held: gate.hold || null, detail: gate.reason };
 	}
 
 	let current_gw = current_key(saved);
@@ -368,10 +370,18 @@ function rotate(uci, instance) {
 // netifd's. Everything this commits is recorded and loaded through
 // routing.activate_network, which also retries a reload that failed before.
 const UPLINK_LOCK = _common.RUN_DIR + '/protonvpn_uplink.lock';
+// Written by `protonvpn-uplink --uninstall` before it cleans up, and removed
+// by the init script's start: while it exists the reconcile does nothing, so
+// a removal that has to be retried is not undone in between.
+const UNINSTALL_MARK = _common.RUN_DIR + '/protonvpn_uninstalling';
+
+function hold_for_uninstall() {
+	return _common.atomic_write(UNINSTALL_MARK, sprintf('%d\n', time()));
+}
 
 function commit_pending(uci) {
 	uci.commit('network');
-	_routing.mark_network_pending();
+	_routing.owe_network();
 }
 
 function reconcile_one(uci, s, by, data) {
@@ -433,7 +443,7 @@ function reconcile_one(uci, s, by, data) {
 		let d = _underlay.decide(uci, s, data);
 		if (!d.go) {
 			_underlay.park(name, d.reason);
-			return 'waiting';
+			return d.hold ? 'leak backoff' : 'waiting';
 		}
 		via = d.to;
 	}
@@ -460,6 +470,8 @@ function reconcile_one(uci, s, by, data) {
 
 // Returns { <instance>: what was done } or { skipped: why }.
 function uplink_reconcile(uci) {
+	if (readfile(UNINSTALL_MARK) != null)
+		return { skipped: 'the package is being removed' };
 	let lock = acquire_lock(UPLINK_LOCK, 60);
 	if (!lock)
 		return { skipped: 'already running' };
@@ -499,4 +511,4 @@ function uplink_reconcile(uci) {
 }
 
 return { shuffle, current_key, plan_candidates, read_state, record, last_attempt_ts, mark_attempt, rotate,
-	uplink_reconcile };
+	uplink_reconcile, hold_for_uninstall, UNINSTALL_MARK };

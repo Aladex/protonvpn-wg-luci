@@ -553,6 +553,8 @@ function instance_of(uci, iface) {
 // waiting for an uplink" from "ifup failed" — the first must stop a candidate
 // loop, the second moves on to the next server.
 let last_park = null;
+const RELOAD_FAILED = 'netifd has not loaded the endpoint guard (network reload failed); ' +
+	'not bringing the tunnel up until it has';
 function parked() {
 	return last_park;
 }
@@ -568,17 +570,33 @@ function bring_up(iface, uci) {
 	last_park = null;
 	let name = instance_of(uci, iface);
 	if (name) {
+		// Activation is a prerequisite, not a courtesy: an ifup without it
+		// would start the tunnel without the guard (or on a pin) that netifd
+		// has not loaded. Parked like any other wait; the reconcile retries the
+		// reload every tick and brings the instance up once it succeeds.
+		// First whatever an earlier commit still owes — asked before the gate,
+		// so a reload that keeps failing keeps one reason and one log line.
+		if (_routing.network_pending() && !_routing.activate_network()) {
+			last_park = RELOAD_FAILED;
+			_underlay.park(name, last_park);
+			return false;
+		}
 		let g = _underlay.prepare(uci, load_settings(uci, name));
+		// Then what this gate changed. Loaded now, not by the ifup below: a
+		// parked instance gets no ifup at all, and /sbin/ifup does not report
+		// whether its own reload worked.
+		let ready = true;
 		if (g.changed) {
 			uci.commit('network');
-			// Loaded now, not by the ifup below: a parked instance gets no
-			// ifup at all, and /sbin/ifup does not report whether its own
-			// reload worked. A failure stays recorded for the next tick.
-			_routing.mark_network_pending();
-			_routing.activate_network();
+			ready = _routing.settle_network();
 		}
 		if (!g.go) {
 			last_park = g.reason;
+			return false;
+		}
+		if (!ready) {
+			last_park = RELOAD_FAILED;
+			_underlay.park(name, last_park);
 			return false;
 		}
 	}
@@ -644,6 +662,17 @@ function connect_one(uci, iface, relay, s) {
 // was wrong with the server, there was no way to reach it.
 const WAITING = 'waiting for an uplink';
 
+// The error an apply reports when the gate parked it. A leak hold is not
+// "waiting for an uplink" — the uplink may be fine — so it says what it is:
+// a manual connect during a leak hold is refused exactly like an automatic
+// one (the owner's rule is fail closed), and the user is told when it ends.
+function wait_error(reason) {
+	return (index(reason || '', 'leak: ') == 0)
+		? 'held after a leak (' + substr(reason, 6) + '); the tunnel reconnects by itself ' +
+			'once its endpoint no longer routes through a tunnel and the pause has passed'
+		: WAITING + ': ' + reason;
+}
+
 // Reconcile the IPv6 rules with the gateway that is NOW on the interface, and
 // make netifd apply the delta.
 //
@@ -672,8 +701,7 @@ function commit_routing(uci, routing, iface) {
 		// netifd apply the delta (unchanged interfaces are left alone).
 		// Recorded first, so a reload that fails is retried by the daemon
 		// rather than forgotten (routing.activate_network).
-		_routing.mark_network_pending();
-		_routing.activate_network();
+		_routing.settle_network();
 	}
 	if (routing.changed_dhcp) {
 		uci.commit('dhcp');
@@ -770,8 +798,7 @@ function tear_down_peer(uci, iface) {
 	uci.commit('network');
 	run([ 'ifdown', iface ]);
 	if (guard) {
-		_routing.mark_network_pending();
-		_routing.activate_network();
+		_routing.settle_network();
 	}
 	return peer != null;
 }
@@ -1220,7 +1247,7 @@ function apply_inner(uci, instance) {
 			settle_ipv6(uci, s);
 			return { state: 'failure', waiting_for_uplink: true, interface: iface,
 				gateway: relay.hostname, endpoint: endpoint_of(relay), restarted: false,
-				error: WAITING + ': ' + parked() };
+				error: wait_error(parked()) };
 		}
 		let ok = up && verify_handshake(iface, s.verify_timeout);
 		// Unconditional, unlike the candidate loop below: a pinned server is
@@ -1279,7 +1306,7 @@ function apply_inner(uci, instance) {
 				settle_ipv6(uci, s);
 				return { state: 'failure', waiting_for_uplink: true, interface: iface,
 					gateway: relay.hostname, endpoint: endpoint_of(relay), restarted: false,
-					error: WAITING + ': ' + parked() };
+					error: wait_error(parked()) };
 			}
 			continue;
 		}
@@ -1573,8 +1600,7 @@ function clear_credentials(uci, instance) {
 	uci.commit('network');
 	// The guard has to leave the kernel too, and ifdown reloads nothing.
 	if (guard) {
-		_routing.mark_network_pending();
-		_routing.activate_network();
+		_routing.settle_network();
 	}
 	log('cleared the WireGuard identity of ' + s.name);
 	return { ok: true, interface: iface };
@@ -1648,8 +1674,7 @@ function delete_instance(uci, name) {
 		uci.delete('network', iface);
 	uci.commit('network');
 	if (guard) {
-		_routing.mark_network_pending();
-		_routing.activate_network();
+		_routing.settle_network();
 	}
 	_underlay.unpark(name);
 

@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { readfile, unlink } from 'fs';
+import { readfile, unlink, mkdir, stat } from 'fs';
 const _common = require('protonvpn.common');
 
 // Seconds given to any `ubus` call. ubus bounds itself with -t, which is the
@@ -1054,18 +1054,51 @@ const GUARD_PRIORITY = '89999';
 // not take the newer record down with it.
 const PENDING_FILE = _common.RUN_DIR + '/protonvpn_network_pending';
 
+// Record the debt. False when it could not be written — which must never be
+// read as "nothing owed": see owe_network().
 function mark_network_pending() {
+	if (!stat(_common.RUN_DIR))
+		mkdir(_common.RUN_DIR, 0o755);
 	return _common.atomic_write(PENDING_FILE, sprintf('%d.%d\n', time(), clock()[1]));
 }
 
+// Record that netifd owes a reload; when the record cannot be written, pay
+// the debt on the spot instead, with the same checked reload. True when the
+// debt is either recorded (for activate_network to pay) or already paid.
+function owe_network() {
+	if (mark_network_pending())
+		return true;
+	_common.log('could not record a pending network reload in ' + _common.RUN_DIR +
+		'; reloading now instead');
+	let r = _common.run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+	if (r.code != 0) {
+		_common.log('netifd did not accept the reload (exit ' + r.code + ') and it could ' +
+			'not be recorded for a retry; nothing will be brought up until a reload succeeds');
+		return false;
+	}
+	return true;
+}
+
+
+// The record's token, or null when nothing is owed. Anything at the record's
+// path that is not a readable record of ours counts as owed: "cannot tell"
+// must not read as "nothing to do".
+function pending_token() {
+	let st = stat(PENDING_FILE);
+	if (!st)
+		return null;
+	let t = (st.type == 'file') ? readfile(PENDING_FILE) : null;
+	return (t != null) ? t : 'unreadable';
+}
+
 function network_pending() {
-	return readfile(PENDING_FILE) != null;
+	return pending_token() != null;
 }
 
 // True when netifd has everything committed so far (or nothing was owed).
 // Called through the module so the suite can stand in for netifd's reload.
 function activate_network() {
-	let token = readfile(PENDING_FILE);
+	let token = pending_token();
 	if (token == null)
 		return true;
 	let r = _common.run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
@@ -1077,6 +1110,12 @@ function activate_network() {
 	if (readfile(PENDING_FILE) == token)
 		unlink(PENDING_FILE);
 	return true;
+}
+
+// Commit-side helper: record what was just committed and have netifd load it
+// now. True only when netifd has everything committed so far.
+function settle_network() {
+	return owe_network() && activate_network();
 }
 
 // The current peer endpoint of `iface` as { addr, v6 }, or null when there is
@@ -2737,4 +2776,5 @@ return { detect, enforce, reconcile_ipv6, ipv6_state, v6_hint, ra_refresh,
 	find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu,
 	ensure_rt_table, drop_rt_table, netifd_dump, wan_verdicts, wan_uplinks,
 	stack_refusal, route_device, reconcile_endpoint_guard, endpoint_literal,
-	GUARD_PRIORITY, mark_network_pending, network_pending, activate_network };
+	GUARD_PRIORITY, mark_network_pending, network_pending, activate_network,
+	owe_network, settle_network };

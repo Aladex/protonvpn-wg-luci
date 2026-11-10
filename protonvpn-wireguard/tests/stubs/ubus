@@ -54,6 +54,14 @@ if [ -f "$state/ubus-wedge-s" ]; then
 	# here: the production code must decide from the elapsed time either way.
 	[ -n "$timed_out" ] && exit "$(cat "$state/ubus-timeout-status" 2>/dev/null || echo 7)"
 fi
+# `call network reload` succeeds only while ubus-reload-ok exists (opt-in, the
+# same convention as the ifup stub), so a child process — which the in-suite
+# reload model cannot reach — can be driven through a failed and then a
+# successful reload (test_underlay.uc, uninstall).
+if [ "$1 $2 $3" = "call network reload" ]; then
+	[ -f "$state/ubus-reload-ok" ] && exit 0
+	exit 1
+fi
 [ -f "$fixture" ] || exit 1
 [ "$1" = "call" ] || exit 1
 

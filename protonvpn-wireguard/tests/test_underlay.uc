@@ -26,7 +26,7 @@
 
 'use strict';
 
-import { readfile, writefile, unlink, mkdir, open, popen } from 'fs';
+import { readfile, writefile, unlink, mkdir, rmdir, open, popen } from 'fs';
 import { cursor } from 'uci';
 const _cmn = require('protonvpn.common');
 const _api = require('protonvpn.api');
@@ -755,6 +755,41 @@ for (let n in [ 'main', 'media' ])
 	eq('B2b: once the route is sane it comes back', _rotate.uplink_reconcile(cursor()).main, 'brought up');
 	eq('B2b: by one ifup', ifups(), [ 'ifup protonvpn' ]);
 	eq('B2b: still no tunlink', global.MOCK_UCI.network.protonvpn.tunlink, null);
+
+	// R2-B2: the hold binds every starter, not just the reconcile. The
+	// reviewer's case: the guest instance is taken down for a leak, and the
+	// SCHEDULED ROTATION fires before the route is repaired — with every
+	// candidate endpoint routed into the tunnel as well.
+	let into_tunnel = { [GEP]: 'pv_media', [EP]: 'pv_media', '79.127.154.2': 'pv_media',
+		'79.127.154.3': 'pv_media' };
+	let cfg = config();
+	cfg.protonvpn.main.country_code = 'nl';
+	uci = reset(cfg, router(), null, into_tunnel);
+	eq('R2-B2: P4 takes the guest instance down', _rotate.uplink_reconcile(cursor()).main, 'leak');
+	let peer_before = sprintf('%J', global.MOCK_UCI.network.peer_g);
+	let r = _rotate.rotate(cursor(), 'main');
+	eq('R2-B2: a scheduled rotation during the hold is skipped', r.skipped, true);
+	eq('R2-B2: as a hold', r.held, true);
+	eq('R2-B2: without an ifup', ifups(), []);
+	eq('R2-B2: without rewriting the peer', sprintf('%J', global.MOCK_UCI.network.peer_g), peer_before);
+	ok('R2-B2: the hold survives the rotation\'s dry gate', match(_underlay.waiting('main') || '', /^leak: /));
+	eq('R2-B2: and burns no watchdog retry', _service.watchdog_result_update(r, 1), 1);
+	// A manual connect gets the same answer, worded as what it is.
+	r = _apply.apply(cursor(), 'main');
+	ok('R2-B2: a manual connect during the hold is refused', r.state == 'failure' && length(ifups()) == 0);
+	ok('R2-B2: saying it is a leak hold', match(r.error || '', /^held after a leak \(/), r.error);
+	// Pause over but the route still bad: still held.
+	let lst = _underlay.park_state('main');
+	lst.last_leak = time() - _cmn.WATCHDOG_COOLDOWN_BASE - 1;
+	writefile(RUN + '/protonvpn_uplink_main.json', sprintf('%J', lst));
+	ok('R2-B2: after the pause, a still-unsafe route keeps it held', _rotate.rotate(cursor(), 'main').held == true &&
+		length(ifups()) == 0);
+	// Route sane and pause over: the same scheduled rotation recovers it.
+	ROUTES = { [GEP]: 'lan5', [EP]: 'lan5', '79.127.154.2': 'lan5', '79.127.154.3': 'lan5' };
+	r = _rotate.rotate(cursor(), 'main');
+	ok('R2-B2: once the route is sane and the pause over, rotation recovers it', r.ok == true, sprintf('%J', r));
+	eq('R2-B2: by one ifup', ifups(), [ 'ifup protonvpn' ]);
+	ok('R2-B2: and the hold is over', _underlay.waiting('main') == null);
 	unlink(IFUP_OK);
 }
 
@@ -800,6 +835,62 @@ for (let n in [ 'main', 'media' ])
 	DURING_RELOAD = function() { _routing.mark_network_pending(); };
 	_apply.bring_up('pv_media', uci);
 	ok('B1: a commit made during a reload is still owed afterwards', _routing.network_pending());
+
+	// R2-B1: a reload netifd refuses stops the ifup — it is a prerequisite,
+	// not a courtesy — and the reconcile brings the instance up once it works.
+	uci = reset(config({ g_main: main_guard }), router({
+		pv_media: ifc('pv_media', 'wireguard', null, [], { up: false }) }));
+	RELOAD_FAIL = 1;
+	ok('B1: a failed reload is not followed by an ifup', !_apply.bring_up('pv_media', uci));
+	eq('B1: none was made', ifups(), []);
+	ok('B1: the instance waits, and says why', match(_underlay.waiting('media') || '', /network reload failed/));
+	eq('B1: the reconcile retries the reload and then brings it up', _rotate.uplink_reconcile(cursor()).media, 'brought up');
+	eq('B1: with exactly one ifup', ifups(), [ 'ifup pv_media' ]);
+	eq('B1: on a loaded guard', LOADED, [ MAIN_G, MEDIA_G ]);
+	ok('B1: the wait is over', _underlay.waiting('media') == null);
+
+	// A debt someone else left blocks this ifup too, even when this gate has
+	// nothing new to commit.
+	uci = reset(config({ pv_media: { tunlink: 'dslite', protonvpn_tunlink: 'dslite' }, g_main: main_guard,
+		g_media: { '.type': 'rule', dest: MEDIA_G, action: 'unreachable', priority: '89999',
+			protonvpn_managed: '1', protonvpn_role: 'endpoint_guard', protonvpn_iface: 'pv_media' } }), router());
+	_routing.mark_network_pending();
+	RELOAD_FAIL = 1;
+	ok('B1: an earlier unpaid reload blocks the ifup as well', !_apply.bring_up('pv_media', uci) && length(ifups()) == 0);
+
+	// The debt cannot even be recorded: paid on the spot, or nothing starts.
+	uci = reset(config({ g_main: main_guard }), router());
+	mkdir(RUN + '/protonvpn_network_pending');       // a directory: the record cannot be written
+	RELOAD_FAIL = 1;
+	ok('B1: an unrecordable debt whose reload fails starts nothing', !_apply.bring_up('pv_media', uci) &&
+		length(ifups()) == 0);
+	ok('B1: something at the record\'s path that is not a record counts as owed',
+		_routing.network_pending() && match(_underlay.waiting('media') || '', /network reload failed/));
+	RELOAD_FAIL = 1;
+	ok('B1: a debt that cannot be recorded is paid on the spot, or reported unpaid', !_routing.owe_network());
+	ok('B1: and says so', said(/could not record a pending network reload/) == 1);
+	ok('B1: it is not taken for "nothing owed"', said(/nothing will be brought up until a reload succeeds/) == 1);
+	ok('B1: with a reload that works it is paid on the spot', _apply.bring_up('pv_media', uci) &&
+		index(LOADED, MEDIA_G) >= 0);
+	rmdir(RUN + '/protonvpn_network_pending');
+
+	// A missing run directory is created rather than read as "nothing owed".
+	let rd = RUN + '/missing-run-' + time();
+	let p = popen('PROTONVPN_RUN_DIR=' + rd + ' ' + (getenv('UCODE') || 'ucode') + ' ' +
+		(getenv('PVT_UCODE_L') || '') + ' -e \'let r = require("protonvpn.routing"); ' +
+		'print(r.mark_network_pending(), " ", r.network_pending(), "\\n");\' 2>/dev/null', 'r');
+	let said_rd = p ? trim(p.read('all') || '') : '';
+	if (p)
+		p.close();
+	eq('B1: a missing run directory is created for the record', said_rd, 'true true');
+	unlink(rd + '/protonvpn_network_pending');
+	rmdir(rd);
+
+	// The healthy owner shape is untouched: nohostroute on the SIM default.
+	uci = reset(config(), outage(), null, { '146.70.170.2': 'lan5' });
+	ok('B1: a nohostroute instance on the SIM still comes up', _apply.bring_up('protonvpn', uci));
+	eq('B1: by its ifup', ifups(), [ 'ifup protonvpn' ]);
+	eq('B1: unpinned', global.MOCK_UCI.network.protonvpn.tunlink, null);
 
 	// The endpoint changes while the instance is parked.
 	uci = reset(config({ g_main: main_guard }), outage());
@@ -876,17 +967,41 @@ for (let n in [ 'main', 'media' ])
 	ok('S2: nor is a rule the user wrote', n.mine != null);
 	ok('S2: a second run has nothing to do', !_underlay.uninstall_cleanup(cursor()));
 
-	// The command the prerm runs, as its own process.
+	// The command the prerm runs, as its own process — where the in-suite
+	// reload model does not reach, so the ubus stub's opt-in decides whether
+	// `network reload` works (stubs/ubus, ubus-reload-ok).
 	let cfgfile = STATE + '/uninstall-uci.json';
-	writefile(cfgfile, sprintf('%J', cfg));
-	let p = popen('PROTONVPN_MOCK_UCI=' + cfgfile + ' ' + (getenv('UCODE') || 'ucode') + ' ' +
-		(getenv('PVT_UCODE_L') || '') + ' ' + getenv('PVT_TESTS') +
-		'/../files/usr/bin/protonvpn-uplink --uninstall 2>/dev/null', 'r');
-	let said_out = p ? trim(p.read('all') || '') : '';
-	if (p)
-		p.close();
-	unlink(cfgfile);
-	ok('S2: `protonvpn-uplink --uninstall` runs the cleanup', match(said_out, /"uninstalled": true/), said_out);
+	let uninstall = function(c) {
+		writefile(cfgfile, sprintf('%J', c));
+		let p = popen('PROTONVPN_MOCK_UCI=' + cfgfile + ' ' + (getenv('UCODE') || 'ucode') + ' ' +
+			(getenv('PVT_UCODE_L') || '') + ' ' + getenv('PVT_TESTS') +
+			'/../files/usr/bin/protonvpn-uplink --uninstall 2>/dev/null; echo "rc=$?"', 'r');
+		let out = p ? trim(p.read('all') || '') : '';
+		if (p)
+			p.close();
+		unlink(cfgfile);
+		return out;
+	};
+	unlink(STATE + '/ubus-reload-ok');
+	// (cfg itself was cleaned in place above; this is a fresh one.)
+	let out = uninstall(config({ g1: { '.type': 'rule', dest: EP + '/32', action: 'unreachable',
+		priority: '89999', protonvpn_managed: '1', protonvpn_role: 'endpoint_guard',
+		protonvpn_iface: 'pv_media' } }));
+	ok('S2: `protonvpn-uplink --uninstall` runs the cleanup', match(out, /"uninstalled": true/), out);
+	ok('S2: a reload netifd refuses fails the uninstall', match(out, /rc=1$/), out);
+	ok('S2: and stays owed', _routing.network_pending());
+	ok('S2: the reconcile is held off meanwhile', _rotate.uplink_reconcile(cursor()).skipped ==
+		'the package is being removed');
+	writefile(STATE + '/ubus-reload-ok', '');
+	// Retried with nothing left to clean: the debt from the failed run is
+	// what has to be paid.
+	out = uninstall(global.MOCK_UCI);
+	ok('S2: the retry pays the earlier debt and succeeds', match(out, /"reloaded": true/) && match(out, /rc=0$/), out);
+	ok('S2: nothing owed afterwards', !_routing.network_pending());
+	unlink(STATE + '/ubus-reload-ok');
+	ok('S2: starting the service lifts the hold', index(readfile(getenv('PVT_TESTS') +
+		'/../files/etc/init.d/protonvpn') || '', 'rm -f /tmp/protonvpn_uninstalling') >= 0);
+	unlink(_rotate.UNINSTALL_MARK);
 
 	// The maintainer script: run the Makefile's prerm with the two commands
 	// it calls replaced by recorders, under each way a package manager runs it.
@@ -902,11 +1017,16 @@ for (let n in [ 'main', 'media' ])
 	ok('S2: it runs the cleanup', index(body, '/usr/bin/protonvpn-uplink --uninstall') >= 0);
 	let rec = STATE + '/prerm.log';
 	let script = STATE + '/prerm.sh';
-	writefile(script, replace(replace(body, '/usr/bin/protonvpn-uplink', 'echo uplink >> ' + rec + ' #'),
+	// The cleanup stand-in records the call and exits with UPLINK_RC, so the
+	// script's handling of a failed cleanup is exercised too.
+	let stub = STATE + '/uplink-stub';
+	writefile(stub, '#!/bin/sh\necho uplink >> ' + rec + '\nexit "${UPLINK_RC:-0}"\n');
+	writefile(script, replace(replace(body, '/usr/bin/protonvpn-uplink', 'sh ' + stub),
 		'/etc/init.d/protonvpn', 'echo init >> ' + rec + ' #'));
+	let status = 0;
 	let runs = function(env, args) {
 		unlink(rec);
-		system([ '/bin/sh', '-c', env + ' sh ' + script + ' ' + args + ' >/dev/null 2>&1' ]);
+		status = system([ '/bin/sh', '-c', env + ' sh ' + script + ' ' + args + ' >/dev/null 2>&1' ]);
 		return split(trim(readfile(rec) || ''), '\n');
 	};
 	eq('S2: removal (opkg) stops the service and cleans', runs('', 'remove'), [ 'init', 'uplink' ]);
@@ -915,6 +1035,13 @@ for (let n in [ 'main', 'media' ])
 	eq('S2: nor when the upgrade word comes second', runs('', '/usr/lib/opkg/info/x.prerm upgrade'), [ '' ]);
 	eq('S2: an apk upgrade does not clean', runs('PKG_UPGRADE=1', ''), [ '' ]);
 	eq('S2: a staging root is never touched', runs('IPKG_INSTROOT=/tmp/root', 'remove'), [ '' ]);
+	runs('', 'remove');
+	eq('S2: a successful cleanup lets the removal go on', status, 0);
+	runs('UPLINK_RC=1', 'remove');
+	ok('S2: a failed cleanup fails the removal, so it can be retried', status != 0);
+	runs('UPLINK_RC=1', 'upgrade 0.7.8-r1');
+	eq('S2: an upgrade is never failed by it', status, 0);
+	unlink(stub);
 	unlink(script);
 	unlink(rec);
 }

@@ -322,6 +322,44 @@ function drop_pin(uci, iface) {
 	return true;
 }
 
+// ── Foreign damage (P4) ──────────────────────────────────────────────────
+
+// Why the kernel's route to `addr` is a leak right now, or null. Asked of the
+// kernel rather than of netifd's host route, because the kernel is what
+// WireGuard's packets follow, whoever put the route there. No route at all is
+// not a leak: the endpoint guard refuses it, and nothing leaves.
+function leak(data, addr) {
+	let w = _common.ip_words(addr);
+	if (!w)
+		return null;
+	let dev = _routing.route_device(w.v6 ? '-6' : '-4', addr);
+	if (dev == null)
+		return null;
+	for (let ifc in ((type(data) == 'object' && type(data.interface) == 'array') ? data.interface : []))
+		if (type(ifc) == 'object' && ifc.l3_device == dev && ifc.proto == 'wireguard')
+			return addr + ' is routed through WireGuard interface ' + ifc.interface;
+	let why = _routing.stack_refusal(dev);
+	return (why != null) ? addr + ' is routed through ' + dev + ': ' + why : null;
+}
+
+// Why an instance taken down for a leak must stay down for now, or null. A
+// leak episode lasts from the take-down (park_leak) until the instance is
+// unparked; within it nothing may start the instance while the backoff runs,
+// nor afterwards while the kernel still routes its endpoint through a tunnel.
+// The answer keeps the episode's own reason so asking repeatedly changes and
+// logs nothing. `data` may be null: leak() then judges the device alone.
+function leak_hold(name, data, addr) {
+	let st = park_state(name);
+	if (!st || st.reason == null || !(st.leaks > 0))
+		return null;
+	let reason = (index(st.reason, 'leak: ') == 0) ? st.reason :
+		'leak: held after a leak until the route is safe';
+	if (time() - (st.last_leak || 0) < leak_backoff(st))
+		return reason;
+	let why = leak(data, addr);
+	return (why != null) ? 'leak: ' + why : null;
+}
+
 // A tunlink the user set by hand: never rewritten, but held to the same rule
 // as one this module picks. netifd resolves the endpoint through whatever it
 // names, so a tunlink naming a tunnel — `protonvpn`, `wg0`, another VPN
@@ -353,10 +391,18 @@ function user_pin_refusal(data, pin, ep) {
 //   { go, mode: 'nohostroute'|'user'|'managed', to, reason }
 function decide(uci, s, data) {
 	let iface = s.interface;
-	if (uci.get('network', iface, 'nohostroute') == '1')
-		return { go: true, mode: 'nohostroute' };
-	let mode = (pin_owner(uci, iface) == 'user') ? 'user' : 'managed';
+	let nohost = uci.get('network', iface, 'nohostroute') == '1';
+	let mode = nohost ? 'nohostroute' : (pin_owner(uci, iface) == 'user') ? 'user' : 'managed';
 	let ep = _routing.endpoint_literal(uci, iface);
+	// The leak hold comes first and binds every starter alike — the gate in
+	// front of apply, rotation, the watchdog and the reconcile all ask here —
+	// and every mode, nohostroute included: that is the one mode with no other
+	// gate, and a dry prepare that answered "go" for it would unpark it.
+	let held = ep ? leak_hold(s.name, data, ep.addr) : null;
+	if (held)
+		return { go: false, mode: mode, reason: held, hold: true };
+	if (nohost)
+		return { go: true, mode: mode };
 	if (!ep)
 		// Proton endpoints are written by EntryIP; a name here was not
 		// written by this package, and what it resolves to cannot be judged.
@@ -394,6 +440,12 @@ function prepare(uci, s, dry) {
 		changed = true;
 
 	let d = decide(uci, s);
+	if (d.hold) {
+		// Held after a leak: nothing is written, and the hold's own reason is
+		// kept, so the record the backoff is measured on survives every ask.
+		park(s.name, d.reason);
+		return { go: false, changed: changed, reason: d.reason, hold: true };
+	}
 	if (d.mode == 'nohostroute') {
 		if (!dry && drop_pin(uci, iface))
 			changed = true;
@@ -416,26 +468,6 @@ function prepare(uci, s, dry) {
 		changed = true;
 	park(s.name, d.reason);
 	return { go: false, changed: changed, reason: d.reason };
-}
-
-// ── Foreign damage (P4) ──────────────────────────────────────────────────
-
-// Why the kernel's route to `addr` is a leak right now, or null. Asked of the
-// kernel rather than of netifd's host route, because the kernel is what
-// WireGuard's packets follow, whoever put the route there. No route at all is
-// not a leak: the endpoint guard refuses it, and nothing leaves.
-function leak(data, addr) {
-	let w = _common.ip_words(addr);
-	if (!w)
-		return null;
-	let dev = _routing.route_device(w.v6 ? '-6' : '-4', addr);
-	if (dev == null)
-		return null;
-	for (let ifc in ((type(data) == 'object' && type(data.interface) == 'array') ? data.interface : []))
-		if (type(ifc) == 'object' && ifc.l3_device == dev && ifc.proto == 'wireguard')
-			return addr + ' is routed through WireGuard interface ' + ifc.interface;
-	let why = _routing.stack_refusal(dev);
-	return (why != null) ? addr + ' is routed through ' + dev + ': ' + why : null;
 }
 
 // ── Uninstall ────────────────────────────────────────────────────────────
@@ -475,7 +507,7 @@ function uninstall_cleanup(uci) {
 
 return {
 	TUNLINK_STAMP, NO_UPLINK,
-	pick, refusal, coverage, decide, prepare, leak, pin_owner, set_pin, drop_pin,
+	pick, refusal, coverage, decide, prepare, leak, leak_hold, pin_owner, set_pin, drop_pin,
 	uninstall_cleanup,
 	park_state, waiting, park, park_leak, unpark, forget_leaks, leak_backoff,
 	no_uplink_reason

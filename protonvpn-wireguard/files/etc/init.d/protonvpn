@@ -16,6 +16,10 @@ version() {
 }
 
 start_service() {
+	# A removal that failed half way held the endpoint reconcile off
+	# (protonvpn-uplink --uninstall); starting the service is the decision
+	# to keep the package, so the hold goes.
+	rm -f /tmp/protonvpn_uninstalling
 	procd_open_instance protonvpn
 	procd_set_param command /usr/bin/protonvpn-service
 	procd_set_param respawn

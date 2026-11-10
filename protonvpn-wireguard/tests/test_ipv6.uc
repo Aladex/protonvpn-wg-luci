@@ -53,6 +53,9 @@ _routing.netifd_dump = function() {
 			nexthop: '192.0.2.1', source: '0.0.0.0/0' } ] } ] };
 };
 _routing.stack_refusal = function(dev) { return null; };
+// And a netifd that accepts `network reload` (stubs/ubus opt-in): the gate
+// will not bring a tunnel up while a reload it owes has failed.
+writefile((getenv('PROTONVPN_STATE_DIR') || '/tmp/protonvpn-test-state') + '/ubus-reload-ok', '');
 const enforce_routing = _routing.enforce,
       detect_routing = _routing.detect,
       reconcile_ipv6 = _routing.reconcile_ipv6,
