@@ -41,5 +41,6 @@ Written by the package on the instance's network interface
 (`/etc/config/network`), not here: `tunlink` and `protonvpn_tunlink` — the
 uplink the tunnel's endpoint is pinned to, or `protonvpn-no-uplink` while it
 waits for one (see [Traffic routing](routing.md#the-tunnels-own-path)). A
-`tunlink` without a matching `protonvpn_tunlink` is treated as yours and left
-alone; `nohostroute '1'` opts the interface out of the pinning.
+`tunlink` without a matching `protonvpn_tunlink` is treated as yours and never
+changed, but it is not used when it names a tunnel or an interface that does
+not reach the endpoint; `nohostroute '1'` opts the interface out of the pinning.

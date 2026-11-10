@@ -43,5 +43,7 @@ Vom Paket auf dem Netzwerk-Interface der Instanz geschrieben
 Uplink, an den der Endpoint des Tunnels gebunden ist, oder
 `protonvpn-no-uplink`, solange er auf einen wartet (siehe
 [Traffic-Routing](routing.de.md#der-weg-des-tunnels-selbst)). Ein `tunlink` ohne
-passendes `protonvpn_tunlink` gilt als deins und bleibt unberührt;
+passendes `protonvpn_tunlink` gilt als deins und wird nie geändert, aber nicht
+benutzt, wenn er einen Tunnel oder ein Interface nennt, das den Endpoint nicht
+erreicht;
 `nohostroute '1'` nimmt das Interface von der Bindung aus.

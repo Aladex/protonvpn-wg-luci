@@ -182,27 +182,57 @@ When no uplink covers the endpoint, the instance waits instead of connecting:
 no `ifup`, no server rotation, no retries counted against the watchdog. If it
 was never pinned, `tunlink` is set to `protonvpn-no-uplink`, a name no
 interface can have, so netifd cannot start it unpinned either. The status
-(`uplink_wait`) and the log say why, once. It comes back by itself as soon as
-an uplink covers the endpoint again — possibly another one than before — on the
-next interface event (an `/etc/hotplug.d/iface` hook) or within 30 seconds (the
-service tick).
+(`uplink_wait`) and the log say why, once. When something other than a tunnel
+was turned away — an uplink on a device kind the backend does not recognise,
+for instance — the log names it, and says that `nohostroute '1'` on the
+interface is the way out if you route the endpoint yourself. It comes back by
+itself as soon as an uplink covers the endpoint again — possibly another one
+than before — on the next interface event (an `/etc/hotplug.d/iface` hook) or
+within 30 seconds (the service tick).
 
-If an instance is ever found up with its endpoint routed through a tunnel
-anyway — netifd started it before this version pinned it, say — the log says
-`LEAK`, the tunnel is taken down and pinned, and it comes back the same way,
-after a pause that doubles with every repeat (2 to 15 minutes).
+A `tunlink` you set yourself is never changed, but it is held to the same rule:
+if it names a tunnel (any WireGuard interface, this package's or not), or an
+interface that is down or does not cover the endpoint, the instance is not
+brought up through it, and the log says why once. If you really route the
+endpoint by other means, set `nohostroute '1'` instead.
+
+Every enabled instance — `nohostroute` and hand-set `tunlink` included — is
+also checked while it is up: if the kernel routes its endpoint through a tunnel,
+whoever put that route there, the log says `LEAK`, the tunnel is taken down,
+and it comes back the same way once the route is sane again, after a pause that
+doubles with every repeat (2 to 15 minutes). For a `nohostroute` instance
+"sane" means anything that is not a tunnel: the default your failover script
+puts into `main` is fine; it is never pinned or held back otherwise.
 
 Every enabled instance also gets a netifd rule `to <endpoint> unreachable` at
-priority 89999. It comes after `main` and `default`, so it changes nothing
-while either has a route — the cable, or a default an external failover script
-puts into `main`. It exists because netifd gives every interface with a routing
-table a rule `iif lo lookup <table>` at 90000 and above, and router traffic
-that misses `main` would otherwise descend into the first tunnel table it
-meets.
+priority 89999. It comes after `main` and `default`, so it only catches what
+both of them miss — netifd gives every interface with a routing table a rule
+`iif lo lookup <table>` at 90000 and above, and router traffic that misses
+`main` would otherwise descend into the first tunnel table it meets. It does
+nothing about a bad route that is already in `main`; that is what the check
+above is for. A rule written to the configuration only counts once netifd has
+loaded it, so every change is followed by a `network reload`, and one that
+fails is retried on every service tick until it succeeds; with nothing pending
+no reload is made.
 
-Left alone: an interface with `nohostroute '1'` (it rides `main` on purpose,
-for example under an external failover script) gets the rule but no `tunlink`,
-and loses a pin the package had set before. A `tunlink` you set yourself is
-yours and is never changed.
+What this does and does not guarantee:
+
+* Through a pin, netifd cannot put the endpoint on a tunnel at all, and the
+  tunnel's first packet cannot leave before the host route exists: the setup
+  script creates the WireGuard device down, and netifd brings it up only with
+  the update that follows the endpoint dependency, after it has installed the
+  host route.
+* With no uplink, nothing is brought up.
+* Not prevented, only detected: an instance netifd starts by itself before this
+  version first pinned it, or a bad route someone puts into `main`. Those are
+  taken down at the next interface event, or within one service tick (30 s) if
+  that event is lost.
+* IPv6 endpoints: whether an IPv6 address on an interface covers the endpoint
+  is read from netifd's dump, which does not say whether the address is
+  off-link; such an address is treated as on-link.
+
+Removing the package takes the guards, the `tunlink` values it wrote (the
+sentinel included) and the stamps back out of `/etc/config/network`; a
+`tunlink` of yours stays. An upgrade keeps them.
 
 ![Traffic routing](screenshots/routing.png)

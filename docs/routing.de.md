@@ -197,29 +197,62 @@ kein `ifup`, kein Serverwechsel, keine Versuche, die dem Watchdog angerechnet
 werden. War sie noch nie gebunden, wird `tunlink` auf `protonvpn-no-uplink`
 gesetzt, einen Namen, den kein Interface tragen kann, sodass auch netifd sie
 nicht ungebunden starten kann. Status (`uplink_wait`) und Log sagen einmal,
-warum. Sie kommt von selbst zurück, sobald wieder ein Uplink den Endpoint
+warum. Wurde etwas anderes als ein Tunnel abgewiesen — etwa ein Uplink auf
+einem Gerätetyp, den das Backend nicht kennt —, nennt das Log es und den
+Ausweg: `nohostroute '1'` auf dem Interface, wenn du den Endpoint selbst
+routest. Sie kommt von selbst zurück, sobald wieder ein Uplink den Endpoint
 abdeckt — womöglich ein anderer als zuvor —, beim nächsten Interface-Ereignis
 (ein Hook in `/etc/hotplug.d/iface`) oder innerhalb von 30 Sekunden (der Takt
 des Dienstes).
 
-Wird eine Instanz trotzdem einmal oben angetroffen, während ihr Endpoint durch
-einen Tunnel geroutet wird — etwa weil netifd sie gestartet hat, bevor diese
-Version sie gebunden hat —, steht `LEAK` im Log, der Tunnel wird
-heruntergefahren und gebunden und kommt auf demselben Weg zurück, nach einer
-Pause, die sich mit jeder Wiederholung verdoppelt (2 bis 15 Minuten).
+Ein `tunlink`, den du selbst gesetzt hast, wird nie geändert, aber an dieselbe
+Regel gehalten: Nennt er einen Tunnel (irgendein WireGuard-Interface, von
+diesem Paket oder nicht) oder ein Interface, das unten ist oder den Endpoint
+nicht abdeckt, wird die Instanz nicht darüber gestartet, und das Log sagt
+einmal, warum. Routest du den Endpoint wirklich auf anderem Weg, setze
+stattdessen `nohostroute '1'`.
+
+Jede aktivierte Instanz — auch mit `nohostroute` oder selbst gesetztem
+`tunlink` — wird außerdem geprüft, solange sie oben ist: Routet der Kernel
+ihren Endpoint durch einen Tunnel, egal wer die Route gesetzt hat, steht `LEAK`
+im Log, der Tunnel wird heruntergefahren und kommt auf demselben Weg zurück,
+sobald die Route wieder in Ordnung ist, nach einer Pause, die sich mit jeder
+Wiederholung verdoppelt (2 bis 15 Minuten). Für eine `nohostroute`-Instanz
+heißt „in Ordnung“ alles, was kein Tunnel ist: Die Default-Route, die dein
+Failover-Skript in `main` legt, passt; ansonsten wird sie weder gebunden noch
+zurückgehalten.
 
 Außerdem bekommt jede aktivierte Instanz eine netifd-Regel
 `to <Endpoint> unreachable` mit Priorität 89999. Sie kommt nach `main` und
-`default` und ändert nichts, solange eine der beiden eine Route hat — das Kabel
-oder eine Default-Route, die ein externes Failover-Skript in `main` legt. Es
-gibt sie, weil netifd jedem Interface mit Routing-Tabelle eine Regel
-`iif lo lookup <Tabelle>` ab Priorität 90000 gibt und Traffic des Routers, der
-in `main` nichts findet, sonst in die erste Tunnel-Tabelle fällt, auf die er
-trifft.
+`default` und fängt nur, was beide verfehlen: netifd gibt jedem Interface mit
+Routing-Tabelle eine Regel `iif lo lookup <Tabelle>` ab Priorität 90000, und
+Traffic des Routers, der in `main` nichts findet, fiele sonst in die erste
+Tunnel-Tabelle, auf die er trifft. Gegen eine schlechte Route, die bereits in
+`main` steht, tut sie nichts; dafür ist die Prüfung oben da. Eine Regel in der
+Konfiguration wirkt erst, wenn netifd sie geladen hat, deshalb folgt jeder
+Änderung ein `network reload`, und ein fehlgeschlagener wird bei jedem Takt
+des Dienstes wiederholt, bis er gelingt; steht nichts aus, wird nicht neu
+geladen.
 
-Unberührt bleibt: Ein Interface mit `nohostroute '1'` (es läuft absichtlich über
-`main`, etwa unter einem externen Failover-Skript) bekommt die Regel, aber kein
-`tunlink`, und verliert eine Bindung, die das Paket vorher gesetzt hatte. Ein
-`tunlink`, den du selbst gesetzt hast, gehört dir und wird nie geändert.
+Was garantiert ist und was nicht:
+
+* Über eine Bindung kann netifd den Endpoint gar nicht auf einen Tunnel legen,
+  und das erste Paket des Tunnels kann nicht vor der Host-Route hinaus: Das
+  Setup-Skript legt das WireGuard-Gerät heruntergefahren an, und netifd bringt
+  es erst mit dem Update hoch, das auf die Endpoint-Abhängigkeit folgt, wenn
+  die Host-Route schon steht.
+* Ohne Uplink wird nichts gestartet.
+* Nicht verhindert, nur erkannt: eine Instanz, die netifd von selbst startet,
+  bevor diese Version sie zum ersten Mal gebunden hat, oder eine schlechte
+  Route, die jemand in `main` legt. Sie wird beim nächsten Interface-Ereignis
+  heruntergefahren, oder innerhalb eines Takts (30 s), falls das Ereignis
+  verloren geht.
+* IPv6-Endpoints: Ob eine IPv6-Adresse eines Interfaces den Endpoint abdeckt,
+  wird aus dem netifd-Dump gelesen, der nicht verrät, ob die Adresse off-link
+  ist; eine solche Adresse gilt als on-link.
+
+Das Entfernen des Pakets nimmt die Schutzregeln, die von ihm geschriebenen
+`tunlink`-Werte (den Platzhalter eingeschlossen) und die Markierungen wieder
+aus `/etc/config/network`; ein `tunlink` von dir bleibt. Ein Update behält sie.
 
 ![Traffic-Routing](screenshots/routing.png)
