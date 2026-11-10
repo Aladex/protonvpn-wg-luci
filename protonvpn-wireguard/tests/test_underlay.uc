@@ -896,6 +896,16 @@ for (let n in [ 'main', 'media' ])
 		unlink(RUN + '/' + f + '/keep');
 		rmdir(RUN + '/' + f);
 	}
+	// A writer replaces the malformed thing with a real record while the
+	// reload runs: that record is newer debt and survives the repair.
+	mkdir(RUN + '/protonvpn_network_pending');
+	DURING_RELOAD = function() {
+		rmdir(RUN + '/protonvpn_network_pending');
+		_routing.mark_network_pending();
+	};
+	_routing.activate_network();
+	ok('B1: a record written during the repairing reload stays owed', _routing.network_pending());
+	unlink(RUN + '/protonvpn_network_pending');
 
 	// A missing run directory is created rather than read as "nothing owed".
 	let rd = RUN + '/missing-run-' + time();
