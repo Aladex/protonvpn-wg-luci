@@ -171,4 +171,55 @@ Anforderung unerfüllbar, denn Bit 16 ist bei 0 von 122 Secure-Core- und 0 von 7
 Tor-Logicals gesetzt. Der gespeicherte Wert übersteht einen Ausflug in die
 anderen Modi, statt vergessen zu werden.
 
+## Der Weg des Tunnels selbst
+
+Die WireGuard-Pakete des Tunnels selbst müssen den Server über deinen echten
+Uplink erreichen. Hat das Interface kein `nohostroute '1'`, legt netifd eine
+Host-Route zum Server (dem Endpoint) an und nimmt sie, sich selbst überlassen,
+von irgendeiner Route, die den Endpoint abdeckt — auch vom `0.0.0.0/0`, das der
+Tunnel einer anderen Instanz in seiner Routing-Tabelle führt. Bei einem
+WAN-Ausfall ist das die einzige Route, die bleibt: Ein Tunnel lief dann im
+anderen, und blieb dort, als das WAN zurückkam.
+
+Deshalb ermittelt das Backend vor jedem Verbinden, jeder Rotation, jedem
+Rollback und jeder Wiederherstellung, welches Interface netifd wählen würde,
+gäbe es keine Tunnel — die spezifischste Route zum Endpoint unter den
+Interfaces, deren Gerät der Kernel selbst als Provideranbindung ausweist
+(Ethernet, VLAN, Bridge, PPP, DS-Lite/MAP, ein LTE-Modem; nicht WireGuard,
+tun/tap, GRE, VXLAN oder etwas darauf Aufgebautes) — und schreibt es als
+`tunlink` in das Netzwerk-Interface; `protonvpn_tunlink` hält fest, dass das
+Paket es geschrieben hat. Ab dann löst netifd den Endpoint nur noch über diesen
+Uplink auf: Der Tunnel fällt mit ihm und kommt mit ihm zurück, auf jedem Weg,
+ein Neustart oder ein von Hand ausgeführtes `ifup` eingeschlossen.
+
+Deckt kein Uplink den Endpoint ab, wartet die Instanz, statt sich zu verbinden:
+kein `ifup`, kein Serverwechsel, keine Versuche, die dem Watchdog angerechnet
+werden. War sie noch nie gebunden, wird `tunlink` auf `protonvpn-no-uplink`
+gesetzt, einen Namen, den kein Interface tragen kann, sodass auch netifd sie
+nicht ungebunden starten kann. Status (`uplink_wait`) und Log sagen einmal,
+warum. Sie kommt von selbst zurück, sobald wieder ein Uplink den Endpoint
+abdeckt — womöglich ein anderer als zuvor —, beim nächsten Interface-Ereignis
+(ein Hook in `/etc/hotplug.d/iface`) oder innerhalb von 30 Sekunden (der Takt
+des Dienstes).
+
+Wird eine Instanz trotzdem einmal oben angetroffen, während ihr Endpoint durch
+einen Tunnel geroutet wird — etwa weil netifd sie gestartet hat, bevor diese
+Version sie gebunden hat —, steht `LEAK` im Log, der Tunnel wird
+heruntergefahren und gebunden und kommt auf demselben Weg zurück, nach einer
+Pause, die sich mit jeder Wiederholung verdoppelt (2 bis 15 Minuten).
+
+Außerdem bekommt jede aktivierte Instanz eine netifd-Regel
+`to <Endpoint> unreachable` mit Priorität 89999. Sie kommt nach `main` und
+`default` und ändert nichts, solange eine der beiden eine Route hat — das Kabel
+oder eine Default-Route, die ein externes Failover-Skript in `main` legt. Es
+gibt sie, weil netifd jedem Interface mit Routing-Tabelle eine Regel
+`iif lo lookup <Tabelle>` ab Priorität 90000 gibt und Traffic des Routers, der
+in `main` nichts findet, sonst in die erste Tunnel-Tabelle fällt, auf die er
+trifft.
+
+Unberührt bleibt: Ein Interface mit `nohostroute '1'` (es läuft absichtlich über
+`main`, etwa unter einem externen Failover-Skript) bekommt die Regel, aber kein
+`tunlink`, und verliert eine Bindung, die das Paket vorher gesetzt hatte. Ein
+`tunlink`, den du selbst gesetzt hast, gehört dir und wird nie geändert.
+
 ![Traffic-Routing](screenshots/routing.png)

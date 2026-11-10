@@ -36,3 +36,10 @@ WireGuard private key on the managed network interface.
 | `cache_dir` | — | Server-list cache directory, shared by all instances |
 | `cache_refresh_interval` | `21600` | Seconds between background cache refreshes |
 | `app_version` | — | Client version stamped on Proton API requests (`x-pm-appversion`), shared by all instances. Editable in the LuCI page on the **Proton account** card, next to the sign-in controls, as **Client version** — a disclosure whose summary always names the version in force, on that card because it is a global setting and it matters exactly when a sign-in has just failed. **Fetch versions** asks what the official Linux client has released and fills the list; the list is only offered — you pick an entry and save it like any other setting, and nothing is ever changed for you. Without a fetch (or after one that failed) the list still offers the built-in version and whatever is currently stored here, so opening the page can never drop or change a value already in force. The first entry, **Built into the package**, is the empty value and the right choice for almost everyone. Only set this when Proton starts rejecting the built-in version — that is **Code 5003** "this version of the app is no longer supported", not Code 2028 (a temporary account limit) and not Code 8002 (wrong credentials or unknown user) — and no package update is installed yet. Use the current official Linux client string, e.g. `linux-vpn-gtk@4.18.2` (see `versions.yml` in ProtonVPN/proton-vpn-gtk-app). Malformed values are ignored. Takes effect immediately. Read from the `globals` section when one exists, which then takes precedence over `main` — set the option there in that case |
+
+Written by the package on the instance's network interface
+(`/etc/config/network`), not here: `tunlink` and `protonvpn_tunlink` — the
+uplink the tunnel's endpoint is pinned to, or `protonvpn-no-uplink` while it
+waits for one (see [Traffic routing](routing.md#the-tunnels-own-path)). A
+`tunlink` without a matching `protonvpn_tunlink` is treated as yours and left
+alone; `nohostroute '1'` opts the interface out of the pinning.

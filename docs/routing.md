@@ -157,4 +157,52 @@ satisfied, because bit 16 is set on 0 of 122 Secure Core and 0 of 7 Tor
 logicals. The stored value survives a trip through the other modes rather than
 being forgotten.
 
+## The tunnel's own path
+
+The tunnel's WireGuard packets have to reach the server through your real
+uplink. Unless the interface has `nohostroute '1'`, netifd installs a host
+route to the server (the endpoint), and left to itself it takes that route from
+whatever covers the endpoint — including the `0.0.0.0/0` another instance's
+tunnel carries in its routing table. During a WAN outage that is the only route
+left, so one tunnel ended up riding inside another, and stayed there after the
+WAN came back.
+
+So before every connect, rotation, rollback or recovery the backend works out
+which interface netifd would choose if there were no tunnels — the most
+specific route covering the endpoint, among interfaces whose device is a
+provider attachment by the kernel's own account (Ethernet, VLAN, bridge, PPP,
+DS-Lite/MAP, an LTE modem; not WireGuard, tun/tap, GRE, VXLAN or anything built
+on them) — and writes it to the network interface as `tunlink`, with
+`protonvpn_tunlink` recording that the package wrote it. From then on netifd
+resolves the endpoint through that uplink and nothing else: the tunnel goes
+down with it and comes back with it, on every path, a reboot or a hand-run
+`ifup` included.
+
+When no uplink covers the endpoint, the instance waits instead of connecting:
+no `ifup`, no server rotation, no retries counted against the watchdog. If it
+was never pinned, `tunlink` is set to `protonvpn-no-uplink`, a name no
+interface can have, so netifd cannot start it unpinned either. The status
+(`uplink_wait`) and the log say why, once. It comes back by itself as soon as
+an uplink covers the endpoint again — possibly another one than before — on the
+next interface event (an `/etc/hotplug.d/iface` hook) or within 30 seconds (the
+service tick).
+
+If an instance is ever found up with its endpoint routed through a tunnel
+anyway — netifd started it before this version pinned it, say — the log says
+`LEAK`, the tunnel is taken down and pinned, and it comes back the same way,
+after a pause that doubles with every repeat (2 to 15 minutes).
+
+Every enabled instance also gets a netifd rule `to <endpoint> unreachable` at
+priority 89999. It comes after `main` and `default`, so it changes nothing
+while either has a route — the cable, or a default an external failover script
+puts into `main`. It exists because netifd gives every interface with a routing
+table a rule `iif lo lookup <table>` at 90000 and above, and router traffic
+that misses `main` would otherwise descend into the first tunnel table it
+meets.
+
+Left alone: an interface with `nohostroute '1'` (it rides `main` on purpose,
+for example under an external failover script) gets the rule but no `tunlink`,
+and loses a pin the package had set before. A `tunlink` you set yourself is
+yours and is never changed.
+
 ![Traffic routing](screenshots/routing.png)

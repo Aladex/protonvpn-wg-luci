@@ -55,3 +55,7 @@ logread -e protonvpn
 
 The daemon refreshes the session and the server cache, renews certificates
 before Proton's own `RefreshTime`, runs the rotation clock and the watchdog.
+It also checks which uplink each tunnel's endpoint rides on (see
+[Traffic routing](routing.md#the-tunnels-own-path)); the same pass runs on
+every interface event, and by hand as `protonvpn-uplink`, which prints what it
+did per instance.
