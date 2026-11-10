@@ -220,7 +220,9 @@ sobald die Route wieder in Ordnung ist, nach einer Pause, die sich mit jeder
 Wiederholung verdoppelt (2 bis 15 Minuten). Für eine `nohostroute`-Instanz
 heißt „in Ordnung“ alles, was kein Tunnel ist: Die Default-Route, die dein
 Failover-Skript in `main` legt, passt; ansonsten wird sie weder gebunden noch
-zurückgehalten.
+zurückgehalten. Bis dahin startet sie nichts — nicht der Watchdog, nicht die
+geplante Rotation und auch kein Verbinden oder Rotieren von Hand: Diese werden
+mit dem Grund („held after a leak“) abgelehnt.
 
 Außerdem bekommt jede aktivierte Instanz eine netifd-Regel
 `to <Endpoint> unreachable` mit Priorität 89999. Sie kommt nach `main` und
@@ -232,7 +234,9 @@ Tunnel-Tabelle, auf die er trifft. Gegen eine schlechte Route, die bereits in
 Konfiguration wirkt erst, wenn netifd sie geladen hat, deshalb folgt jeder
 Änderung ein `network reload`, und ein fehlgeschlagener wird bei jedem Takt
 des Dienstes wiederholt, bis er gelingt; steht nichts aus, wird nicht neu
-geladen.
+geladen. Solange netifd das Eingetragene nicht geladen hat, wird kein Tunnel
+gestartet: Die Instanz wartet mit dem Grund, dass das Neuladen fehlschlug, und
+kommt von selbst, sobald eine Wiederholung gelingt.
 
 Was garantiert ist und was nicht:
 
@@ -254,5 +258,7 @@ Was garantiert ist und was nicht:
 Das Entfernen des Pakets nimmt die Schutzregeln, die von ihm geschriebenen
 `tunlink`-Werte (den Platzhalter eingeschlossen) und die Markierungen wieder
 aus `/etc/config/network`; ein `tunlink` von dir bleibt. Ein Update behält sie.
+Lädt netifd das Ergebnis nicht, schlägt das Entfernen fehl (der Dienst bleibt
+gestoppt) und kann wiederholt werden, solange das Paket noch da ist.
 
 ![Traffic-Routing](screenshots/routing.png)

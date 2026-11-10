@@ -202,7 +202,10 @@ whoever put that route there, the log says `LEAK`, the tunnel is taken down,
 and it comes back the same way once the route is sane again, after a pause that
 doubles with every repeat (2 to 15 minutes). For a `nohostroute` instance
 "sane" means anything that is not a tunnel: the default your failover script
-puts into `main` is fine; it is never pinned or held back otherwise.
+puts into `main` is fine; it is never pinned or held back otherwise. Until
+then nothing starts it — not the watchdog, not scheduled rotation, and not a
+connect or rotation you start by hand either: those are refused with the
+reason ("held after a leak").
 
 Every enabled instance also gets a netifd rule `to <endpoint> unreachable` at
 priority 89999. It comes after `main` and `default`, so it only catches what
@@ -213,7 +216,9 @@ nothing about a bad route that is already in `main`; that is what the check
 above is for. A rule written to the configuration only counts once netifd has
 loaded it, so every change is followed by a `network reload`, and one that
 fails is retried on every service tick until it succeeds; with nothing pending
-no reload is made.
+no reload is made. Until netifd has loaded what was committed, no tunnel is
+brought up: the instance waits, saying the reload failed, and comes up by
+itself once a retry succeeds.
 
 What this does and does not guarantee:
 
@@ -233,6 +238,8 @@ What this does and does not guarantee:
 
 Removing the package takes the guards, the `tunlink` values it wrote (the
 sentinel included) and the stamps back out of `/etc/config/network`; a
-`tunlink` of yours stays. An upgrade keeps them.
+`tunlink` of yours stays. An upgrade keeps them. If netifd will not load the
+result, the removal fails (with the service stopped) so it can be retried
+while the package is still there.
 
 ![Traffic routing](screenshots/routing.png)
