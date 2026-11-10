@@ -26,7 +26,7 @@
 
 'use strict';
 
-import { readfile, writefile, unlink, mkdir, open } from 'fs';
+import { readfile, writefile, unlink, mkdir, open, popen } from 'fs';
 import { cursor } from 'uci';
 const _cmn = require('protonvpn.common');
 const _api = require('protonvpn.api');
@@ -72,6 +72,39 @@ _routing.stack_refusal = function(dev) {
 };
 _routing.route_device = function(family, addr) { return ROUTES[addr]; };
 _cmn.log = function(m) { push(LOG, m); };
+
+// netifd's `network reload`, modelled: what is committed to UCI is one thing,
+// what netifd has LOADED is another, and only a successful reload copies the
+// first into the second. Reached through protonvpn.common's run(), which
+// routing.activate_network calls through the module; every other command
+// still goes to the real run() (and the stubs on PATH). RELOAD_FAIL makes
+// that many reloads fail the way a wedged netifd does.
+// The guard rules as netifd would load them from the committed UCI.
+function loaded_now() {
+	let out = [];
+	for (let k in global.MOCK_UCI.network) {
+		let x = global.MOCK_UCI.network[k];
+		if ((x['.type'] == 'rule' || x['.type'] == 'rule6') && x.protonvpn_role == 'endpoint_guard')
+			push(out, x.dest);
+	}
+	return sort(out);
+}
+let LOADED = [];
+let RELOADS = 0;
+let RELOAD_FAIL = 0;
+const real_run = _cmn.run;
+_cmn.run = function(argv) {
+	if (argv[0] == 'ubus' && join(' ', slice(argv, -3)) == 'call network reload') {
+		RELOADS++;
+		if (RELOAD_FAIL > 0) {
+			RELOAD_FAIL--;
+			return { code: 4, stdout: '' };
+		}
+		LOADED = loaded_now();
+		return { code: 0, stdout: '' };
+	}
+	return real_run(argv);
+};
 
 function said(re) {
 	let n = 0;
@@ -206,6 +239,11 @@ function reset(cfg, dump, k, routes) {
 	}
 	unlink(RUN + '/protonvpn_rotate.lock');
 	unlink(RUN + '/protonvpn_uplink.lock');
+	unlink(RUN + '/protonvpn_network_pending');
+	// What netifd runs with at the start: exactly what the config holds.
+	LOADED = loaded_now();
+	RELOADS = 0;
+	RELOAD_FAIL = 0;
 	return cursor();
 }
 function media() { return global.MOCK_UCI.network.pv_media; }
@@ -351,6 +389,15 @@ for (let n in [ 'main', 'media' ])
 	_apply.bring_up('pv_media', uci);
 	_apply.bring_up('pv_media', uci);
 	eq('P2 bring_up: and not again on every retry', said(/media: waiting for an uplink/), 1);
+	ok('P2 bring_up: an outage reason does not suggest nohostroute', index(_underlay.waiting('media'), 'nohostroute') < 0);
+	// An uplink on a device kind the classifier does not know: parked (fail
+	// closed), and the log names the kind and the way out.
+	uci = reset(config(), router({ dslite: ifc('dslite', 'dslite', 'veth0', [ dflt() ]) }),
+		kinds({ veth0: 'device kind veth is not a provider attachment' }));
+	_apply.bring_up('pv_media', uci);
+	ok('P2 bring_up: an unknown kind is named',
+		match(_underlay.waiting('media') || '', /dslite \(device kind veth is not a provider attachment\)/));
+	ok('P2 bring_up: with the way out', match(_underlay.waiting('media') || '', /set nohostroute=1/));
 	ok('P2 bring_up: apply can tell a park from a failed ifup', _apply.parked() != null);
 
 	// A real pin already in place is kept: netifd brings the tunnel back
@@ -596,16 +643,17 @@ for (let n in [ 'main', 'media' ])
 	eq('P6: switching to nohostroute drops our pin', global.MOCK_UCI.network.protonvpn.tunlink, null);
 	eq('P6: and its stamp', global.MOCK_UCI.network.protonvpn.protonvpn_tunlink, null);
 
-	// A user's own tunlink is theirs.
-	uci = reset(config({ pv_media: { tunlink: 'wan2' } }), outage());
-	ok('P6: a user tunlink is brought up as configured', _apply.bring_up('pv_media', uci));
-	eq('P6: and left alone', media().tunlink, 'wan2');
+	// A user's own tunlink is theirs: used as it is when it is an uplink that
+	// covers the endpoint.
+	let wanroute = { wan: ifc('wan', 'dhcp', 'eth1', [ dflt({ nexthop: '192.168.100.1' }) ]) };
+	uci = reset(config({ pv_media: { tunlink: 'wan' } }), router(wanroute));
+	ok('P6: a valid user tunlink is brought up as configured', _apply.bring_up('pv_media', uci));
+	eq('P6: and left alone', media().tunlink, 'wan');
 	eq('P6: no stamp is added to it', media().protonvpn_tunlink, null);
-	eq('P6: the reconcile leaves it alone too', _rotate.uplink_reconcile(cursor()).media, 'not managed');
 	// A user tunlink that replaced ours (stamp left behind) is theirs as well.
-	uci = reset(config({ pv_media: { tunlink: 'wan2', protonvpn_tunlink: 'dslite' } }), router());
+	uci = reset(config({ pv_media: { tunlink: 'wan', protonvpn_tunlink: 'dslite' } }), router(wanroute));
 	_apply.bring_up('pv_media', uci);
-	eq('P6: an edited pin is the user\'s', media().tunlink, 'wan2');
+	eq('P6: an edited pin is the user\'s', media().tunlink, 'wan');
 
 	// auto='1' writing stays.
 	uci = reset(config({ pv_media: { auto: '0' } }), router());
@@ -620,6 +668,231 @@ for (let n in [ 'main', 'media' ])
 	ok('P6: single WAN: brought up', _apply.bring_up('pv_media', uci));
 	eq('P6: single WAN: pinned to it', media().tunlink, 'wan');
 	unlink(IFUP_OK);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// B2a — a tunlink set by hand is kept byte for byte, and still refused when
+// it would carry the endpoint through a tunnel
+// ════════════════════════════════════════════════════════════════════════
+{
+	writefile(IFUP_OK, '');
+	for (let t in [ 'protonvpn', 'wg0' ]) {
+		let uci = reset(config({ pv_media: { tunlink: t } }), router());
+		ok('B2a: a user tunlink naming tunnel ' + t + ' is not brought up', !_apply.bring_up('pv_media', uci));
+		eq('B2a: no ifup through ' + t, ifups(), []);
+		eq('B2a: the value is left exactly as the user wrote it', media().tunlink, t);
+		eq('B2a: and no stamp is added', media().protonvpn_tunlink, null);
+		ok('B2a: the reason names it and the way out',
+			match(_underlay.waiting('media') || '', regexp('^refused: tunlink ' + t +
+				' \\(set by hand\\) is not an uplink: it is a WireGuard tunnel; .*nohostroute=1')));
+	}
+	_apply.bring_up('pv_media', cursor());
+	eq('B2a: said once, however often it is retried', said(/media: waiting for an uplink — refused: tunlink wg0/), 1);
+
+	// An uplink that is up but does not reach the endpoint.
+	let uci = reset(config({ pv_media: { tunlink: 'wan2' } }), router());
+	ok('B2a: a user tunlink that does not cover the endpoint is refused', !_apply.bring_up('pv_media', uci));
+	ok('B2a: and says so', match(_underlay.waiting('media') || '', /tunlink wan2 \(set by hand\) does not cover 79\.127\.154\.1/));
+	// One that is down.
+	uci = reset(config({ pv_media: { tunlink: 'dslite' } }), outage());
+	ok('B2a: a user tunlink that is down is not brought up', !_apply.bring_up('pv_media', uci) && length(ifups()) == 0);
+	eq('B2a: still the user\'s value', media().tunlink, 'dslite');
+	// And when it comes back, the reconcile brings it up — through it, untouched.
+	DUMP = router({ pv_media: ifc('pv_media', 'wireguard', null, [], { up: false }) });
+	eq('B2a: the reconcile brings a valid user tunlink back', _rotate.uplink_reconcile(cursor()).media, 'brought up');
+	eq('B2a: without rewriting it', [ media().tunlink, media().protonvpn_tunlink ], [ 'dslite', null ]);
+
+	// Up through a user tunlink that routes it into a tunnel: P4 regardless.
+	uci = reset(config({ pv_media: { tunlink: 'protonvpn' } }), router(), null, { [EP]: 'protonvpn' });
+	eq('B2a: an instance up on an overlay user tunlink is a leak', _rotate.uplink_reconcile(cursor()).media, 'leak');
+	eq('B2a: taken down', ifdowns(), [ 'pv_media' ]);
+	eq('B2a: the user\'s value survives the take-down', media().tunlink, 'protonvpn');
+	unlink(IFUP_OK);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// B2b — P4 before any exemption: the nohostroute instance on the owner's
+// failover (main's default via the SIM on lan5, put there outside netifd)
+// ════════════════════════════════════════════════════════════════════════
+{
+	const GEP = '146.70.170.2';
+	writefile(IFUP_OK, '');
+	// Cable down, the failover script has put `default via <SIM gw> dev lan5`
+	// into main: the guest instance rides it, as it should.
+	let uci = reset(config(), outage(), null, { [GEP]: 'lan5' });
+	eq('B2b: a nohostroute endpoint over the SIM default is not a leak', _rotate.uplink_reconcile(cursor()).main, 'up');
+	eq('B2b: nothing taken down', ifdowns(), []);
+	// Nothing in main at all: the guard refuses it, nothing leaves.
+	uci = reset(config(), outage(), null, {});
+	eq('B2b: an unreachable nohostroute endpoint is not a leak', _rotate.uplink_reconcile(cursor()).main, 'up');
+	eq('B2b: still nothing taken down', ifdowns(), []);
+
+	// Its endpoint routed into the torrent tunnel: a leak, nohostroute or not.
+	uci = reset(config(), router(), null, { [GEP]: 'pv_media' });
+	eq('B2b: a nohostroute endpoint through a tunnel is a leak', _rotate.uplink_reconcile(cursor()).main, 'leak');
+	eq('B2b: taken down', ifdowns(), [ 'protonvpn' ]);
+	eq('B2b: logged as one', said(/main: LEAK — 146\.70\.170\.2 is routed through WireGuard interface pv_media/), 1);
+	eq('B2b: but never pinned: it rides main on purpose', global.MOCK_UCI.network.protonvpn.tunlink, null);
+
+	// Down, and the route is still bad: it waits.
+	DUMP = router({ protonvpn: ifc('protonvpn', 'wireguard', null, [], { up: false }) });
+	let st = _underlay.park_state('main');
+	st.last_leak = time() - _cmn.WATCHDOG_COOLDOWN_BASE - 1;
+	writefile(RUN + '/protonvpn_uplink_main.json', sprintf('%J', st));
+	eq('B2b: while the route still goes into a tunnel it stays down', _rotate.uplink_reconcile(cursor()).main, 'waiting');
+	eq('B2b: no ifup', ifups(), []);
+	// The route is sane again (main via the SIM): it comes back, still unpinned.
+	ROUTES = { [GEP]: 'lan5' };
+	eq('B2b: once the route is sane it comes back', _rotate.uplink_reconcile(cursor()).main, 'brought up');
+	eq('B2b: by one ifup', ifups(), [ 'ifup protonvpn' ]);
+	eq('B2b: still no tunlink', global.MOCK_UCI.network.protonvpn.tunlink, null);
+	unlink(IFUP_OK);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// B1 / S1 — committed is not loaded: every guard change reaches netifd
+// ════════════════════════════════════════════════════════════════════════
+{
+	const MAIN_G = '146.70.170.2/32', MEDIA_G = EP + '/32';
+	let main_guard = { '.type': 'rule', dest: MAIN_G, action: 'unreachable', priority: '89999',
+		protonvpn_managed: '1', protonvpn_role: 'endpoint_guard', protonvpn_iface: 'protonvpn' };
+	writefile(IFUP_OK, '');
+
+	// Parked during an outage, with another instance's guard already loaded.
+	let uci = reset(config({ g_main: main_guard }), outage());
+	eq('B1: the other guard is loaded to begin with', LOADED, [ MAIN_G ]);
+	_apply.bring_up('pv_media', uci);
+	eq('B1: a parked bring_up loads its new guard', LOADED, [ MAIN_G, MEDIA_G ]);
+	eq('B1: by one reload', RELOADS, 1);
+	ok('B1: nothing left owed', !_routing.network_pending());
+	_rotate.uplink_reconcile(cursor());
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: steady state reloads nothing', RELOADS, 1);
+
+	// A reload that fails is retried until it works, then stops.
+	uci = reset(config({ g_main: main_guard }), outage());
+	RELOAD_FAIL = 2;
+	_apply.bring_up('pv_media', uci);
+	eq('B1: a failed reload leaves the guard unloaded', LOADED, [ MAIN_G ]);
+	ok('B1: and owed', _routing.network_pending());
+	ok('B1: and says so', said(/netifd did not accept the reload/) == 1);
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: the next tick tries again (and fails again)', LOADED, [ MAIN_G ]);
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: the one after loads it', LOADED, [ MAIN_G, MEDIA_G ]);
+	ok('B1: nothing owed any more', !_routing.network_pending());
+	let n = RELOADS;
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: and the retries stop', RELOADS, n);
+
+	// The endpoint changes while the instance is parked.
+	uci = reset(config({ g_main: main_guard }), outage());
+	_apply.bring_up('pv_media', uci);
+	_apply.connect_one(uci, 'pv_media', relay('NL#2', '79.127.154.2'), _cmn.load_settings(uci, 'media'));
+	eq('B1: a new endpoint during an outage replaces the loaded guard', LOADED, [ MAIN_G, '79.127.154.2/32' ]);
+
+	// Instances no package ifup has touched: the reconcile loads their guards.
+	uci = reset(config(), router(), null, { [EP]: 'ds-dslite' });
+	eq('B1: nothing loaded before', LOADED, []);
+	_rotate.uplink_reconcile(cursor());
+	eq('B1: the reconcile loads every enabled instance\'s guard', LOADED, [ MAIN_G, MEDIA_G ]);
+
+	// S1: removals reach netifd as well.
+	uci = reset(config({ g_main: main_guard }), router());
+	_apply.bring_up('pv_media', uci);
+	eq('S1: setup: both loaded', LOADED, [ MAIN_G, MEDIA_G ]);
+	_apply.clear_credentials(cursor(), 'media');
+	eq('S1: clearing the credentials unloads the guard', LOADED, [ MAIN_G ]);
+
+	uci = reset(config({ g_main: main_guard }), router());
+	_apply.bring_up('pv_media', uci);
+	_apply.tear_down_peer(cursor(), 'pv_media');
+	eq('S1: tearing the peer down unloads the guard', LOADED, [ MAIN_G ]);
+
+	uci = reset(config({ g_main: main_guard }), router());
+	_apply.bring_up('pv_media', uci);
+	_apply.disconnect(cursor(), 'media');
+	eq('S1: a disconnect unloads the guard', LOADED, [ MAIN_G ]);
+
+	uci = reset(config({ g_main: main_guard }), router());
+	_apply.bring_up('pv_media', uci);
+	_apply.delete_instance(cursor(), 'media');
+	eq('S1: a delete unloads the guard', LOADED, [ MAIN_G ]);
+	_apply.record_cert_state('media', { key_seed: KEY, serial: '1',
+		expires_at: time() + 86400, refresh_at: 0, created_at: time() });
+	unlink(IFUP_OK);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// S2 — uninstall takes back what the package wrote, and only that
+// ════════════════════════════════════════════════════════════════════════
+{
+	let cfg = config({
+		pv_media: { tunlink: 'dslite', protonvpn_tunlink: 'dslite' },
+		protonvpn: { tunlink: _underlay.NO_UPLINK, protonvpn_tunlink: _underlay.NO_UPLINK },
+		pv_user: { '.type': 'interface', proto: 'wireguard', tunlink: 'wan' },
+		pv_edited: { '.type': 'interface', proto: 'wireguard', tunlink: 'wan', protonvpn_tunlink: 'dslite' },
+		g1: { '.type': 'rule', dest: EP + '/32', action: 'unreachable', priority: '89999',
+			protonvpn_managed: '1', protonvpn_role: 'endpoint_guard', protonvpn_iface: 'pv_media' },
+		g2: { '.type': 'rule6', dest: '2a07:b944::2:1/128', action: 'unreachable', priority: '89999',
+			protonvpn_managed: '1', protonvpn_role: 'endpoint_guard', protonvpn_iface: 'protonvpn' },
+		steer: { '.type': 'rule', 'in': 'media', lookup: 'pv_media', priority: '20000',
+			protonvpn_managed: '1', protonvpn_role: 'steer_lookup', protonvpn_iface: 'pv_media' },
+		mine: { '.type': 'rule', dest: '192.0.2.1/32', action: 'unreachable', priority: '89999' }
+	});
+	let uci = reset(cfg, router());
+	ok('S2: cleanup reports a change', _underlay.uninstall_cleanup(uci));
+	let n = global.MOCK_UCI.network;
+	eq('S2: every endpoint guard is gone', guards(null), []);
+	eq('S2: our real pin is gone', [ n.pv_media.tunlink, n.pv_media.protonvpn_tunlink ], [ null, null ]);
+	eq('S2: so is the sentinel', [ n.protonvpn.tunlink, n.protonvpn.protonvpn_tunlink ], [ null, null ]);
+	eq('S2: a user tunlink stays', n.pv_user.tunlink, 'wan');
+	eq('S2: an edited one stays, losing only our stamp', [ n.pv_edited.tunlink, n.pv_edited.protonvpn_tunlink ], [ 'wan', null ]);
+	ok('S2: other stamped rules are not this cleanup\'s business', n.steer != null);
+	ok('S2: nor is a rule the user wrote', n.mine != null);
+	ok('S2: a second run has nothing to do', !_underlay.uninstall_cleanup(cursor()));
+
+	// The command the prerm runs, as its own process.
+	let cfgfile = STATE + '/uninstall-uci.json';
+	writefile(cfgfile, sprintf('%J', cfg));
+	let p = popen('PROTONVPN_MOCK_UCI=' + cfgfile + ' ' + (getenv('UCODE') || 'ucode') + ' ' +
+		(getenv('PVT_UCODE_L') || '') + ' ' + getenv('PVT_TESTS') +
+		'/../files/usr/bin/protonvpn-uplink --uninstall 2>/dev/null', 'r');
+	let said_out = p ? trim(p.read('all') || '') : '';
+	if (p)
+		p.close();
+	unlink(cfgfile);
+	ok('S2: `protonvpn-uplink --uninstall` runs the cleanup', match(said_out, /"uninstalled": true/), said_out);
+
+	// The maintainer script: run the Makefile's prerm with the two commands
+	// it calls replaced by recorders, under each way a package manager runs it.
+	let mk = readfile(getenv('PVT_TESTS') + '/../Makefile') || '';
+	let head = 'define Package/protonvpn-wireguard/prerm\n';
+	let at = index(mk, head);
+	ok('S2: the package has a prerm', at >= 0);
+	let body = (at >= 0) ? substr(mk, at + length(head)) : '';
+	body = substr(body, 0, index(body, '\nendef'));
+	// Make's `$$` is the shell's `$` (and a `$` in a replacement is escaped
+	// the same way).
+	body = replace(body, '$$', '$$');
+	ok('S2: it runs the cleanup', index(body, '/usr/bin/protonvpn-uplink --uninstall') >= 0);
+	let rec = STATE + '/prerm.log';
+	let script = STATE + '/prerm.sh';
+	writefile(script, replace(replace(body, '/usr/bin/protonvpn-uplink', 'echo uplink >> ' + rec + ' #'),
+		'/etc/init.d/protonvpn', 'echo init >> ' + rec + ' #'));
+	let runs = function(env, args) {
+		unlink(rec);
+		system([ '/bin/sh', '-c', env + ' sh ' + script + ' ' + args + ' >/dev/null 2>&1' ]);
+		return split(trim(readfile(rec) || ''), '\n');
+	};
+	eq('S2: removal (opkg) stops the service and cleans', runs('', 'remove'), [ 'init', 'uplink' ]);
+	eq('S2: removal (default_prerm passes the script path first)', runs('', '/usr/lib/opkg/info/x.prerm remove'), [ 'init', 'uplink' ]);
+	eq('S2: an opkg upgrade does not clean', runs('', 'upgrade 0.7.8-r1'), [ '' ]);
+	eq('S2: nor when the upgrade word comes second', runs('', '/usr/lib/opkg/info/x.prerm upgrade'), [ '' ]);
+	eq('S2: an apk upgrade does not clean', runs('PKG_UPGRADE=1', ''), [ '' ]);
+	eq('S2: a staging root is never touched', runs('IPKG_INSTROOT=/tmp/root', 'remove'), [ '' ]);
+	unlink(script);
+	unlink(rec);
 }
 
 // ════════════════════════════════════════════════════════════════════════

@@ -343,24 +343,36 @@ function rotate(uci, instance) {
 // ── Uplink reconcile ─────────────────────────────────────────────────────
 // The other half of protonvpn.underlay: what happens AFTER the gate. Run by
 // the daemon on every tick and by the hotplug hook on every interface event
-// (/etc/hotplug.d/iface/95-protonvpn), for every enabled instance that relies
-// on a netifd host route:
+// (/etc/hotplug.d/iface/95-protonvpn), for every enabled instance with an
+// endpoint:
 //
-//   * up — ask the kernel where its endpoint goes (underlay.leak). Through a
-//     tunnel, it is a leak, whoever caused it — a boot, a reload or a hand-run
-//     ifup before this package ever pinned the instance: logged as one, taken
-//     down, pinned to NO_UPLINK unless a pin of ours is already in place, and
-//     parked with a backoff that grows per leak (P4). Otherwise an instance
-//     with no tunlink at all is pinned now, which takes effect at netifd's
-//     next setup of it — exactly the setup an outage forces.
-//   * down and waiting — parked by the gate, pinned to NO_UPLINK, or pinned
-//     to an interface that is gone: brought up through the gate as soon as an
-//     uplink covers the endpoint (P3), possibly another one than before.
+//   * up — ask the kernel where its endpoint goes (underlay.leak), FIRST and
+//     for every instance: no exemption covers a route through a tunnel, not
+//     nohostroute=1 and not a tunlink set by hand. Through a tunnel it is a
+//     leak, whoever caused it — a boot, a reload, a hand-run ifup, a stray
+//     route in `main`: logged as one, taken down, and parked with a backoff
+//     that grows per leak (P4). Pinned to NO_UPLINK only when nothing else
+//     owns the tunlink question: a nohostroute instance is never pinned, a
+//     user's tunlink is never rewritten. Otherwise an instance of ours with no
+//     tunlink at all is pinned now, which takes effect at netifd's next setup
+//     of it — exactly the setup an outage forces.
+//   * down and waiting — parked by the gate or by a leak, pinned to NO_UPLINK,
+//     or pinned by us to an interface that is gone: brought up through the
+//     gate as soon as it would let it through (P3), possibly over another
+//     uplink than before. A nohostroute instance taken down for a leak comes
+//     back once the kernel's route to its endpoint no longer goes through a
+//     tunnel — through `main`, as it always does, or nowhere (the guard).
 //
 // An instance that is down for any other reason is not touched: that is the
 // watchdog's, and an instance that is merely being set up (`pending`) is
-// netifd's.
+// netifd's. Everything this commits is recorded and loaded through
+// routing.activate_network, which also retries a reload that failed before.
 const UPLINK_LOCK = _common.RUN_DIR + '/protonvpn_uplink.lock';
+
+function commit_pending(uci) {
+	uci.commit('network');
+	_routing.mark_network_pending();
+}
 
 function reconcile_one(uci, s, by, data) {
 	let iface = s.interface;
@@ -369,31 +381,27 @@ function reconcile_one(uci, s, by, data) {
 		_underlay.unpark(name);
 		return 'inactive';
 	}
-	if (uci.get('network', iface, 'nohostroute') == '1' ||
-	    _underlay.pin_owner(uci, iface) == 'user') {
-		_underlay.unpark(name);
-		return 'not managed';
-	}
 	let ep = _routing.endpoint_literal(uci, iface);
 	if (!ep)
 		return 'no endpoint';
+	let nohost = uci.get('network', iface, 'nohostroute') == '1';
+	let owner = _underlay.pin_owner(uci, iface);
 	let st = by[iface];
 
 	if (st && st.up) {
 		let why = _underlay.leak(data, ep.addr);
 		if (why) {
 			_common.log(name + ': LEAK — ' + why + '; taking the tunnel down');
-			if (_underlay.pin_owner(uci, iface) != 'managed' &&
-			    _underlay.set_pin(uci, iface, _underlay.NO_UPLINK))
-				uci.commit('network');
+			if (!nohost && owner == 'none' && _underlay.set_pin(uci, iface, _underlay.NO_UPLINK))
+				commit_pending(uci);
 			_underlay.park_leak(name, why);
 			run([ 'ifdown', iface ]);
 			return 'leak';
 		}
-		if (_underlay.pin_owner(uci, iface) == 'none') {
+		if (!nohost && owner == 'none') {
 			let res = _underlay.pick(data, ep.addr);
 			if (res.iface && _underlay.set_pin(uci, iface, res.iface)) {
-				uci.commit('network');
+				commit_pending(uci);
 				_common.log(name + ': endpoint pinned to uplink ' + res.iface);
 			}
 		}
@@ -404,15 +412,30 @@ function reconcile_one(uci, s, by, data) {
 	if (st && st.pending)
 		return 'pending';
 
-	let pin = uci.get('network', iface, 'tunlink');
-	let gone = pin != null && (pin == _underlay.NO_UPLINK || !(by[pin] && by[pin].up));
-	if (!_underlay.waiting(name) && !gone)
-		return 'down';
-
-	let res = _underlay.pick(data, ep.addr);
-	if (!res.iface) {
-		_underlay.park(name, _underlay.no_uplink_reason(ep.addr, res));
-		return 'waiting';
+	let waiting = _underlay.waiting(name) != null;
+	let via = null;
+	if (nohost) {
+		if (!waiting)
+			return 'down';
+		// It rides `main`; the question is only whether `main` (or whatever
+		// else the kernel would use) still sends its endpoint into a tunnel.
+		let why = _underlay.leak(data, ep.addr);
+		if (why) {
+			_underlay.park(name, 'leak: ' + why);
+			return 'waiting';
+		}
+	} else {
+		let pin = uci.get('network', iface, 'tunlink');
+		let gone = owner == 'managed' &&
+			(pin == _underlay.NO_UPLINK || !(by[pin] && by[pin].up));
+		if (!waiting && !gone)
+			return 'down';
+		let d = _underlay.decide(uci, s, data);
+		if (!d.go) {
+			_underlay.park(name, d.reason);
+			return 'waiting';
+		}
+		via = d.to;
 	}
 	let pst = _underlay.park_state(name);
 	if (pst && pst.leaks > 0 && time() - (pst.last_leak || 0) < _underlay.leak_backoff(pst))
@@ -431,7 +454,7 @@ function reconcile_one(uci, s, by, data) {
 	}
 	release_lock(lock);
 	if (up)
-		_common.log(name + ': bringing the tunnel up through uplink ' + res.iface);
+		_common.log(name + ': bringing the tunnel up' + (via ? ' through uplink ' + via : ''));
 	return up ? 'brought up' : 'waiting';
 }
 
@@ -459,12 +482,14 @@ function uplink_reconcile(uci) {
 			for (let n in _common.list_instances(uci))
 				if (_routing.reconcile_endpoint_guard(uci, load_settings(uci, n)))
 					guards = true;
-			if (guards) {
-				uci.commit('network');
-				run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
-			}
+			if (guards)
+				commit_pending(uci);
 			for (let n in _common.list_instances(uci))
 				out[n] = reconcile_one(uci, load_settings(uci, n), by, data);
+			// One reload for whatever this run committed — and for anything an
+			// earlier run committed whose reload failed. With nothing owed,
+			// nothing runs. A bring_up above has already loaded its own.
+			_routing.activate_network();
 		}
 	} catch (e) {
 		out = { error: '' + e };

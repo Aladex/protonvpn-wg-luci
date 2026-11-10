@@ -57,6 +57,27 @@ define Package/protonvpn-wireguard/conffiles
 /etc/config/protonvpn
 endef
 
+# Removal takes back what the endpoint underlay wrote into /etc/config/network
+# (protonvpn.underlay uninstall_cleanup): the endpoint guards and the tunlinks
+# the package set, the sentinel included. Left behind, a sentinel tunlink
+# keeps its interface down forever with nothing left to replace it, and a
+# guard keeps refusing that address. In the prerm, while the ucode modules are
+# still installed, and with the service stopped first so its next tick cannot
+# put a guard back. Never on upgrade — the new version keeps them — and never
+# into a staging root. default_prerm hands this script its own path first, so
+# the upgrade word is looked for in every argument.
+define Package/protonvpn-wireguard/prerm
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+[ "$${PKG_UPGRADE}" = "1" ] && exit 0
+for a in "$$@"; do
+	[ "$$a" = upgrade ] && exit 0
+done
+/etc/init.d/protonvpn stop >/dev/null 2>&1
+/usr/bin/protonvpn-uplink --uninstall >/dev/null 2>&1
+exit 0
+endef
+
 # /etc/protonvpn holds runtime secrets that are not conffiles and cannot be
 # regenerated locally: session.json (Proton UID + access/refresh tokens) and
 # certificate.json (the key_seed of every instance's Ed25519 identity). Losing

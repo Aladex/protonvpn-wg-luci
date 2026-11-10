@@ -74,6 +74,9 @@ const TUNLINK_STAMP = 'protonvpn_tunlink';
 // nothing, and keeps the interface unavailable — on every path, including a
 // reboot — until this package writes a real one.
 const NO_UPLINK = 'protonvpn-no-uplink';
+const WG_REFUSAL = 'it is a WireGuard tunnel';
+// What to tell someone who does route the endpoint by other means.
+const ESCAPE = 'set nohostroute=1 on the interface if you route the endpoint yourself';
 
 // ── Park records ─────────────────────────────────────────────────────────
 // On tmpfs: they say why an instance is waiting and keep that from being
@@ -184,7 +187,7 @@ function leak_backoff(st) {
 // null when it may.
 function refusal(ifc) {
 	if (ifc.proto == 'wireguard')
-		return 'it is a WireGuard tunnel';
+		return WG_REFUSAL;
 	if (!ifc.l3_device)
 		return 'it has no device';
 	return _routing.stack_refusal(ifc.l3_device);
@@ -266,12 +269,17 @@ function pick(data, addr, refuse) {
 	return out;
 }
 
-// One line for the log: why nothing was picked.
+// One line for the log: why nothing was picked. When something other than a
+// tunnel was turned away — a device kind the classifier does not know, say —
+// the line names it and the way out, because that may be the user's real
+// uplink rather than an outage.
 function no_uplink_reason(addr, res) {
 	let r = 'no uplink covers ' + addr;
 	if (length(res.refused)) {
 		let parts = map(res.refused, (x) => x.iface + ' (' + x.why + ')');
 		r += '; refused: ' + join(', ', parts);
+		if (length(filter(res.refused, (x) => x.why != WG_REFUSAL)))
+			r += ' — ' + ESCAPE;
 	}
 	return r;
 }
@@ -310,9 +318,67 @@ function drop_pin(uci, iface) {
 	return true;
 }
 
+// A tunlink the user set by hand: never rewritten, but held to the same rule
+// as one this module picks. netifd resolves the endpoint through whatever it
+// names, so a tunlink naming a tunnel — `protonvpn`, `wg0`, another VPN
+// package's — is exactly the leak this module exists to prevent, with a
+// user's signature on it. The owner's rule has no exception for that ("never
+// through a wireguard interface"), so it is refused, and the user who really
+// routes the endpoint by other means has nohostroute=1 for it. Returns why
+// it may not be used right now, or null.
+function user_pin_refusal(data, pin, ep) {
+	let u = null;
+	for (let i in data.interface)
+		if (type(i) == 'object' && i.interface == pin)
+			u = i;
+	if (!u)
+		return 'names no interface netifd knows';
+	let why = refusal(u);
+	if (why != null)
+		return 'is not an uplink: ' + why;
+	if (!u.up)
+		return 'is down';
+	if (!coverage(u, _common.ip_words(ep)))
+		return 'does not cover ' + ep;
+	return null;
+}
+
+// Whether instance `s` may be brought up now, and through what — the pure
+// half of the gate, shared by prepare() and the reconcile. Nothing is written.
+// `data` is a netifd dump, or null to fetch one when it is needed.
+//   { go, mode: 'nohostroute'|'user'|'managed', to, reason }
+function decide(uci, s, data) {
+	let iface = s.interface;
+	if (uci.get('network', iface, 'nohostroute') == '1')
+		return { go: true, mode: 'nohostroute' };
+	let mode = (pin_owner(uci, iface) == 'user') ? 'user' : 'managed';
+	let ep = _routing.endpoint_literal(uci, iface);
+	if (!ep)
+		// Proton endpoints are written by EntryIP; a name here was not
+		// written by this package, and what it resolves to cannot be judged.
+		return { go: false, mode: mode, reason: 'the endpoint is not an IP address' };
+	if (data == null)
+		data = _routing.netifd_dump();
+	if (type(data) != 'object' || type(data.interface) != 'array')
+		// The ifup about to be made goes through the same daemon; there is
+		// nothing to gain from making it unpinned.
+		return { go: false, mode: mode, reason: 'netifd did not answer' };
+	if (mode == 'user') {
+		let pin = uci.get('network', iface, 'tunlink');
+		let why = user_pin_refusal(data, pin, ep.addr);
+		return (why == null) ? { go: true, mode: mode, to: pin } :
+			{ go: false, mode: mode, reason: 'refused: tunlink ' + pin + ' (set by hand) ' + why +
+				'; the endpoint is never routed through a tunnel — ' + ESCAPE };
+	}
+	let res = pick(data, ep.addr);
+	return res.iface ? { go: true, mode: mode, to: res.iface } :
+		{ go: false, mode: mode, reason: no_uplink_reason(ep.addr, res) };
+}
+
 // The gate in front of every package ifup of instance `s`. Reconciles the
-// endpoint guard and the tunlink in UCI (the caller commits) and answers
-// { go, changed, reason }: go=false means do not ifup, the instance is parked.
+// endpoint guard and the tunlink in UCI (the caller commits, and has netifd
+// load it — routing.activate_network) and answers { go, changed, reason }:
+// go=false means do not ifup, the instance is parked.
 //
 // `dry` decides without writing anything to UCI (rotation asks first, so a
 // rotation during an outage is skipped before it touches the peer); the park
@@ -323,51 +389,29 @@ function prepare(uci, s, dry) {
 	if (!dry && _routing.reconcile_endpoint_guard(uci, s))
 		changed = true;
 
-	if (uci.get('network', iface, 'nohostroute') == '1') {
+	let d = decide(uci, s);
+	if (d.mode == 'nohostroute') {
 		if (!dry && drop_pin(uci, iface))
 			changed = true;
 		unpark(s.name);
 		return { go: true, changed: changed };
 	}
-	if (pin_owner(uci, iface) == 'user') {
-		unpark(s.name);
-		return { go: true, changed: changed, user: uci.get('network', iface, 'tunlink') };
-	}
-
-	let ep = _routing.endpoint_literal(uci, iface);
-	let reason = null, to = null;
-	if (!ep) {
-		// Proton endpoints are written by EntryIP; a name here was not
-		// written by this package, and what it resolves to cannot be judged.
-		reason = 'the endpoint is not an IP address';
-	} else {
-		let data = _routing.netifd_dump();
-		if (data == null) {
-			// The ifup about to be made goes through the same daemon; there is
-			// nothing to gain from making it unpinned.
-			reason = 'netifd did not answer';
-		} else {
-			let res = pick(data, ep.addr);
-			to = res.iface;
-			if (!to)
-				reason = no_uplink_reason(ep.addr, res);
-		}
-	}
-
-	if (to) {
-		if (!dry && set_pin(uci, iface, to))
+	if (d.go) {
+		// A user's tunlink is used as it is; only our own is (re)written.
+		if (!dry && d.mode == 'managed' && set_pin(uci, iface, d.to))
 			changed = true;
-		unpark(s.name, 'uplink ' + to + ' covers the endpoint again');
-		return { go: true, changed: changed, tunlink: to };
+		unpark(s.name, 'uplink ' + d.to + ' covers the endpoint again');
+		return { go: true, changed: changed, tunlink: d.to, user: (d.mode == 'user') ? d.to : null };
 	}
 
 	// Parked. A real pin already in place stays: netifd keeps the tunnel down
 	// while that interface is, and brings it back through it on its own. With
-	// none, NO_UPLINK keeps every other path from starting it unpinned.
-	if (!dry && pin_owner(uci, iface) != 'managed' && set_pin(uci, iface, NO_UPLINK))
+	// none, NO_UPLINK keeps every other path from starting it unpinned. A
+	// user's tunlink is left exactly as it is.
+	if (!dry && pin_owner(uci, iface) == 'none' && set_pin(uci, iface, NO_UPLINK))
 		changed = true;
-	park(s.name, reason);
-	return { go: false, changed: changed, reason: reason };
+	park(s.name, d.reason);
+	return { go: false, changed: changed, reason: d.reason };
 }
 
 // ── Foreign damage (P4) ──────────────────────────────────────────────────
@@ -390,9 +434,45 @@ function leak(data, addr) {
 	return (why != null) ? addr + ' is routed through ' + dev + ': ' + why : null;
 }
 
+// ── Uninstall ────────────────────────────────────────────────────────────
+
+// What the package leaves in /etc/config/network when it is removed, taken
+// back out: every stamped endpoint guard (rule and rule6), every tunlink this
+// module wrote — the value its stamp records, or NO_UPLINK, which no
+// interface can ever satisfy and nothing would be left to replace — and the
+// stamps themselves. A tunlink that does not match its stamp is the user's
+// and stays. Commits when something changed; the caller reloads netifd.
+// Run by the package's prerm through `protonvpn-uplink --uninstall`, on a
+// real removal only. Returns true when something was removed.
+function uninstall_cleanup(uci) {
+	let guards = [], ifaces = [];
+	for (let t in [ 'rule', 'rule6' ])
+		uci.foreach('network', t, function(sec) {
+			if (sec.protonvpn_managed == '1' && sec.protonvpn_role == 'endpoint_guard')
+				push(guards, sec['.name']);
+		});
+	uci.foreach('network', 'interface', function(sec) {
+		if (sec[TUNLINK_STAMP] != null || sec.tunlink == NO_UPLINK)
+			push(ifaces, { name: sec['.name'], tunlink: sec.tunlink, stamp: sec[TUNLINK_STAMP] });
+	});
+	for (let g in guards)
+		uci.delete('network', g);
+	for (let i in ifaces) {
+		if (i.tunlink != null && (i.tunlink == NO_UPLINK || i.tunlink == i.stamp))
+			uci.delete('network', i.name, 'tunlink');
+		if (i.stamp != null)
+			uci.delete('network', i.name, TUNLINK_STAMP);
+	}
+	let changed = length(guards) > 0 || length(ifaces) > 0;
+	if (changed)
+		uci.commit('network');
+	return changed;
+}
+
 return {
 	TUNLINK_STAMP, NO_UPLINK,
-	pick, refusal, coverage, prepare, leak, pin_owner, set_pin, drop_pin,
+	pick, refusal, coverage, decide, prepare, leak, pin_owner, set_pin, drop_pin,
+	uninstall_cleanup,
 	park_state, waiting, park, park_leak, unpark, forget_leaks, leak_backoff,
 	no_uplink_reason
 };

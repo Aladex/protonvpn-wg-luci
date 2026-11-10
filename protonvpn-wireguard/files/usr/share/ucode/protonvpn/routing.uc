@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { readfile } from 'fs';
+import { readfile, unlink } from 'fs';
 const _common = require('protonvpn.common');
 
 // Seconds given to any `ubus` call. ubus bounds itself with -t, which is the
@@ -1028,6 +1028,52 @@ function reconcile_ipv6_rules(uci, s, iface, steering, table, nets) {
 // the clients: it is about the tunnel's own UDP, and an instance whose user
 // routes everything by hand sends that UDP all the same.
 const GUARD_PRIORITY = '89999';
+
+// ── Activation ───────────────────────────────────────────────────────
+//
+// A rule in /etc/config/network is not a rule in the kernel: netifd loads
+// it on the next `network reload`, and only then. The paths that commit a
+// guard (or a tunlink) and then bring the tunnel up get that reload from
+// /sbin/ifup; a parked instance, a removed peer, a disabled instance and the
+// daemon's own reconcile do not run ifup, and a guard that sits in UCI
+// without a reload protects nothing. Nor can the next run tell from UCI that
+// a reload is owed: the section it would write is already there.
+//
+// So whoever commits such a delta also records that netifd still owes it a
+// reload, and activate_network() pays it — checking the exit code and
+// keeping the record when it fails, so the daemon's next tick tries again.
+// A tick with nothing recorded reloads nothing: steady state is quiet.
+//
+// The record holds a token, and the reload clears only the token it read
+// before it started. A reload that was already running when someone else
+// committed may have read the configuration before that commit, so it must
+// not take the newer record down with it.
+const PENDING_FILE = _common.RUN_DIR + '/protonvpn_network_pending';
+
+function mark_network_pending() {
+	return _common.atomic_write(PENDING_FILE, sprintf('%d.%d\n', time(), clock()[1]));
+}
+
+function network_pending() {
+	return readfile(PENDING_FILE) != null;
+}
+
+// True when netifd has everything committed so far (or nothing was owed).
+// Called through the module so the suite can stand in for netifd's reload.
+function activate_network() {
+	let token = readfile(PENDING_FILE);
+	if (token == null)
+		return true;
+	let r = _common.run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+	if (r.code != 0) {
+		_common.log('netifd did not accept the reload (exit ' + r.code + '); the endpoint ' +
+			'guards and pins committed so far are not loaded yet — retrying on the next tick');
+		return false;
+	}
+	if (readfile(PENDING_FILE) == token)
+		unlink(PENDING_FILE);
+	return true;
+}
 
 // The current peer endpoint of `iface` as { addr, v6 }, or null when there is
 // no peer or its endpoint is not an IP literal (a name cannot be a rule).
@@ -2687,4 +2733,4 @@ return { detect, enforce, reconcile_ipv6, ipv6_state, v6_hint, ra_refresh,
 	find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu,
 	ensure_rt_table, drop_rt_table, netifd_dump, wan_verdicts, wan_uplinks,
 	stack_refusal, route_device, reconcile_endpoint_guard, endpoint_literal,
-	GUARD_PRIORITY };
+	GUARD_PRIORITY, mark_network_pending, network_pending, activate_network };

@@ -569,8 +569,14 @@ function bring_up(iface, uci) {
 	let name = instance_of(uci, iface);
 	if (name) {
 		let g = _underlay.prepare(uci, load_settings(uci, name));
-		if (g.changed)
+		if (g.changed) {
 			uci.commit('network');
+			// Loaded now, not by the ifup below: a parked instance gets no
+			// ifup at all, and /sbin/ifup does not report whether its own
+			// reload worked. A failure stays recorded for the next tick.
+			_routing.mark_network_pending();
+			_routing.activate_network();
+		}
 		if (!g.go) {
 			last_park = g.reason;
 			return false;
@@ -664,7 +670,10 @@ function commit_routing(uci, routing, iface) {
 		uci.commit('network');
 		// Steering/prohibit rules are plain netifd config; a reload makes
 		// netifd apply the delta (unchanged interfaces are left alone).
-		run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+		// Recorded first, so a reload that fails is retried by the daemon
+		// rather than forgotten (routing.activate_network).
+		_routing.mark_network_pending();
+		_routing.activate_network();
 	}
 	if (routing.changed_dhcp) {
 		uci.commit('dhcp');
@@ -756,10 +765,14 @@ function tear_down_peer(uci, iface) {
 	if (peer)
 		uci.delete('network', peer);
 	uci.delete('network', iface, 'protonvpn_features');
-	// No peer, no endpoint to guard; the next reload drops the kernel rule.
-	_routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
+	// No peer, no endpoint to guard.
+	let guard = _routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
 	uci.commit('network');
 	run([ 'ifdown', iface ]);
+	if (guard) {
+		_routing.mark_network_pending();
+		_routing.activate_network();
+	}
 	return peer != null;
 }
 
@@ -1550,7 +1563,7 @@ function clear_credentials(uci, instance) {
 	let peer = find_peer(uci, iface);
 	if (peer)
 		uci.delete('network', peer);
-	_routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
+	let guard = _routing.reconcile_endpoint_guard(uci, { interface: iface, enabled: false });
 	if (uci.get('network', iface) != null) {
 		uci.delete('network', iface, 'private_key');
 		// Keep the interface itself: the settings that describe it are kept as
@@ -1558,6 +1571,11 @@ function clear_credentials(uci, instance) {
 		uci.set('network', iface, 'auto', '0');
 	}
 	uci.commit('network');
+	// The guard has to leave the kernel too, and ifdown reloads nothing.
+	if (guard) {
+		_routing.mark_network_pending();
+		_routing.activate_network();
+	}
 	log('cleared the WireGuard identity of ' + s.name);
 	return { ok: true, interface: iface };
 }
@@ -1629,8 +1647,10 @@ function delete_instance(uci, name) {
 	if (uci.get('network', iface) != null && uci.get('network', iface, 'vpn_type') == 'protonvpn')
 		uci.delete('network', iface);
 	uci.commit('network');
-	if (guard)
-		run([ 'ubus', '-t', UBUS_TIMEOUT_S, 'call', 'network', 'reload' ]);
+	if (guard) {
+		_routing.mark_network_pending();
+		_routing.activate_network();
+	}
 	_underlay.unpark(name);
 
 	if (name == 'main') {

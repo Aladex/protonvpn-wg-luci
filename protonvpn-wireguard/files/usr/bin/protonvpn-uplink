@@ -3,8 +3,24 @@
 // One endpoint-underlay reconcile pass over every instance (see
 // protonvpn.rotate uplink_reconcile). Run by the hotplug hook on interface
 // events and safe to run by hand; prints what it did per instance.
+//
+// `--uninstall` instead takes back what the underlay wrote into
+// /etc/config/network (protonvpn.underlay uninstall_cleanup) and has netifd
+// load the result. Run by the package's prerm on a real removal only.
 
 'use strict';
+
+import { cursor } from 'uci';
+
+if (length(ARGV) > 0 && ARGV[0] == '--uninstall') {
+	const _routing = require('protonvpn.routing');
+	if (require('protonvpn.underlay').uninstall_cleanup(cursor())) {
+		_routing.mark_network_pending();
+		_routing.activate_network();
+	}
+	printf('%J\n', { uninstalled: true, reloaded: !_routing.network_pending() });
+	exit(0);
+}
 
 const uplink_reconcile = require('protonvpn.rotate').uplink_reconcile;
 
